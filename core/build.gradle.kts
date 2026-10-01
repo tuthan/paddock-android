@@ -25,6 +25,8 @@ tasks.test {
     inputs.dir(rootProject.file("protocol"))
     inputs.dir(rootProject.file("fixtures"))
     inputs.dir(rootProject.file("host"))
+    // Integration tests read the disposable session from the environment; a change must rerun them.
+    inputs.property("paddockTestSocket", providers.environmentVariable("PADDOCK_TEST_SOCKET").orElse(""))
 }
 
 // :core is the JVM decision layer. It must not see Android APIs or depend on another project.
