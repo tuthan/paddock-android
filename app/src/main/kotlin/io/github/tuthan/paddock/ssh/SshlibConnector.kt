@@ -308,7 +308,7 @@ internal class SshlibSession(
     }
 
     override suspend fun exec(argv: List<String>, stdin: ByteArray?, limits: ExecLimits): ExecResult {
-        val command = io.github.tuthan.paddock.cli.argvToCommand(argv)
+        val command = wire(io.github.tuthan.paddock.cli.argvToCommand(argv))
         requireUp()
         acquireSlot()
         val channel = Opened()
@@ -346,6 +346,12 @@ internal class SshlibSession(
         (tracker.link.value as? LinkState.Down)?.let { throw SessionDown(it.reason) }
     }
 
+    /**
+     * sshlib writes the exec command with ISO-8859-1, which turns anything outside Latin-1 into `?` and sends Latin-1 letters
+     * as single bytes. Handing it the UTF-8 bytes as Latin-1 characters makes those bytes reach the server unchanged.
+     */
+    private fun wire(command: String): String = String(command.toByteArray(Charsets.UTF_8), Charsets.ISO_8859_1)
+
     private fun downOr(e: IOException): IOException = (tracker.link.value as? LinkState.Down)?.let { SessionDown(it.reason) } ?: e
 
     /** Bounded: a caller that leaks streams gets a clear failure instead of a hang. */
@@ -365,7 +371,7 @@ internal class SshlibSession(
     }
 
     override suspend fun openStream(argv: List<String>): StreamChannel {
-        val command = io.github.tuthan.paddock.cli.argvToCommand(argv)
+        val command = wire(io.github.tuthan.paddock.cli.argvToCommand(argv))
         requireUp()
         acquireSlot()
         val channel = Opened()

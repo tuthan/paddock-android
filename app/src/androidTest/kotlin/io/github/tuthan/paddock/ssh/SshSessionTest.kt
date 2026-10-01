@@ -123,7 +123,7 @@ class SshSessionTest {
     @Test
     fun outputPastTheLimitsIsTruncatedAndFlagged() = runBlocking<Unit> {
         val r = session().exec(
-            listOf("sh", "-c", "head -c 2000000 /dev/zero | tr '\\0' x; head -c 100000 /dev/zero | tr '\\0' e 1>&2"),
+            listOf("sh", "-c", "yes x | head -c 2000000; yes e | head -c 100000 1>&2"),
             limits = ExecLimits(stdoutMax = 1 shl 20, stderrMax = 64 shl 10, deadline = 30.seconds),
         )
         assertEquals(1 shl 20, r.stdout.size); assertTrue(r.stdoutTruncated)
@@ -138,18 +138,21 @@ class SshSessionTest {
         assertArrayEquals(text.toByteArray(), session().exec(listOf("cat"), stdin = text.toByteArray()).stdout)
     }
 
+    /** Through the account's real login shell on the host (`$SHELL -c`), not a shell chosen by the test. */
     @Test
     fun hostileArgumentsReachTheRemoteProgramUnchanged() = runBlocking<Unit> {
-        val argv = listOf("printf", "%s\\n", "a b", "it's", "\$(echo pwned)", "`id`", "*", "a;b", "")
-        val r = session().exec(argv)
-        assertEquals(argv.drop(2).joinToString("\n") + "\n", String(r.stdout))
+        val sep = "\u001f"
+        val args = listOf("a b", "\$(echo pwned)", "`id`", "*", "a;b", "", "=ls", "a=b", "~", "{a,b}", "%s", "w1:p1", "#x", "a&b", "é日本")
+        val r = session().exec(listOf("printf", "%s$sep") + args)
+        assertEquals(args, String(r.stdout).split(sep).dropLast(1))
     }
 
     @Test
-    fun argumentsWithLineBreaksNeverLeaveThePhone() = runBlocking<Unit> {
+    fun argumentsWithLineBreaksQuotesOrBackslashesNeverLeaveThePhone() = runBlocking<Unit> {
         val s = session()
-        try { s.exec(listOf("echo", "a\nb")); fail("line break accepted") } catch (_: IllegalArgumentException) { }
-        try { s.exec(listOf("echo", "a\u0000b")); fail("NUL accepted") } catch (_: IllegalArgumentException) { }
+        for (bad in listOf("a\nb", "a\u0000b", "it's", "a\\b")) {
+            try { s.exec(listOf("echo", bad)); fail("accepted ${bad.replace("\u0000", "NUL")}") } catch (_: IllegalArgumentException) { }
+        }
         assertEquals("still up\n", String(s.exec(listOf("echo", "still up")).stdout))
     }
 
