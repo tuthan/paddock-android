@@ -45,6 +45,13 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    // No dependency-metadata block in the APK or bundle: it is encrypted to Google's key, so the bytes are neither
+    // reviewable nor reproducible for a release cut, and they disclose the dependency list.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
 }
 
 kotlin {
