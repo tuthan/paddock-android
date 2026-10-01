@@ -286,7 +286,7 @@ private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () 
 private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, onBack: () -> Unit, onAdded: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var keyTick by remember { mutableStateOf(0) }
+    var keyTick by remember { mutableIntStateOf(0) }
     var denied by rememberSaveable { mutableStateOf(false) }
     var pending by remember { mutableStateOf<AddMachineInput?>(null) }
 
@@ -312,7 +312,7 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, onBack: () -> U
             runCatching { if (graph.phoneKey.exists()) graph.phoneKey.publicLine("paddock@phone") to graph.phoneKey.info().backing else null }.getOrNull()
         }
     }
-    var importedTick by remember { mutableStateOf(0) }
+    var importedTick by remember { mutableIntStateOf(0) }
     val imported by produceState<ImportedKeyInfo?>(null, importedTick) { value = runCatching { graph.importedKey() }.getOrNull() }
     var importing by rememberSaveable { mutableStateOf(false) }
     // The form is kept by the holder while the import screen is up, so typed values are still there on return.

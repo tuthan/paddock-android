@@ -87,8 +87,8 @@ fun AddMachine(
     onCopyPublicKey: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onBack: () -> Unit,
-    onImportKey: () -> Unit = {},
     modifier: Modifier = Modifier,
+    onImportKey: () -> Unit = {},
     initial: AddMachineInput = AddMachineInput(),
 ) {
     val c = PaddockTokens.colors

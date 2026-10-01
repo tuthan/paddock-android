@@ -84,14 +84,14 @@ class AddMachineTest {
             keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
-                PaddockTheme(darkTheme = dark) { screen(state, calls) }
+                PaddockTheme(darkTheme = dark) { Screen(state, calls) }
             }
         }
         return calls
     }
 
     @androidx.compose.runtime.Composable
-    private fun screen(state: AddMachineState, calls: Calls) = AddMachine(
+    private fun Screen(state: AddMachineState, calls: Calls) = AddMachine(
         state, onConnect = { calls.connect = it }, onGenerateKey = { calls.generate++ }, onCopyPublicKey = { calls.copied = it },
         onOpenSettings = { calls.settings++ }, onBack = { calls.back++ }, onImportKey = { calls.importKey++ },
     )
@@ -238,7 +238,7 @@ class AddMachineTest {
 
     @Test fun typedValuesSurviveRotation() {
         val tester = StateRestorationTester(rule)
-        tester.setContent { PaddockTheme(darkTheme = true) { screen(state(key = line), Calls()) } }
+        tester.setContent { PaddockTheme(darkTheme = true) { Screen(state(key = line), Calls()) } }
         fill(host = "box.example.ts.net", user = "jdoe")
         tester.emulateSavedInstanceStateRestore()
         rule.onNodeWithText("box.example.ts.net").assertIsDisplayed()

@@ -48,7 +48,7 @@ class ImportKeyTest {
     }
 
     @androidx.compose.runtime.Composable
-    private fun screen(calls: Calls, picked: PickedKeyFile?, pickError: String?, busy: Boolean, result: ImportCheck?) = ImportKey(
+    private fun Screen(calls: Calls, picked: PickedKeyFile?, pickError: String?, busy: Boolean, result: ImportCheck?) = ImportKey(
         picked, pickError, busy, result,
         onChooseFile = { calls.chose++ }, onClearFile = { calls.cleared++ }, onImport = { pem, pass -> calls.imported = pem to pass }, onBack = { calls.back++ },
     )
@@ -58,7 +58,7 @@ class ImportKeyTest {
         rule.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
-                PaddockTheme(darkTheme = true) { screen(calls, picked, pickError, busy, result) }
+                PaddockTheme(darkTheme = true) { Screen(calls, picked, pickError, busy, result) }
             }
         }
         return calls
@@ -124,7 +124,7 @@ class ImportKeyTest {
     @Test fun keyTextAndPassphraseAreNotKeptInSavedState() {
         val tester = StateRestorationTester(rule)
         val calls = Calls()
-        tester.setContent { PaddockTheme(darkTheme = true) { screen(calls, null, null, false, null) } }
+        tester.setContent { PaddockTheme(darkTheme = true) { Screen(calls, null, null, false, null) } }
         rule.onNodeWithText("Or paste the key").performTextInput("KEY-TEXT-PLACEHOLDER")
         rule.onNodeWithText("Passphrase, if the key has one").performTextInput("hunter2")
         rule.onNodeWithText("Import key").assertIsEnabled()

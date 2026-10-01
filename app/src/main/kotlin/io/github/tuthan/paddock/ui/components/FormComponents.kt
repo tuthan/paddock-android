@@ -138,7 +138,7 @@ private fun SwitchTrack(checked: Boolean) {
     val c = PaddockTokens.colors
     val x by animateDpAsState(if (checked) 21.dp else 3.dp, tween(150), label = "thumb")
     Box(Modifier.size(width = 44.dp, height = 26.dp).clip(RoundedCornerShape(13.dp)).background(if (checked) c.accent else c.track)) {
-        Box(Modifier.offset(x = x, y = 3.dp).size(20.dp).clip(RoundedCornerShape(10.dp)).background(if (checked) c.ground else c.text))
+        Box(Modifier.offset { androidx.compose.ui.unit.IntOffset(x.roundToPx(), 3.dp.roundToPx()) }.size(20.dp).clip(RoundedCornerShape(10.dp)).background(if (checked) c.ground else c.text))
     }
 }
 

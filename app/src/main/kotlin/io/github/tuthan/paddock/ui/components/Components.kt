@@ -25,7 +25,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -353,8 +353,9 @@ fun Banner(text: String, modifier: Modifier = Modifier, actionLabel: String? = n
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.row)
     // Side by side only when there is room: on a narrow phone or at a large font the action goes under the sentence.
-    val width = LocalConfiguration.current.screenWidthDp
-    val stacked = LocalDensity.current.fontScale >= 1.3f || width < 400
+    val density = LocalDensity.current
+    val width = with(density) { LocalWindowInfo.current.containerSize.width.toDp() }
+    val stacked = density.fontScale >= 1.3f || width < 400.dp
     val body: @Composable (Modifier) -> Unit = { m ->
         Row(m, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(PaddockIcons.Warning, contentDescription = null, tint = c.attention, modifier = Modifier.size(20.dp))
