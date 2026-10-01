@@ -2,7 +2,7 @@
 
 A phone companion for [herdr](https://herdr.dev): answer the herd, do not operate it. Native Kotlin, SSH only, no server of its own. Plan and phase notes live in the docs vault under `herdr-android/`.
 
-Status: Phase 04 implemented (monitor UI): connection ownership, host-key trust, relay install with consent, a live attention home, Output, Activity, Add machine, Settings. `:core` is JVM only (enforced); `:app` is the Android shell. Device-only acceptance (AC-04.8 recents thumbnail, AC-04.9 cold start, TalkBack) is open; see the vault's Phase 04 evidence report.
+Status: Phase 05 implemented (manual terminal): the Terminal tab observes a pane read-only, and on request controls it through a pinned host helper with a lease; see `docs/terminal-control.md`. Phase 04 (monitor UI) is implemented before it. `:core` is JVM only (enforced); `:app` is the Android shell. Device-only acceptance is open (Phase 04: AC-04.8 recents thumbnail, AC-04.9 cold start, TalkBack; Phase 05: airplane mode and the scroll timing on a physical phone); see the vault's evidence reports.
 
 ## Requirements
 
@@ -27,7 +27,7 @@ tools/check.sh --offline                     # the CI gate: wrapper, SDK revisio
 | --- | --- |
 | JVM unit | `./gradlew :core:test` (fixtures only; no herdr needed) |
 | JVM integration | Phase 03 onward: start the disposable session (below), set `PADDOCK_TEST_SOCKET` to its socket |
-| Emulator | `tools/run-ui-tests.sh <serial>` (Compose tests plus screenshots); `tools/run-live-e2e.sh <serial>` (the whole app against a throwaway sshd and `paddock-test`); `tools/check-permission-flow.py` (Android 17, adb-driven); `tools/check-add-machine-ime.py` (keyboard and rotation) |
+| Emulator | `tools/run-ui-tests.sh <serial>` (Compose tests plus screenshots); `tools/run-live-e2e.sh <serial>` (the whole app against a throwaway sshd and `paddock-test`); `tools/run-terminal-e2e.sh <serial>` (the Terminal tab: observe, conflict, takeover, typing, scroll timing, resize, release, rotation, link loss; `LINK_CUT=airplane` for real airplane mode on Android 12+); `tools/check-permission-flow.py` (Android 17, adb-driven); `tools/check-add-machine-ime.py` (keyboard and rotation) |
 | Physical | Phase 02 onward |
 
 ## The disposable session

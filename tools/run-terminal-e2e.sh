@@ -57,6 +57,7 @@ pty_size() { # "rows cols" of the pane's terminal, from the shell's controlling 
 }
 view_rows() { H pane get "$P" | jq -r '.result.pane.scroll.viewport_rows'; }
 pane_has() { H pane read "$P" --source recent --lines 80 | grep -q -- "$1"; }
+helper_pids() { pgrep -f "python3 .*paddock-control.py" | sort | tr "\n" " "; }
 helpers() { pgrep -af "paddock-control.py" | grep -v pgrep | sed 's/^[0-9]* //' || true; }
 observers() { pgrep -af "terminal session observe $P" | grep -v pgrep | sed 's/^[0-9]* //' || true; }
 
@@ -153,6 +154,20 @@ go controlling
 reach typed
 check "AC-05.4 the phone's keystrokes reached the pane" 'pane_has phone-e2e'
 go typed
+
+reach rotate
+HELPER_BEFORE=$(helper_pids)
+ROT0=$($ADB shell settings get system accelerometer_rotation | tr -d '\r')
+$ADB shell settings put system accelerometer_rotation 0; $ADB shell settings put system user_rotation 1; sleep 4
+HELPER_LAND=$(helper_pids)
+ROT_LAND=$($ADB shell dumpsys window displays | grep -m1 -o 'mCurrentRotation=[A-Z_0-9]*' | tr -d '\r')
+$ADB shell settings put system user_rotation 0; sleep 4
+HELPER_PORT=$(helper_pids)
+$ADB shell settings put system accelerometer_rotation "${ROT0:-1}"
+say "rotation under control: device in landscape was $ROT_LAND; helper pid before: $HELPER_BEFORE; in landscape the same: $([ "$HELPER_BEFORE" = "$HELPER_LAND" ] && echo yes || echo NO); back in portrait the same: $([ "$HELPER_BEFORE" = "$HELPER_PORT" ] && echo yes || echo NO)"
+check "the device really rotated" '[ "$ROT_LAND" = mCurrentRotation=ROTATION_90 ] || [ "$ROT_LAND" = mCurrentRotation=ROTATION_270 ]'
+check "a rotation keeps the same control helper process (control was not released)" '[ -n "$HELPER_BEFORE" ] && [ "$HELPER_BEFORE" = "$HELPER_LAND" ] && [ "$HELPER_BEFORE" = "$HELPER_PORT" ]'
+go rotate
 
 for n in 1 2 3 4 5; do
   reach scroll-$n

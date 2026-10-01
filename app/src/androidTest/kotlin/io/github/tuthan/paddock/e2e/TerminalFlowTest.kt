@@ -155,6 +155,14 @@ class TerminalFlowTest {
         shoot("typed")
         checkpoint("typed")
 
+        // --- a rotation must not hand the terminal back: the script turns the device to landscape and back ---
+        checkpoint("rotate")
+        waitFor("still in control after the rotation") { pill() == "in control" }
+        assertTrue("the screen survived the rotation", screenText().contains("phone-e2e"))
+        typeLine("echo after-rotation")
+        waitFor("typing still works after the rotation") { screenText().lines().any { it.trim() == "after-rotation" } }
+        shoot("after-rotation")
+
         // --- AC-05.8: a 200-line scroll. Once from the hardware keyboard (to show the keys drive it), then five times with the
         // script starting it from the host while this thread is idle, so the numbers are the app's and not the test harness's.
         fun report(label: String): Triple<Double, Double, Int> {
