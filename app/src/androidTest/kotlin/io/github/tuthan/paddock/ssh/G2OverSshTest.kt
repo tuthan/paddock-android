@@ -46,22 +46,30 @@ class G2OverSshTest {
     private val cleanup = mutableListOf<String>()
     private fun note(m: String) { Log.i("TRANSPORT", m); println("TRANSPORT $m") }
 
+    // Same rule as PaddockTest.guard in :core: the path as given and its real path must name the same disposable session.
+    private val socketRe = Regex(".*/sessions/(paddock-test(?:-[a-z0-9]+)?)/herdr\\.sock")
+
     private suspend fun connect(): SshSession {
         assumeTrue("socket/relay not passed", !socket.isNullOrBlank() && !relayPath.isNullOrBlank())
-        require(Regex(".*/sessions/paddock-test(-[a-z0-9]+)?/herdr\\.sock").matches(socket!!)) { "refusing a non-test session" }
+        val given = requireNotNull(socketRe.matchEntire(socket!!)) { "refusing a non-test session" }.groupValues[1]
         val pair = phone.getOrCreate()
         val target = SshTarget("profile-g2", args.getString("host", "10.0.2.2"), args.getString("port", "2222").toInt(), args.getString("user", "jdoe"))
-        return SshlibConnector(HostKeyPolicy(FileHostKeyStore(storeFile), clock::nowMillis), clock)
+        val ssh = SshlibConnector(HostKeyPolicy(FileHostKeyStore(storeFile), clock::nowMillis), clock)
             .connect(target, SshAuth.Phone(phone.privateKey(), pair.publicKey)) { true }.also { opened += it }
+        // The socket is on the host, so its real path is resolved there; a paddock-test path linked elsewhere is refused.
+        val real = ssh.exec(listOf("realpath", "-e", "--", socket)).let { if (it.exit == 0) it.stdout.toString(Charsets.UTF_8).trim() else "" }
+        require(socketRe.matchEntire(real)?.groupValues?.get(1) == given) { "refusing $socket: its real path on the host is '$real', not session $given" }
+        return ssh
     }
 
     @After fun tearDown() = runBlocking<Unit> {
-        opened.firstOrNull()?.let { s -> cleanup.forEach { runCatching { s.exec(listOf(herdr, "--session", "paddock-test", "pane", "close", it)) } } }
+        opened.firstOrNull()?.let { s -> cleanup.forEach { runCatching { s.exec(listOf(herdr, "--session", name, "pane", "close", it)) } } }
         scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         opened.forEach { runCatching { it.close() } }; storeFile.delete()
     }
 
-    private val name get() = Regex("sessions/(paddock-test[^/]*)/").find(socket!!)!!.groupValues[1]
+    /** The session the guarded socket path names; cleanup and every mutation target it, never a hard-coded name. */
+    private val name get() = socketRe.matchEntire(socket!!)!!.groupValues[1]
 
     @Test
     fun monitorGoesLiveAndConvergesOverSshAfterASplitAndAStatusReport() = runBlocking<Unit> {

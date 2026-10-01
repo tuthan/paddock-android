@@ -39,7 +39,7 @@ tools/capture-fixtures.sh paddock-test       # recapture the corpus (a pin updat
 tools/validate-fixtures.sh                   # corpus completeness, no leaks, `default` refused
 ```
 
-**No test ever touches the default session or a real agent.** Only sessions whose name matches `^paddock-test(-[a-z0-9]+)?$` (`paddock-test`, or `paddock-test-` plus lowercase letters and digits) may be mutated; the scripts and the integration harness refuse any other name or socket path.
+**No test ever touches the default session or a real agent.** Only sessions whose name matches `^paddock-test(-[a-z0-9]+)?$` (`paddock-test`, or `paddock-test-` plus lowercase letters and digits) may be mutated; the scripts and the integration harness refuse any other name, and any socket path whose real path (symlinks resolved; on the host for the over-SSH test) is not that same session's `sessions/<name>/herdr.sock`.
 
 ## Dependencies
 

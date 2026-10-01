@@ -69,8 +69,27 @@ class PaddockTest private constructor(val socket: String) {
         fun orSkip(): PaddockTest {
             val s = System.getenv("PADDOCK_TEST_SOCKET")
             Assume.assumeTrue("PADDOCK_TEST_SOCKET not set; integration test skipped", !s.isNullOrBlank())
-            require(SOCKET_RE.matches(s!!)) { "PADDOCK_TEST_SOCKET must be a paddock-test session socket, got a different session" }
+            guard(s!!)
             return PaddockTest(s)
+        }
+
+        /**
+         * The disposable session [socket] belongs to, or an [IllegalArgumentException]. The path as given and its real
+         * path (every symlink resolved, so the socket must exist) must both be `.../sessions/paddock-test[-suffix]/herdr.sock`
+         * and name the same session: a paddock-test-looking path that links to the default session's socket, or to
+         * another session's, is refused. The lexical check alone let such a link through.
+         */
+        fun guard(socket: String): String {
+            val given = SOCKET_RE.matchEntire(socket)?.groupValues?.get(1)
+            requireNotNull(given) { "PADDOCK_TEST_SOCKET must be a paddock-test session socket, got a different session" }
+            val real = try {
+                java.nio.file.Path.of(socket).toRealPath().toString()
+            } catch (e: java.io.IOException) {
+                throw IllegalArgumentException("PADDOCK_TEST_SOCKET does not resolve to an existing socket: $e", e)
+            }
+            val resolved = SOCKET_RE.matchEntire(real)?.groupValues?.get(1)
+            require(resolved == given) { "PADDOCK_TEST_SOCKET names session $given but its real path is $real; refusing" }
+            return given
         }
     }
 }
