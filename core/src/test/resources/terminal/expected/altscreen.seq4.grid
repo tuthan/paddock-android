@@ -1,0 +1,9 @@
+# frames-altscreen.jsonl after seq 4: tput rmcup has restored the primary screen, and after-alt follows before-alt.
+size 80 24
+cursor 5 1 visible
+screen primary
+text 2 |/tmp/paddock-test-ws ❯ /tmp/paddock-test-ws/fx-altscreen.sh
+text 3 |before-alt
+text 4 |after-alt
+style 2 1-20 bold fg=6
+style 2 22 bold fg=6

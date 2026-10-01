@@ -1,0 +1,6 @@
+# frames-altscreen.jsonl after seq 3: tput smcup has run and the application printed inside-alt. herdr repaints the
+# alternate screen over the primary one, so the command line row is blanked and only inside-alt remains; no ?1049 is sent.
+size 80 24
+cursor 5 1 visible
+screen primary
+text 4 |inside-alt

@@ -1,0 +1,11 @@
+# frames-cursor.jsonl after seq 4: the shell's next prompt lands on row 3 over the erased line.
+size 80 24
+cursor 3 24 visible
+screen primary
+text 1 |  moved
+text 2 |row2/paddock-test-ws ❯ /tmp/paddock-test-ws/fx-cursor.sh
+text 3 |/tmp/paddock-test-ws ❯
+style 2 5-20 bold fg=6
+style 2 22 bold fg=6
+style 3 1-20 bold fg=6
+style 3 22 bold fg=6

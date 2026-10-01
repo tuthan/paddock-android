@@ -1,0 +1,28 @@
+# frames-colours.jsonl after seq 3: sixteen-colour row, 256-colour row, bold and dim.
+size 80 24
+cursor 6 1 visible
+screen primary
+text 2 |/tmp/paddock-test-ws ❯ /tmp/paddock-test-ws/fx-colours.sh
+text 3 |16c-30 16c-31 16c-32 16c-33 16c-34 16c-35 16c-36 16c-37
+text 4 |256-16 256-46 256-82 256-118 256-154 256-196 256-226 256-255
+text 5 |bold dim
+style 2 1-20 bold fg=6
+style 2 22 bold fg=6
+style 3 1-6 fg=0
+style 3 8-13 fg=1
+style 3 15-20 fg=2
+style 3 22-27 fg=3
+style 3 29-34 fg=4
+style 3 36-41 fg=5
+style 3 43-48 fg=6
+style 3 50-55 fg=7
+style 4 1-6 fg=16
+style 4 8-13 fg=46
+style 4 15-20 fg=82
+style 4 22-28 fg=118
+style 4 30-36 fg=154
+style 4 38-44 fg=196
+style 4 46-52 fg=226
+style 4 54-60 fg=255
+style 5 1-4 bold
+style 5 6-8 dim

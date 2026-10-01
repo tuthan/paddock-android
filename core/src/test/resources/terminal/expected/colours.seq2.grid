@@ -1,0 +1,7 @@
+# frames-colours.jsonl after seq 2: the command line is typed after the prompt.
+size 80 24
+cursor 3 1 visible
+screen primary
+text 2 |/tmp/paddock-test-ws ❯ /tmp/paddock-test-ws/fx-colours.sh
+style 2 1-20 bold fg=6
+style 2 22 bold fg=6

@@ -1,0 +1,28 @@
+# frames-scroll.jsonl after seq 3: rows 1..24 hold scroll-line-2..scroll-line-25 (the capture ends mid-scroll).
+size 80 24
+cursor 3 1 hidden
+screen primary
+text 1 |scroll-line-2
+text 2 |scroll-line-3
+text 3 |scroll-line-4
+text 4 |scroll-line-5
+text 5 |scroll-line-6
+text 6 |scroll-line-7
+text 7 |scroll-line-8
+text 8 |scroll-line-9
+text 9 |scroll-line-10
+text 10 |scroll-line-11
+text 11 |scroll-line-12
+text 12 |scroll-line-13
+text 13 |scroll-line-14
+text 14 |scroll-line-15
+text 15 |scroll-line-16
+text 16 |scroll-line-17
+text 17 |scroll-line-18
+text 18 |scroll-line-19
+text 19 |scroll-line-20
+text 20 |scroll-line-21
+text 21 |scroll-line-22
+text 22 |scroll-line-23
+text 23 |scroll-line-24
+text 24 |scroll-line-25

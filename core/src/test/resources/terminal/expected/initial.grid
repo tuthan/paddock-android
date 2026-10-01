@@ -1,0 +1,7 @@
+# Every fixture opens with the same full frame: the cleared screen and the shell prompt on row 2.
+size 80 24
+cursor 2 24 visible
+screen primary
+text 2 |/tmp/paddock-test-ws ❯
+style 2 1-20 bold fg=6
+style 2 22 bold fg=6

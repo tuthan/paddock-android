@@ -1,0 +1,12 @@
+# frames-altscreen.jsonl after seq 5: the shell's next prompt on row 6.
+size 80 24
+cursor 6 24 visible
+screen primary
+text 2 |/tmp/paddock-test-ws ❯ /tmp/paddock-test-ws/fx-altscreen.sh
+text 3 |before-alt
+text 4 |after-alt
+text 6 |/tmp/paddock-test-ws ❯
+style 2 1-20 bold fg=6
+style 2 22 bold fg=6
+style 6 1-20 bold fg=6
+style 6 22 bold fg=6
