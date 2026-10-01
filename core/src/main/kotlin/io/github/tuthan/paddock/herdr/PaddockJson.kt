@@ -1,7 +1,6 @@
 package io.github.tuthan.paddock.herdr
 
 import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
 /**
@@ -19,8 +18,7 @@ val PaddockJson: Json = Json {
 inline fun <reified T> Json.decodeResult(text: String): Result<T> =
     try {
         Result.success(decodeFromString<T>(text))
-    } catch (e: SerializationException) {
-        Result.failure(e)
-    } catch (e: IllegalArgumentException) {
+    } catch (e: RuntimeException) {
+        // SerializationException and IllegalArgumentException, plus what kotlinx throws on odd shapes (IndexOutOfBounds).
         Result.failure(e)
     }

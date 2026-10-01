@@ -1,0 +1,3 @@
+{"id":"fx-stat","result":{"type":"subscription_started"}}
+{"data":{"agent":"fake","agent_status":"idle","display_agent":"Fixture agent","pane_id":"w2:p1","state_labels":{"idle":"waiting"},"workspace_id":"w2"},"event":"pane.agent_status_changed"}
+{"data":{"agent":"fake","agent_status":"blocked","display_agent":"Fixture agent","pane_id":"w2:p1","state_labels":{"idle":"waiting"},"workspace_id":"w2"},"event":"pane.agent_status_changed"}

@@ -52,6 +52,9 @@ class AttentionTest {
         assertEquals("claude · w1:p1", AttentionModel.title(agent("w1:p1", AgentStatus.Idle, title = "  ")))
         assertEquals("agent · w1:p1", AttentionModel.title(agent("w1:p1", AgentStatus.Idle, name = null)))
         assertTrue(AttentionModel.title(agent("w1:p1", AgentStatus.Idle, title = "x".repeat(400))).length <= 121)
+        // A presentation title an integration set comes first; a blank one falls through.
+        assertEquals("Refactor auth", AttentionModel.title(agent("w1:p1", AgentStatus.Idle, title = "fix the build").copy(title = "Refactor auth")))
+        assertEquals("fix the build", AttentionModel.title(agent("w1:p1", AgentStatus.Idle, title = "fix the build").copy(title = " ")))
     }
 
     @Test fun contextIsTheWorkingDirectoryBasename() {

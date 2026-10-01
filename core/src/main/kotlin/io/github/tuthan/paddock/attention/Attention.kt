@@ -83,9 +83,9 @@ object AttentionModel {
         AgentStatus.Unknown -> if (a.interactiveReady == true) StateWord.Ready to Section.Ready else StateWord.Unknown to Section.Unknown
     }
 
-    /** The title chain: the terminal's own title with its prompt stripped, else the agent kind and pane id. */
+    /** The title chain: the presentation title an integration set, then the terminal's own title with its prompt stripped, else the agent kind and pane id. */
     fun title(a: Agent): String =
-        (a.terminalTitleStripped?.takeIf { it.isNotBlank() } ?: "${a.displayAgent ?: a.agent ?: "agent"} · ${a.paneId}").boundedForUi(120)
+        (a.title?.takeIf { it.isNotBlank() } ?: a.terminalTitleStripped?.takeIf { it.isNotBlank() } ?: "${a.displayAgent ?: a.agent ?: "agent"} · ${a.paneId}").boundedForUi(120)
 
     private fun context(a: Agent): String =
         (a.foregroundCwd ?: a.cwd)?.let { it.trimEnd('/').substringAfterLast('/').ifEmpty { it } } ?: ""

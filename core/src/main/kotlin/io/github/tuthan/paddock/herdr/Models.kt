@@ -7,7 +7,9 @@ import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 
 /** `done` is detection-only (a report accepts only the other four); unrecognised values become [Unknown] so a newer herdr cannot crash an older phone. */
 @Serializable(with = AgentStatusSerializer::class)
@@ -19,7 +21,12 @@ enum class AgentStatus(val wire: String) {
 
 object AgentStatusSerializer : KSerializer<AgentStatus> {
     override val descriptor = PrimitiveSerialDescriptor("AgentStatus", PrimitiveKind.STRING)
-    override fun deserialize(decoder: Decoder) = AgentStatus.fromWire(decoder.decodeString())
+    /** A value that is not a string at all is as unrecognised as an unknown word: [AgentStatus.Unknown], not a failed read. */
+    override fun deserialize(decoder: Decoder): AgentStatus {
+        val json = decoder as? JsonDecoder ?: return AgentStatus.fromWire(decoder.decodeString())
+        val element = json.decodeJsonElement()
+        return AgentStatus.fromWire((element as? JsonPrimitive)?.takeIf { it.isString }?.content)
+    }
     override fun serialize(encoder: Encoder, value: AgentStatus) = encoder.encodeString(value.wire)
 }
 
@@ -62,19 +69,21 @@ data class Pane(
     @SerialName("workspace_id") val workspaceId: String,
     @SerialName("tab_id") val tabId: String,
     val focused: Boolean = false,
-    val cwd: String? = null,
-    @SerialName("foreground_cwd") val foregroundCwd: String? = null,
+    @Serializable(with = LenientString::class) val cwd: String? = null,
+    @Serializable(with = LenientString::class) @SerialName("foreground_cwd") val foregroundCwd: String? = null,
     @SerialName("agent_status") val agentStatus: AgentStatus = AgentStatus.Unknown,
     val revision: Long = 0,
-    val scroll: Scroll? = null,
-    @SerialName("terminal_title") val terminalTitle: String? = null,
-    @SerialName("terminal_title_stripped") val terminalTitleStripped: String? = null,
+    @Serializable(with = LenientScroll::class) val scroll: Scroll? = null,
+    @Serializable(with = LenientString::class) @SerialName("terminal_title") val terminalTitle: String? = null,
+    @Serializable(with = LenientString::class) @SerialName("terminal_title_stripped") val terminalTitleStripped: String? = null,
+    @Serializable(with = LenientString::class) val title: String? = null,
 )
 
 /**
- * An agent is a pane with a detected agent. Fields herdr 0.9.1 does not send yet (`message`, `agent_session`,
- * `interactive_ready`, `launch_pending`, `display_agent`, `state_labels`) are optional here and stay null; reported
- * message text is absent in 0.9.1 (Phase 00 finding), so the UI never depends on it.
+ * An agent is a pane with a detected agent. Types follow schema 22's `AgentInfo`: `agent_session` is an object
+ * (real claude and codex panes carry one) and `state_labels` a string map. Everything that describes rather than
+ * identifies the agent is [Lenient]: a wrong shape there drops that field, never the read. Reported message text
+ * is absent in 0.9.1 (Phase 00 finding), so the UI never depends on `message`.
  */
 @Serializable
 data class Agent(
@@ -83,21 +92,33 @@ data class Agent(
     @SerialName("workspace_id") val workspaceId: String,
     @SerialName("tab_id") val tabId: String,
     /** The agent's name as herdr reports it, for example `claude`. */
-    val agent: String? = null,
+    @Serializable(with = LenientString::class) val agent: String? = null,
     @SerialName("agent_status") val agentStatus: AgentStatus = AgentStatus.Unknown,
     val revision: Long = 0,
-    @SerialName("state_change_seq") val stateChangeSeq: Long? = null,
+    /** A Done is acknowledged at this value; a wrong shape disables that, it does not fail the read. */
+    @Serializable(with = LenientLong::class) @SerialName("state_change_seq") val stateChangeSeq: Long? = null,
     val focused: Boolean = false,
-    val cwd: String? = null,
-    @SerialName("foreground_cwd") val foregroundCwd: String? = null,
-    @SerialName("terminal_title") val terminalTitle: String? = null,
-    @SerialName("terminal_title_stripped") val terminalTitleStripped: String? = null,
-    @SerialName("agent_session") val agentSession: String? = null,
-    @SerialName("interactive_ready") val interactiveReady: Boolean? = null,
-    @SerialName("launch_pending") val launchPending: Boolean? = null,
-    @SerialName("display_agent") val displayAgent: String? = null,
-    @SerialName("state_labels") val stateLabels: List<String>? = null,
-    val message: String? = null,
+    @Serializable(with = LenientString::class) val cwd: String? = null,
+    @Serializable(with = LenientString::class) @SerialName("foreground_cwd") val foregroundCwd: String? = null,
+    @Serializable(with = LenientString::class) @SerialName("terminal_title") val terminalTitle: String? = null,
+    @Serializable(with = LenientString::class) @SerialName("terminal_title_stripped") val terminalTitleStripped: String? = null,
+    /** The presentation title an integration set (`pane report-metadata --title`); first in the title chain. */
+    @Serializable(with = LenientString::class) val title: String? = null,
+    @Serializable(with = LenientAgentSession::class) @SerialName("agent_session") val agentSession: AgentSession? = null,
+    @Serializable(with = LenientBoolean::class) @SerialName("interactive_ready") val interactiveReady: Boolean? = null,
+    @Serializable(with = LenientBoolean::class) @SerialName("launch_pending") val launchPending: Boolean? = null,
+    @Serializable(with = LenientString::class) @SerialName("display_agent") val displayAgent: String? = null,
+    @Serializable(with = LenientLabels::class) @SerialName("state_labels") val stateLabels: Map<String, String>? = null,
+    @Serializable(with = LenientString::class) val message: String? = null,
+)
+
+/** Schema 22 `AgentSessionInfo`, for example `{agent: claude, kind: id, source: herdr:claude, value: …}`. Not shown or stored. */
+@Serializable
+data class AgentSession(
+    val agent: String? = null,
+    val kind: String? = null,
+    val source: String? = null,
+    val value: String? = null,
 )
 
 @Serializable data class LayoutPane(@SerialName("pane_id") val paneId: String, val focused: Boolean = false, val rect: Rect)

@@ -2,7 +2,6 @@ package io.github.tuthan.paddock.herdr
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -19,10 +18,10 @@ data class StatusEvent(
     @SerialName("pane_id") val paneId: String,
     @SerialName("workspace_id") val workspaceId: String? = null,
     @SerialName("agent_status") val agentStatus: AgentStatus = AgentStatus.Unknown,
-    val agent: String? = null,
-    @SerialName("display_agent") val displayAgent: String? = null,
-    val title: String? = null,
-    @SerialName("state_labels") val stateLabels: List<String>? = null,
+    @Serializable(with = LenientString::class) val agent: String? = null,
+    @Serializable(with = LenientString::class) @SerialName("display_agent") val displayAgent: String? = null,
+    @Serializable(with = LenientString::class) val title: String? = null,
+    @Serializable(with = LenientLabels::class) @SerialName("state_labels") val stateLabels: Map<String, String>? = null,
 )
 
 /** What an event line turned into. [Ignored] carries the name so it can be counted. */
@@ -64,7 +63,7 @@ object EventMapper {
             name == EVENTS_LOST -> EventOutcome.EventsLost
             name in STATUS_NAMES -> try {
                 EventOutcome.Status(PaddockJson.decodeFromJsonElement(StatusEvent.serializer(), event.data))
-            } catch (e: SerializationException) { throw ProtocolError.Decode(name, e) }
+            } catch (e: RuntimeException) { throw ProtocolError.Decode(name, e) }
             name in LIFECYCLE_KINDS -> EventOutcome.Lifecycle(
                 LifecycleEvent(
                     name,

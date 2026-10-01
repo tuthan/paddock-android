@@ -34,8 +34,8 @@ sealed interface Message {
         /** Decodes the result as [T], first checking `result.type`. Wrong type or missing fields are [ProtocolError]s. */
         inline fun <reified T> decode(expectedType: String, json: Json = PaddockJson): T {
             if (type != expectedType) throw ProtocolError.WrongResultType(expectedType, type)
-            return try { json.decodeFromJsonElement<T>(result) } catch (e: SerializationException) { throw ProtocolError.Decode(expectedType, e) }
-                catch (e: IllegalArgumentException) { throw ProtocolError.Decode(expectedType, e) }
+            // Any runtime failure while decoding is a decode error: kotlinx throws more than SerializationException on odd shapes.
+            return try { json.decodeFromJsonElement<T>(result) } catch (e: RuntimeException) { throw ProtocolError.Decode(expectedType, e) }
         }
     }
 

@@ -1,6 +1,13 @@
 package io.github.tuthan.paddock.herdr
 
 import java.io.File
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -44,6 +51,50 @@ class FixtureDecodeTest {
             assertNull(get.message, "0.9.1 reports no message text")
         }
         assertTrue(success("agent-get-blocked.json").decode<AgentInfoResult>("agent_info").agent.stateChangeSeq!! > 0)
+    }
+
+    @Test fun theRichAgentCaptureDecodesWithLabelsAndDisplayName() {
+        val get = success("agent-get-rich.json").decode<AgentInfoResult>("agent_info").agent
+        assertEquals(mapOf("idle" to "waiting"), get.stateLabels); assertEquals("Fixture agent", get.displayAgent)
+        assertEquals(AgentStatus.Blocked, get.agentStatus)
+        val snap = success("snapshot-rich.json").decode<SnapshotResult>("session_snapshot").snapshot
+        assertEquals(mapOf("idle" to "waiting"), snap.agents.single().stateLabels)
+        val events = lines("events-status-rich.jsonl").drop(1).map { assertIs<EventOutcome.Status>(EventMapper.map(Envelope.parse(it) as Message.Event)).event }
+        assertEquals(listOf(AgentStatus.Idle, AgentStatus.Blocked), events.map { it.agentStatus })
+        assertTrue(events.all { it.stateLabels == mapOf("idle" to "waiting") })
+    }
+
+    /**
+     * Real claude and codex panes carry `agent_session` as an object (seen on 2026-10-01; herdr fills it from its own
+     * detection, so a synthetic report cannot produce it). The object is inserted here with schema 22's shape.
+     */
+    @Test fun aRealAgentsSessionObjectDecodes() {
+        val session = buildJsonObject { put("agent", "claude"); put("kind", "id"); put("source", "herdr:claude"); put("value", "fixture-session") }
+        val raw = PaddockJson.parseToJsonElement(text("snapshot-rich.json")).jsonObject
+        val result = raw.getValue("result").jsonObject
+        val snapshot = result.getValue("snapshot").jsonObject
+        fun JsonObject.with(key: String, value: JsonElement) = JsonObject(this + (key to value))
+        val withSession = snapshot.with("agents", JsonArray(snapshot.getValue("agents").jsonArray.map { it.jsonObject.with("agent_session", session) }))
+            .with("panes", JsonArray(snapshot.getValue("panes").jsonArray.map { it.jsonObject.with("agent_session", session) }))
+        val line = raw.with("result", result.with("snapshot", withSession)).toString()
+        val s = (Envelope.parse(line, Budgets.SNAPSHOT_LINE) as Message.Success).decode<SnapshotResult>("session_snapshot").snapshot
+        assertEquals("herdr:claude", s.agents.single().agentSession?.source)
+        assertEquals(AgentStatus.Blocked, s.agents.single().agentStatus)
+    }
+
+    @Test fun aDecorativeFieldOfTheWrongShapeDropsOnlyThatField() {
+        val line = """{"id":"x","result":{"type":"agent_info","agent":{"pane_id":"p","terminal_id":"t","workspace_id":"w","tab_id":"t1","focused":false,"revision":1,
+            "agent_status":7,"agent_session":"just-a-string","state_labels":["a","b"],"interactive_ready":"yes","launch_pending":{},"title":{"x":1},
+            "display_agent":[1],"terminal_title_stripped":42,"state_change_seq":"eleven","cwd":null}}}"""
+        val a = (Envelope.parse(line.lines().joinToString("")) as Message.Success).decode<AgentInfoResult>("agent_info").agent
+        assertEquals("p", a.paneId); assertEquals(AgentStatus.Unknown, a.agentStatus)
+        assertNull(a.agentSession); assertNull(a.stateLabels); assertNull(a.interactiveReady); assertNull(a.launchPending)
+        assertNull(a.title); assertNull(a.displayAgent); assertNull(a.stateChangeSeq); assertNull(a.cwd)
+    }
+
+    @Test fun anIdentityFieldOfTheWrongShapeStillFailsTheRead() {
+        val line = """{"id":"x","result":{"type":"agent_info","agent":{"pane_id":{"no":1},"terminal_id":"t","workspace_id":"w","tab_id":"t1"}}}"""
+        assertFailsWith<ProtocolError.Decode> { (Envelope.parse(line) as Message.Success).decode<AgentInfoResult>("agent_info") }
     }
 
     @Test fun paneTabWorkspaceListsDecode() {
