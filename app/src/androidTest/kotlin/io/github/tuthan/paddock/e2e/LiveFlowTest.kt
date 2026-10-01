@@ -109,8 +109,11 @@ class LiveFlowTest {
         waitFor("back on home") { hasNode(text("Activity")) }
         rule.waitForIdle()
         hold("HOME")
-        val notSecureOnHome = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE == 0
-        assertTrue("leaving Output removes the flag", notSecureOnHome)
+        // The blocked agent's captured prompt is on Home now, so Home is protected too, and it names its Review action.
+        waitFor("the blocked prompt on Home") { hasNode(text("Review prompt")) }
+        shoot("home-prompt")
+        val secureOnHomeWithPrompt = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
+        assertTrue("Home is FLAG_SECURE while a captured prompt is on it", secureOnHomeWithPrompt)
 
         // --- Activity: the phone's own record of what it saw ---
         rule.onNodeWithText("Activity").performClick()
@@ -123,6 +126,8 @@ class LiveFlowTest {
         rule.onNodeWithText("Settings").performClick()
         waitFor("settings") { hasNode(text("Protect sensitive screens")) }
         shoot("settings")
+        val notSecureOnSettings = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE == 0
+        assertTrue("a screen with no agent text clears the flag", notSecureOnSettings)
         android.util.Log.i("E2E", "first launch to populated home: $toHome ms (emulator, informational)")
         assertEquals(true, toHome > 0)
     }
