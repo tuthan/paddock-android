@@ -29,6 +29,35 @@ interface HostKeyStore {
     suspend fun touch(profileId: String, nowMillis: Long)
 }
 
+/** Which server host-key algorithms the phone offers, and which presented keys count as the same key as a pin. */
+object HostKeyAlgorithms {
+    /** First contact: modern signatures only. No `ssh-rsa` (RSA with SHA-1) and no `ssh-dss`. */
+    val MODERN = listOf("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "rsa-sha2-512", "rsa-sha2-256")
+    private val RSA = listOf("rsa-sha2-512", "rsa-sha2-256")
+
+    /**
+     * The key type behind an algorithm name. sshlib reports the negotiated signature algorithm, so one RSA key shows up as
+     * `rsa-sha2-512` or `rsa-sha2-256` (or `ssh-rsa` in a pin made by an older build); all three are the type `ssh-rsa`, the
+     * name inside the key blob. Every other host-key algorithm names its key type directly.
+     */
+    fun keyType(algorithm: String): String = if (algorithm == "ssh-rsa" || algorithm.startsWith("rsa-sha2-")) "ssh-rsa" else algorithm
+
+    /**
+     * What to offer the server. With a pin, only the pinned key's type, so a server that has added another key (say Ed25519
+     * next to a pinned ECDSA key) presents the pinned one instead of reading as Changed. Without a pin, [MODERN]. A pin of a
+     * type no longer offered (`ssh-dss`, an unknown name) gets [MODERN]: the server's modern key then shows as Changed, with
+     * both fingerprints, rather than the connection quietly using a retired algorithm.
+     */
+    fun offered(pin: PinnedHostKey?): List<String> {
+        val type = pin?.let { keyType(it.algorithm) } ?: return MODERN
+        return when (type) {
+            "ssh-rsa" -> RSA
+            in MODERN -> listOf(type)
+            else -> MODERN
+        }
+    }
+}
+
 sealed interface HostKeyState {
     /** Never seen: show algorithm and fingerprint, wait for the user. Nothing is authenticated meanwhile. */
     data class Unknown(val presented: PresentedHostKey) : HostKeyState
@@ -63,7 +92,8 @@ class HostKeyPolicy(private val store: HostKeyStore, private val clock: () -> Lo
 
     suspend fun evaluate(profileId: String, endpoint: String, presented: PresentedHostKey): HostKeyState {
         val pin = store.find(profileId) ?: return HostKeyState.Unknown(presented)
-        val same = pin.algorithm == presented.algorithm && MessageDigest.isEqual(pin.blob, presented.blob)
+        // Same key, whichever RSA signature algorithm this connection negotiated.
+        val same = HostKeyAlgorithms.keyType(pin.algorithm) == HostKeyAlgorithms.keyType(presented.algorithm) && MessageDigest.isEqual(pin.blob, presented.blob)
         return if (same) {
             store.touch(profileId, clock())
             HostKeyState.Pinned(pin)

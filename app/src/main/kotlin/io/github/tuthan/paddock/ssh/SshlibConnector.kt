@@ -3,9 +3,11 @@ package io.github.tuthan.paddock.ssh
 import com.trilead.ssh2.ChannelCondition
 import com.trilead.ssh2.Connection
 import com.trilead.ssh2.ConnectionMonitor
+import com.trilead.ssh2.DHGexParameters
 import com.trilead.ssh2.ServerHostKeyVerifier
 import com.trilead.ssh2.Session
 import com.trilead.ssh2.auth.SignatureProxy
+import io.github.tuthan.paddock.hostkey.HostKeyAlgorithms
 import io.github.tuthan.paddock.hostkey.HostKeyPolicy
 import io.github.tuthan.paddock.hostkey.HostKeyState
 import io.github.tuthan.paddock.hostkey.PresentedHostKey
@@ -113,6 +115,12 @@ class SshlibConnector(
         // API 26 to 27 have no ChaCha20 provider and sshlib offers chacha20-poly1305 whenever the server does.
         connection.setClient2ServerCiphers(CIPHERS)
         connection.setServer2ClientCiphers(CIPHERS)
+        connection.setClient2ServerMACs(MACS)
+        connection.setServer2ClientMACs(MACS)
+        connection.setKeyExchangeAlgorithms(KEX)
+        connection.setDHGexParameters(DHGexParameters(2048, 3072, 8192))
+        // A pinned host is asked for the pinned key's type only; first contact offers modern algorithms only.
+        connection.setServerHostKeyAlgorithms(HostKeyAlgorithms.offered(pin).toTypedArray())
 
         val verdict = Verdict()
         // The host-key question runs on sshlib's thread; this job makes it a child of the connect call.
@@ -245,6 +253,16 @@ class SshlibConnector(
 
     companion object {
         private val CIPHERS = arrayOf("aes256-gcm@openssh.com", "aes128-gcm@openssh.com", "aes256-ctr", "aes128-ctr")
+        /** Only used with the CTR ciphers (GCM carries its own tag). No SHA-1 MACs; sshlib has no MD5 MAC at all. */
+        private val MACS = arrayOf("hmac-sha2-256-etm@openssh.com", "hmac-sha2-512-etm@openssh.com", "hmac-sha2-256", "hmac-sha2-512")
+        /**
+         * No SHA-1 key exchange (`diffie-hellman-group1-sha1`, `-group14-sha1`, `-group-exchange-sha1`). sshlib appends
+         * `ext-info-c` and the strict-KEX marker itself. If the kyber exclusion is ever reverted, `mlkem768x25519-sha256` goes first.
+         */
+        private val KEX = arrayOf(
+            "curve25519-sha256", "curve25519-sha256@libssh.org", "ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521",
+            "diffie-hellman-group18-sha512", "diffie-hellman-group16-sha512", "diffie-hellman-group-exchange-sha256", "diffie-hellman-group14-sha256",
+        )
         private const val SHA256 = "SHA-256"
     }
 }

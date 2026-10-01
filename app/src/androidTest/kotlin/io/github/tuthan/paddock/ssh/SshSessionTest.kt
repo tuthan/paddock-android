@@ -81,7 +81,35 @@ class SshSessionTest {
         val info = (session() as SshlibSession).negotiated()
         note("T negotiated $info")
         assertTrue(info, Regex("kex=(curve25519|ecdh-sha2|diffie-hellman)").containsMatchIn(info))
+        assertTrue(info, "sha1" !in info)
         assertTrue(info, Regex("cipher=(aes\\d+-gcm@openssh.com|aes\\d+-ctr)/").containsMatchIn(info))
+    }
+
+    private val multiPort = args.getString("multiPort")?.toInt()
+
+    /**
+     * A host with Ed25519, ECDSA and RSA keys (a second throwaway sshd, passed as `multiPort`). A profile pinned to its ECDSA or
+     * RSA key offers only that key type, so the host presents the pinned key and reads as Pinned, not as Changed by the Ed25519
+     * key the first-contact offer prefers. An RSA pin works whether it was stored as `rsa-sha2-512` or as legacy `ssh-rsa`.
+     */
+    @Test
+    fun aPinnedKeyTypeIsTheOnlyOneOfferedSoAServerWithMoreKeysIsNotChanged() = runBlocking<Unit> {
+        assumeTrue("no multi-key sshd", multiPort != null)
+        val port = multiPort!!
+        val connector = SshlibConnector(policy, clock)
+        var firstAlgorithm = ""
+        connector.connect(SshTarget("multi-new", host, port, user), phoneAuth()) { p -> firstAlgorithm = p.algorithm; true }.also { opened += it }
+        assertEquals("ssh-ed25519", firstAlgorithm)
+        val ecdsa = java.util.Base64.getDecoder().decode(args.getString("multiEcdsa"))
+        val rsa = java.util.Base64.getDecoder().decode(args.getString("multiRsa"))
+        for ((profile, algorithm, blob) in listOf(Triple("multi-ecdsa", "ecdsa-sha2-nistp256", ecdsa), Triple("multi-rsa", "rsa-sha2-512", rsa), Triple("multi-rsa-old", "ssh-rsa", rsa))) {
+            policy.acceptUnknown(profile, "$host:$port", io.github.tuthan.paddock.hostkey.PresentedHostKey(algorithm, blob))
+            val s = connector.connect(SshTarget(profile, host, port, user), phoneAuth()) { fail("a pinned host must not ask"); false }.also { opened += it }
+            val info = (s as SshlibSession).negotiated()
+            note("T pinned $algorithm -> $info")
+            assertTrue(info, info.endsWith("hostkey=" + if (algorithm == "ssh-rsa") "rsa-sha2-512" else algorithm))
+            assertEquals("ok\n", String(s.exec(listOf("echo", "ok")).stdout))
+        }
     }
 
     @Test
