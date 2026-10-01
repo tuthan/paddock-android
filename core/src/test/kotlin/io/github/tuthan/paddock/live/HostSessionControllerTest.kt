@@ -1,0 +1,154 @@
+package io.github.tuthan.paddock.live
+
+import io.github.tuthan.paddock.herdr.SessionCatalog
+import io.github.tuthan.paddock.herdr.SessionEntry
+import io.github.tuthan.paddock.hostprofile.HostProfile
+import io.github.tuthan.paddock.ledger.InMemoryLedgerStore
+import io.github.tuthan.paddock.ledger.Ledger
+import io.github.tuthan.paddock.lifecycle.Connection
+import io.github.tuthan.paddock.lifecycle.Lease
+import io.github.tuthan.paddock.ports.Clock
+import io.github.tuthan.paddock.ports.DownReason
+import io.github.tuthan.paddock.ports.ExecResult
+import io.github.tuthan.paddock.relay.FakeSession
+import io.github.tuthan.paddock.relay.FakeSession.Companion.result
+import io.github.tuthan.paddock.relay.sha256Hex
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.After
+import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class FakeLease(initial: Connection = Connection.Connecting) : Lease {
+    val flow = MutableStateFlow(initial)
+    val released = AtomicBoolean(false)
+    override val state: StateFlow<Connection> get() = flow
+    override fun release() { released.set(true) }
+}
+
+class HostSessionControllerTest {
+    private fun entry(name: String, default: Boolean = false, running: Boolean = true) = SessionEntry(name, default, running, "/d/$name", "/d/$name/herdr.sock")
+
+    @Test fun theNamedRunningSessionWinsAndANamedStoppedOneIsNotChosen() {
+        val c = SessionCatalog(listOf(entry("default", default = true), entry("work"), entry("old", running = false)))
+        assertEquals("work", chooseSession(c, "work")!!.name)
+        assertNull(chooseSession(c, "old"))
+        assertNull(chooseSession(c, "missing"))
+    }
+
+    @Test fun withoutANameTheRunningDefaultIsChosenElseTheOnlyRunningOne() {
+        assertEquals("default", chooseSession(SessionCatalog(listOf(entry("a"), entry("default", default = true))))!!.name)
+        assertEquals("a", chooseSession(SessionCatalog(listOf(entry("a"), entry("b", running = false))))!!.name)
+        assertNull(chooseSession(SessionCatalog(listOf(entry("a"), entry("b")))), "two running, none default: no silent guess")
+        assertNull(chooseSession(SessionCatalog(listOf(entry("default", default = true, running = false)))))
+        assertNull(chooseSession(SessionCatalog(emptyList())))
+    }
+
+    // ---- the phases, against a scripted host ----
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val clock = Clock { System.currentTimeMillis() }
+    private val profile = HostProfile("laptop", "Laptop", "10.0.0.2", 22, "jdoe")
+    private val script = "print('relay')\n".toByteArray()
+    private val sha = sha256Hex(script)
+    private val ledger = Ledger(InMemoryLedgerStore()) { System.currentTimeMillis() }
+    @After fun stop() { scope.coroutineContext[Job]?.cancel() }
+
+    private fun controller(lease: FakeLease) = HostSessionController(scope, profile, lease, ledger, clock, MutableStateFlow(true), script, sha)
+
+    private suspend fun until(what: String, cond: () -> Boolean) {
+        try { withTimeout(3_000) { while (!cond()) delay(5) } } catch (e: kotlinx.coroutines.TimeoutCancellationException) { throw AssertionError("timed out waiting for $what") }
+    }
+
+    private var herdrFound = true
+
+    private fun host(sha256sum: (List<String>) -> ExecResult, other: (List<String>) -> ExecResult = { result(1) }) = FakeSession(onExec = { argv, _ ->
+        when {
+            argv.firstOrNull() == "sh" && argv.getOrNull(2)?.contains("for p in") == true -> if (herdrFound) result(0, "/usr/bin/herdr") else result(1)
+            argv.firstOrNull() == "sh" && argv.getOrNull(2)?.contains("printf %s \"\$HOME\"") == true -> result(0, "/home/jdoe")
+            argv.firstOrNull() == "sha256sum" -> sha256sum(argv)
+            else -> other(argv)
+        }
+    })
+
+    @Test fun aFailedConnectionIsReportedWithItsReasonAndWhetherItRetries() = runBlocking<Unit> {
+        val lease = FakeLease(Connection.Failed(DownReason.AuthFailed, null))
+        val c = controller(lease).also { it.start() }
+        until("failed") { c.phase.value is HostPhase.Failed }
+        assertEquals(HostPhase.Failed(DownReason.AuthFailed, null), c.phase.value)
+        lease.flow.value = Connection.Connecting
+        until("connecting") { c.phase.value == HostPhase.Connecting }
+        c.stop()
+        assertTrue(lease.released.get(), "stopping gives the connection back")
+    }
+
+    @Test fun aMissingRelayAsksBeforeWritingAnythingAndNamesTheFileAndHash() = runBlocking<Unit> {
+        val session = host(sha256sum = { result(1, "", "No such file") })
+        val lease = FakeLease(Connection.Connected(session, 1))
+        val c = controller(lease).also { it.start() }
+        until("ask") { c.phase.value is HostPhase.NeedsRelayInstall }
+        val p = c.phase.value as HostPhase.NeedsRelayInstall
+        assertEquals("/home/jdoe/.local/share/paddock/paddock-relay.py", p.destination)
+        assertEquals(sha, p.expectedSha256)
+        assertEquals(false, p.replacing)
+        assertTrue(session.execs.none { (_, stdin) -> stdin != null }, "nothing was sent to the host before the user agreed")
+        c.stop()
+    }
+
+    @Test fun aDifferentFileAtTheDestinationIsOfferedAsAReplacementNotSilentlyTrusted() = runBlocking<Unit> {
+        val session = host(sha256sum = { result(0, "${"0".repeat(64)}  /home/jdoe/.local/share/paddock/paddock-relay.py\n") })
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("ask") { c.phase.value is HostPhase.NeedsRelayInstall }
+        assertEquals(true, (c.phase.value as HostPhase.NeedsRelayInstall).replacing)
+        c.stop()
+    }
+
+    @Test fun herdrMissingFromEveryUsualPlaceIsAHostFactNamingThePlaces() = runBlocking<Unit> {
+        herdrFound = false
+        val session = host(sha256sum = { result(0, "$sha  x\n") })
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("problem") { c.phase.value is HostPhase.Problem }
+        assertTrue((c.phase.value as HostPhase.Problem).message.contains("~/.local/bin"))
+        c.stop()
+    }
+
+    @Test fun whenHerdrDoesNotAnswerTheProblemIsAHostFactWithAHint() = runBlocking<Unit> {
+        val session = host(sha256sum = { result(0, "$sha  x\n") }, other = { result(127, "", "herdr: not found") })
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("problem") { c.phase.value is HostPhase.Problem }
+        assertTrue((c.phase.value as HostPhase.Problem).message.contains("PATH"))
+        c.stop()
+    }
+
+    @Test fun noRunningSessionIsSaidPlainly() = runBlocking<Unit> {
+        val session = host(sha256sum = { result(0, "$sha  x\n") }, other = { result(0, """{"sessions":[]}""") })
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("problem") { c.phase.value is HostPhase.Problem }
+        assertEquals("No herdr session is running on the host.", (c.phase.value as HostPhase.Problem).message)
+        c.stop()
+    }
+
+    @Test fun aLostConnectionStopsTheOldPhaseAndReconnectingStartsFromTheCheckAgain() = runBlocking<Unit> {
+        val session = host(sha256sum = { result(1) })
+        val lease = FakeLease(Connection.Connected(session, 1))
+        val c = controller(lease).also { it.start() }
+        until("ask") { c.phase.value is HostPhase.NeedsRelayInstall }
+        lease.flow.value = Connection.Failed(DownReason.Timeout, 123L)
+        until("failed") { c.phase.value is HostPhase.Failed }
+        lease.flow.value = Connection.Connected(session, 2)
+        until("ask again") { c.phase.value is HostPhase.NeedsRelayInstall }
+        assertIs<HostPhase.NeedsRelayInstall>(c.phase.value)
+        c.stop()
+    }
+}

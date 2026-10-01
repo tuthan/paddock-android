@@ -46,7 +46,7 @@ class MonitoredHost(
     private val ledger: Ledger,
     private val clock: Clock,
     foreground: StateFlow<Boolean>,
-    herdr: String = "herdr",
+    herdr: String,
     /** Applied to every authoritative read. Only a test uses it, to stand in for a state herdr cannot be told to report. */
     private val transformRead: (io.github.tuthan.paddock.herdr.Snapshot) -> io.github.tuthan.paddock.herdr.Snapshot = { it },
 ) {

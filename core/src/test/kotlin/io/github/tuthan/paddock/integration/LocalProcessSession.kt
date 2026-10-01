@@ -20,7 +20,9 @@ import kotlinx.coroutines.withContext
  * An [SshSession] whose "remote" is this machine: every argv runs as a local process. It exercises the real herdr and
  * the real relay script without SSH, which the device suite covers separately. Commands are run without a shell.
  */
-class LocalProcessSession : SshSession {
+class LocalProcessSession(private val env: Map<String, String> = emptyMap()) : SshSession {
+    private fun builder(argv: List<String>) = ProcessBuilder(argv).also { it.environment().putAll(env) }
+
     val commands = java.util.concurrent.CopyOnWriteArrayList<List<String>>()
     private val streams = java.util.concurrent.CopyOnWriteArrayList<Pair<List<String>, Process>>()
 
@@ -31,7 +33,7 @@ class LocalProcessSession : SshSession {
     override suspend fun exec(argv: List<String>, stdin: ByteArray?, limits: ExecLimits): ExecResult = withContext(Dispatchers.IO) {
         commands += argv
         val started = System.nanoTime()
-        val p = ProcessBuilder(argv).start()
+        val p = builder(argv).start()
         if (stdin != null) p.outputStream.use { it.write(stdin) } else p.outputStream.close()
         val errBytes = java.util.concurrent.atomic.AtomicReference(ByteArray(0))
         val errThread = Thread { errBytes.set(p.errorStream.readBytes()) }.also { it.isDaemon = true; it.start() }
@@ -42,7 +44,7 @@ class LocalProcessSession : SshSession {
 
     override suspend fun openStream(argv: List<String>): StreamChannel {
         commands += argv
-        val p = ProcessBuilder(argv).start()
+        val p = builder(argv).start()
         streams += argv to p
         return object : StreamChannel {
             override val stdout: Flow<ByteArray> = flow {
