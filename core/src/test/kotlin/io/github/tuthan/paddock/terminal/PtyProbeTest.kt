@@ -41,6 +41,21 @@ class PtyProbeTest {
         }
     }
 
+    @Test fun theControllingTerminalIsReadFromTheRealStatLine() {
+        assertEquals(18, PtyProbe.controllingPts(host("proc-stat.txt")))
+    }
+
+    @Test fun theStatLineIsCountedFromItsLastBracketSoANameWithSpacesAndBracketsCannotShiftIt() {
+        assertEquals(18, PtyProbe.controllingPts("12 (a b) c) S 1 12 12 34834 12 4194304"))
+        assertEquals(256 + 3, PtyProbe.controllingPts("12 (x) S 1 12 12 ${(137 shl 8) or 3} 12 0"), "pts numbers past 255 use the next major")
+        assertEquals(300, PtyProbe.controllingPts("12 (x) S 1 12 12 ${(137 shl 8) or (300 - 256)} 12 0"))
+        assertEquals(1000, PtyProbe.controllingPts("12 (x) S 1 12 12 ${(139 shl 8) or 232} 12 0"))
+    }
+
+    @Test fun aProcessWithoutAPtyHasNone() {
+        for (stat in listOf("", "12 x S 1 12 12 0 12", "12 (x) S 1 12 12 0 12", "12 (x) S 1 12 12 1025 12 0", "12 (x) S 1 12 12 ${4 shl 8} 12 0", "12 (x) S 1 12", "12 (x) S 1 12 12 notanumber 12")) assertNull(PtyProbe.controllingPts(stat), stat)
+    }
+
     @Test fun sttyPrintsRowsThenColumnsAndTheProbeReturnsThemTheOtherWayRound() {
         assertEquals(PtySize(cols = 60, rows = 20), PtyProbe.parseStty(host("stty-size.txt")))
         assertEquals(PtySize(120, 40), PtyProbe.parseStty(" 40   120 \n"))
@@ -50,17 +65,32 @@ class PtyProbeTest {
         for (text in listOf("", "0 0", "20", "20 60 1", "a b", "-1 80", "20 60x", "999999 80", "40 5000")) assertNull(PtyProbe.parseStty(text), text)
     }
 
-    @Test fun theProbeAsksHerdrForTheShellThenReadsItsTerminalSize() {
-        val host = Host { argv -> if (argv.first() == "stty") ok("20 60\n") else ok(processInfo) }
-        assertEquals(PtySize(60, 20), runBlocking { PtyProbe.probe(host, cli, "w2:p5P") })
-        assertEquals(listOf("/usr/bin/herdr", "--session", "paddock-test", "pane", "process-info", "--pane", "w2:p5P"), host.seen[0])
-        assertEquals(listOf("stty", "-F", "/proc/2126114/fd/0", "size"), host.seen[1])
+    private fun answers(stat: (Int) -> ExecResult = { ok(host("proc-stat.txt")) }, stty: (List<String>) -> ExecResult = { ok("20 60\n") }) = Host { argv ->
+        when (argv.first()) { "cat" -> stat(argv[1].substringAfter("/proc/").substringBefore("/").toInt()); "stty" -> stty(argv); else -> ok(processInfo) }
     }
 
-    @Test fun anyFailureIsANullAndNothingIsGuessed() {
+    @Test fun theProbeAsksHerdrForAProcessThenForItsControllingTerminalAndThatTerminalsSize() {
+        val host = answers()
+        assertEquals(PtySize(60, 20), runBlocking { PtyProbe.probe(host, cli, "w2:p5P") })
+        assertEquals(listOf("/usr/bin/herdr", "--session", "paddock-test", "pane", "process-info", "--pane", "w2:p5P"), host.seen[0])
+        assertEquals(listOf("cat", "/proc/2126114/stat"), host.seen[1])
+        assertEquals(listOf("stty", "-F", "/dev/pts/18", "size"), host.seen[2])
+        assertEquals(3, host.seen.size)
+    }
+
+    @Test fun aJobThatEndedBetweenTheCallsIsRetriedOnce() {
+        var calls = 0
+        val host = answers(stat = { calls++; if (calls == 1) failed(1, "cat: No such file or directory") else ok(host("proc-stat.txt")) })
+        assertEquals(PtySize(60, 20), runBlocking { PtyProbe.probe(host, cli, "w2:p5P") })
+        assertEquals(2, host.seen.count { it.first() == "cat" })
+    }
+
+    @Test fun anyOtherFailureIsANullAfterTwoAttemptsAndNothingIsGuessed() {
         assertNull(runBlocking { PtyProbe.probe(Host { failed(1, "pane not found") }, cli, "w2:p5P") })
-        assertNull(runBlocking { PtyProbe.probe(Host { argv -> if (argv.first() == "stty") failed(1, "stty: invalid argument") else ok(processInfo) }, cli, "w2:p5P") })
-        assertNull(runBlocking { PtyProbe.probe(Host { argv -> if (argv.first() == "stty") ok("garbage") else ok(processInfo) }, cli, "w2:p5P") })
+        assertNull(runBlocking { PtyProbe.probe(answers(stat = { failed(1) }), cli, "w2:p5P") })
+        assertNull(runBlocking { PtyProbe.probe(answers(stat = { ok("12 (x) S 1 12 12 0 12") }), cli, "w2:p5P") })
+        assertNull(runBlocking { PtyProbe.probe(answers(stty = { failed(1, "stty: invalid argument") }), cli, "w2:p5P") })
+        assertNull(runBlocking { PtyProbe.probe(answers(stty = { ok("garbage") }), cli, "w2:p5P") })
         assertNull(runBlocking { PtyProbe.probe(Host { throw java.io.IOException("link dropped") }, cli, "w2:p5P") })
     }
 

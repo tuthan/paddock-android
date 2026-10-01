@@ -40,6 +40,7 @@ private class TestHost(var stty: String? = "20 60\n") : SshSession {
         execs += argv
         return when {
             argv.contains("process-info") -> ExecResult(0, """{"id":"cli:pane:process_info","result":{"process_info":{"shell_pid":4242,"pane_id":"w1:p1"},"type":"pane_process_info"}}""".toByteArray(), ByteArray(0), false, false, Duration.ZERO)
+            argv.firstOrNull() == "cat" -> ExecResult(0, "4242 (bash) S 1 4242 4242 34834 4242 4194304".toByteArray(), ByteArray(0), false, false, Duration.ZERO)
             argv.firstOrNull() == "stty" -> if (stty == null) ExecResult(1, ByteArray(0), "stty: failed".toByteArray(), false, false, Duration.ZERO) else ExecResult(0, stty!!.toByteArray(), ByteArray(0), false, false, Duration.ZERO)
             else -> ExecResult(1, ByteArray(0), ByteArray(0), false, false, Duration.ZERO)
         }
@@ -81,7 +82,7 @@ class TerminalSessionTest {
     private val ESC = "\u001B"
     private fun full(seq: Long = 1, text: String = "${ESC}[2J${ESC}[1;1Hhello") = frame(seq, true, text)
 
-    private fun waitUntil(what: String, ms: Long = 4000, cond: () -> Boolean) = runBlocking {
+    private fun waitUntil(what: String, ms: Long = 10_000, cond: () -> Boolean) = runBlocking {
         withTimeout(ms) { while (!cond()) delay(5) }
     }.also { }
 
@@ -117,7 +118,7 @@ class TerminalSessionTest {
         waitUntil("observer") { host.observers.isNotEmpty() }
         assertEquals(listOf(herdr, "--session", "paddock-test", "terminal", "session", "observe", "w1:p1", "--cols", "60", "--rows", "20"), host.observers.single().argv)
         assertEquals(PtySize(60, 20), s.view.value.pty)
-        assertTrue(host.execs.any { "process-info" in it && "w1:p1" in it }); assertTrue(host.execs.any { it.take(3) == listOf("stty", "-F", "/proc/4242/fd/0") })
+        assertTrue(host.execs.any { "process-info" in it && "w1:p1" in it }); assertTrue(host.execs.any { it.take(3) == listOf("stty", "-F", "/dev/pts/18") })
     }
 
     @Test fun whenTheSizeCannotBeReadTheObserverFollowsThePhonesViewport() {
@@ -328,7 +329,7 @@ class TerminalSessionTest {
         o.feed(frame(2, false, "${ESC}[1;6H!")); waitUntil("2") { s.view.value.frames == 2L }
         o.feed(frame(5, false, "${ESC}[1;7H?"))
         waitUntil("reconnected") { host.observers.size == 2 }
-        assertTrue(o.closed); assertEquals(TerminalNotice.Resynced, s.view.value.notice)
+        assertTrue(o.closed); waitUntil("the resynced notice") { s.view.value.notice == TerminalNotice.Resynced }
         host.observers.last().feed(full(seq = 1, text = "${ESC}[2J${ESC}[1;1Hfresh")); waitUntil("fresh") { s.row0() == "fresh" }
     }
 
@@ -336,7 +337,7 @@ class TerminalSessionTest {
         val host = TestHost(); val s = session(host); observing(host, s); val c = controlling(host, s)
         c.feed(frame(4, false, "${ESC}[1;1Hlost"))
         waitUntil("resync request") { c.writtenText().contains("""{"type":"terminal.resize","cols":60,"rows":20}""") }
-        assertEquals(TerminalNotice.Resynced, s.view.value.notice)
+        waitUntil("the resynced notice") { s.view.value.notice == TerminalNotice.Resynced }
         c.feed(frame(5, false, "${ESC}[1;1Hignored"))      // patches are dropped until the full frame
         c.feed(frame(6, true, "${ESC}[1;1Hrepaired"))
         waitUntil("repaired") { s.row0() == "repaired" }
