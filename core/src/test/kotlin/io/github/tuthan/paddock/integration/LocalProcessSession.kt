@@ -12,8 +12,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.withContext
 
 /**
@@ -24,6 +25,8 @@ class LocalProcessSession(private val env: Map<String, String> = emptyMap()) : S
     private fun builder(argv: List<String>) = ProcessBuilder(argv).also { it.environment().putAll(env) }
 
     val commands = java.util.concurrent.CopyOnWriteArrayList<List<String>>()
+    /** Everything written to any process's stdin (exec input and relay request lines), so a test can assert what was never sent. */
+    val stdinLog = java.util.concurrent.CopyOnWriteArrayList<String>()
     private val streams = java.util.concurrent.CopyOnWriteArrayList<Pair<List<String>, Process>>()
 
     /** Streams still running whose argv mentions [needle]; the test kills them to simulate a dropped relay. */
@@ -34,7 +37,7 @@ class LocalProcessSession(private val env: Map<String, String> = emptyMap()) : S
         commands += argv
         val started = System.nanoTime()
         val p = builder(argv).start()
-        if (stdin != null) p.outputStream.use { it.write(stdin) } else p.outputStream.close()
+        if (stdin != null) { stdinLog += stdin.toString(Charsets.UTF_8); p.outputStream.use { it.write(stdin) } } else p.outputStream.close()
         val errBytes = java.util.concurrent.atomic.AtomicReference(ByteArray(0))
         val errThread = Thread { errBytes.set(p.errorStream.readBytes()) }.also { it.isDaemon = true; it.start() }
         val out = p.inputStream.readBytes()
@@ -46,13 +49,17 @@ class LocalProcessSession(private val env: Map<String, String> = emptyMap()) : S
         commands += argv
         val p = builder(argv).start()
         streams += argv to p
+        // The SshSession contract: a collector cancelled while the process is silent returns at once. A reader thread
+        // feeds a channel, so the blocking read never holds up the collector; close() ends the process and the thread.
+        val out = Channel<ByteArray>(16)
+        Thread({
+            val buf = ByteArray(8192)
+            try { while (true) { val n = p.inputStream.read(buf); if (n < 0) break; out.trySendBlocking(buf.copyOf(n)) } } catch (_: java.io.IOException) { } finally { out.close() }
+        }, "local-stream").apply { isDaemon = true; start() }
         return object : StreamChannel {
-            override val stdout: Flow<ByteArray> = flow {
-                val buf = ByteArray(8192)
-                while (true) { val n = p.inputStream.read(buf); if (n < 0) break; emit(buf.copyOf(n)) }
-            }.flowOn(Dispatchers.IO)
+            override val stdout: Flow<ByteArray> = out.receiveAsFlow()
             override val stderr: Flow<ByteArray> = emptyFlow()
-            override suspend fun write(bytes: ByteArray) = withContext(Dispatchers.IO) { p.outputStream.write(bytes); p.outputStream.flush() }
+            override suspend fun write(bytes: ByteArray) = withContext(Dispatchers.IO) { stdinLog += bytes.toString(Charsets.UTF_8); p.outputStream.write(bytes); p.outputStream.flush() }
             override suspend fun closeStdin() = withContext(Dispatchers.IO) { p.outputStream.close() }
             override suspend fun awaitExit(): Int = withContext(Dispatchers.IO) { p.waitFor() }
             override suspend fun close() { p.destroy(); runCatching { p.waitFor(2, TimeUnit.SECONDS) }; p.destroyForcibly() }

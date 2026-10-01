@@ -33,6 +33,33 @@ class ReconcilerTest {
 
     private suspend fun awaitReads(r: Reconciler, n: Long) = withTimeout(5_000) { while (r.reads < n) delay(5) }
 
+    // ---- a read that fails with a cancellation it did not ask for ------------------------------------------
+
+    @Test fun aCancellationThatLeaksOutOfAReadIsAFailedReadAndTheLoopKeepsGoing() = runBlocking<Unit> {
+        val calls = AtomicInteger()
+        val r = Reconciler(clock, host, "main", sleep = { delay(1) }, read = {
+            if (calls.incrementAndGet() == 1) throw leakedCancellation() else snap(pane("a"))
+        })
+        val loop = CoroutineScope(Dispatchers.Default).launch { r.run() }
+        r.invalidate("first")
+        withTimeout(5_000) { while (r.installed.value == null) delay(5) }
+        assertEquals(2, calls.get(), "the failed read was retried, not the end of the loop")
+        assertTrue(loop.isActive)
+        loop.cancel(); loop.join()
+        assertTrue(loop.isCancelled, "cancelling the loop's own coroutine still stops it")
+    }
+
+    @Test fun readAtIsWhenTheReadStartedSoAgeIsNeverUnderstated() = runBlocking<Unit> {
+        val r = Reconciler(clock, host, "main", read = { val start = now.get(); now.addAndGet(5_000); snap(pane("a")).also { check(now.get() == start + 5_000) } })
+        val loop = CoroutineScope(Dispatchers.Default).launch { r.run() }
+        val startedAt = now.get()
+        r.invalidate("x")
+        withTimeout(5_000) { while (r.installed.value == null) delay(5) }
+        assertEquals(startedAt, r.installed.value!!.readAtMillis)
+        assertEquals(5_000, r.ageMillis())
+        loop.cancel()
+    }
+
     // ---- AC-03.4: single flight and repeat-after-dirty -------------------------------------------------------
 
     @Test fun noReadIsEverConcurrentWithAnotherUnderAStormOfInvalidations() = runBlocking<Unit> {
@@ -177,3 +204,8 @@ class ReconcilerTest {
         collector.cancel(); loop.cancel()
     }
 }
+
+/** Stands in for a transport timeout that surfaces as a CancellationException the reconciler did not ask for. */
+private fun leakedCancellation(): kotlin.coroutines.cancellation.CancellationException =
+    kotlin.coroutines.cancellation.CancellationException("timed out inside the transport")
+

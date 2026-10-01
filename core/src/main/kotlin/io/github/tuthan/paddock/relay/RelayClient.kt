@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -30,6 +33,12 @@ class RelayUnavailable(val exit: Int?) : Exception("relay ended without a respon
 
 /** The host never acknowledged a subscription within the deadline. */
 class SubscribeTimeout : Exception("subscription not acknowledged in time")
+
+/**
+ * A call got no answer in time: herdr or the relay is not answering. A host fact for the caller to show and retry, and
+ * deliberately not a CancellationException, which would end whatever loop made the call.
+ */
+class RelayTimeout(val method: String, val after: Duration) : Exception("herdr did not answer $method within $after")
 
 /** The stream of a subscription was closed by herdr's `events_lost`: the caller must mark itself stale and reconcile. */
 class EventsLost : Exception("events lost")
@@ -83,9 +92,11 @@ class RelayClient(
     /** One request on a fresh stream, as observed in 0.9.1: one request per connection, then EOF. */
     suspend fun call(method: String, params: JsonObject = JsonObject(emptyMap()), budget: Int = Budgets.LINE, timeout: Duration = 10.seconds): Message.Success {
         val id = ids()
-        val channel = session.openStream(argv)
+        var channel: io.github.tuthan.paddock.ports.StreamChannel? = null
         try {
-            return withTimeout(timeout) {
+            return try { withTimeout(timeout) {
+                // Opening counts against the timeout too: the adapter may queue for a free channel.
+                val channel = session.openStream(argv).also { channel = it }
                 channel.write(request(id, method, params))
                 val line = try { channel.stdout.lines(budget).first() } catch (_: NoSuchElementException) { throw RelayUnavailable(runCatching { channel.awaitExit() }.getOrNull()) }
                 when (val m = Envelope.parse(line, budget)) {
@@ -93,8 +104,8 @@ class RelayClient(
                     is Message.Failure -> throw HerdrError(m.code, m.message)
                     is Message.Event -> throw ProtocolError.UnknownShape(setOf("event"))
                 }
-            }
-        } finally { runCatching { channel.close() } }
+            } } catch (e: TimeoutCancellationException) { throw RelayTimeout(method, timeout) }
+        } finally { withContext(NonCancellable) { runCatching { channel?.close() } } }
     }
 
     /**

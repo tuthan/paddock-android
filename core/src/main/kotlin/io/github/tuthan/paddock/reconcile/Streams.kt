@@ -82,33 +82,41 @@ class StatusStreams(
     private val onCovered: () -> Unit = {},
 ) {
     private val lock = Mutex()
+    /** Guards [active], [covered] and [generation] together, so [stop] (not suspending) and a promotion cannot interleave. */
+    private val gate = Any()
     private var active: StreamHandle? = null
     private var covered: Set<String> = emptySet()
+    /** Bumped by [stop]: an update that started before it may finish its request but must not promote its stream. */
+    private var generation = 0L
 
     /** The panes the running stream covers, for tests and the debug screen. */
-    suspend fun coveredPanes(): Set<String> = lock.withLock { covered }
+    suspend fun coveredPanes(): Set<String> = lock.withLock { synchronized(gate) { covered } }
 
     suspend fun update(wanted: Set<String>) = lock.withLock {
-        if (wanted == covered && active?.job?.isActive == true) return@withLock
-        if (wanted.isEmpty()) { active?.cancel(); active = null; covered = emptySet(); return@withLock }
+        val gen = synchronized(gate) {
+            if (wanted == covered && active?.job?.isActive == true) return@withLock
+            generation
+        }
+        if (wanted.isEmpty()) { swap(gen, null, emptySet()); return@withLock }
         var set = wanted
         var retried = false
         while (true) {
             // A candidate that fails before promotion is handled below; only the promoted stream reports through onEnded.
             var self: StreamHandle? = null
-            val next = relay.start(scope, Subscriptions.status(set), onOutcome) { cause -> if (self != null && active === self) onEnded(cause) }
+            val next = relay.start(scope, Subscriptions.status(set), onOutcome) { cause -> if (self != null && synchronized(gate) { active === self }) onEnded(cause) }
             self = next
             try {
                 next.acknowledged.await()
-                active?.cancel(); active = next; covered = set
+                if (!swap(gen, next, set)) { next.cancel(); return@withLock }
                 onCovered()
                 return@withLock
             } catch (e: HerdrError) {
                 next.cancel()
                 if (retried) { onEnded(e); return@withLock }
                 retried = true
+                // A fresh read, not the snapshot that produced the refused set: [currentPanes] must reflect the session now.
                 set = currentPanes()
-                if (set.isEmpty()) { active?.cancel(); active = null; covered = emptySet(); return@withLock }
+                if (set.isEmpty()) { swap(gen, null, emptySet()); return@withLock }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 next.cancel(); throw e
             } catch (e: Throwable) {
@@ -117,5 +125,12 @@ class StatusStreams(
         }
     }
 
-    fun stop() { active?.cancel(); active = null; covered = emptySet() }
+    /** Installs [next] as the running stream unless [stop] ran since [gen]. Returns whether it did. */
+    private fun swap(gen: Long, next: StreamHandle?, set: Set<String>): Boolean = synchronized(gate) {
+        if (gen != generation) return false
+        active?.cancel(); active = next; covered = set
+        true
+    }
+
+    fun stop() = synchronized(gate) { generation++; active?.cancel(); active = null; covered = emptySet() }
 }

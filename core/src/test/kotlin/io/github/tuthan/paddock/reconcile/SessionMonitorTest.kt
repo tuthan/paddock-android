@@ -36,15 +36,21 @@ private class ScriptedHost {
     val status = CopyOnWriteArrayList<FakeStream>()
     val snapshotCalls = AtomicInteger()
     @Volatile var refuseStatus = false
+    /** Refuse the next status request with `pane_not_found`, as herdr does when a named pane closed meanwhile. */
+    @Volatile var refuseStatusOnce: (() -> Unit)? = null
+    /** Answer `session.snapshot` with this error instead of the snapshot. */
+    @Volatile var snapshotError: String? = null
 
     val session = FakeSession(onStream = { st ->
         st.onRequest = { line ->
             val req = Json.parseToJsonElement(line).jsonObject; val id = req["id"]!!.jsonPrimitive.content
             when (req["method"]!!.jsonPrimitive.content) {
-                "session.snapshot" -> { snapshotCalls.incrementAndGet(); st.feed("""{"id":"$id","result":{"type":"session_snapshot","snapshot":${Json { encodeDefaults = true }.encodeToString(snapshot)}}}""" + "\n"); st.end() }
+                "session.snapshot" -> snapshotError?.let { code -> snapshotCalls.incrementAndGet(); st.feed("""{"id":"$id","error":{"code":"$code","message":"not now"}}""" + "\n"); st.end() } ?: run { snapshotCalls.incrementAndGet(); st.feed("""{"id":"$id","result":{"type":"session_snapshot","snapshot":${Json { encodeDefaults = true }.encodeToString(snapshot)}}}""" + "\n"); st.end() }
                 "events.subscribe" -> {
                     val isStatus = line.contains("agent_status_changed")
-                    if (isStatus && refuseStatus) st.feed("""{"id":"","error":{"code":"invalid_request","message":"bad pane"}}""" + "\n")
+                    val once = if (isStatus) refuseStatusOnce else null
+                    if (once != null) { refuseStatusOnce = null; once(); st.feed("""{"id":"$id","error":{"code":"pane_not_found","message":"pane not found"}}""" + "\n") }
+                    else if (isStatus && refuseStatus) st.feed("""{"id":"","error":{"code":"invalid_request","message":"bad pane"}}""" + "\n")
                     else { st.feed("""{"id":"$id","result":{"type":"subscription_started"}}""" + "\n"); (if (isStatus) status else lifecycle) += st }
                 }
             }
@@ -121,6 +127,47 @@ class SessionMonitorTest {
         host.lifecycle[0].end()
         until("reconnected") { host.lifecycle.size == 2 && m.freshness.value == Freshness.Live }
         assertTrue(m.lastLoss.value is io.github.tuthan.paddock.relay.RelayUnavailable)
+        m.stop()
+    }
+
+    @Test fun aFailingReadMakesTheSessionStaleWithTheReasonAndItRecovers() = runBlocking<Unit> {
+        val m = monitor(); m.start(); until("live") { m.freshness.value == Freshness.Live }
+        host.snapshotError = "server_busy"
+        host.lifecycle[0].feed("""{"event":"pane_updated","data":{"pane_id":"w1:p1"}}""" + "\n")
+        until("stale") { m.freshness.value == Freshness.Stale }
+        assertTrue((m.lastLoss.value as? io.github.tuthan.paddock.relay.HerdrError)?.code == "server_busy", "the reason is kept: ${m.lastLoss.value}")
+        host.snapshotError = null
+        until("live again") { m.freshness.value == Freshness.Live }
+        m.stop()
+    }
+
+    @Test fun unmappedEventsAreCountedAndDoNotTriggerAReadButMappedOnesDo() = runBlocking<Unit> {
+        fg.value = false // no heartbeat: this harness's sleep is 5 ms, so a foreground heartbeat would read constantly
+        val m = monitor(); m.start(); until("live") { m.freshness.value == Freshness.Live }
+        delay(100); val before = host.snapshotCalls.get()
+        repeat(3) { host.lifecycle[0].feed("""{"event":"pane.something_new","data":{}}""" + "\n") }
+        until("counted") { m.ignoredEvents == 3L }
+        delay(150)
+        assertEquals(before, host.snapshotCalls.get(), "an event this build does not know is not a reason to read")
+        host.lifecycle[0].feed("""{"event":"pane_updated","data":{"pane_id":"w1:p1"}}""" + "\n")
+        until("read") { host.snapshotCalls.get() > before }
+        m.stop()
+    }
+
+    @Test fun aRefusedStatusRequestIsRetriedWithThePanesFromAFreshRead() = runBlocking<Unit> {
+        host.snapshot = host.snapshot.copy(agents = listOf(Agent("w1:p1", "term_a", "w1", "w1:t1", agent = "fake")))
+        // The pane closes between the read that named it and the request; another agent appears.
+        host.refuseStatusOnce = {
+            host.snapshot = host.snapshot.copy(
+                panes = listOf(Pane("w1:p2", "term_b", "w1", "w1:t1")),
+                agents = listOf(Agent("w1:p2", "term_b", "w1", "w1:t1", agent = "fake")),
+            )
+        }
+        val m = monitor(); m.start()
+        until("covered") { host.status.isNotEmpty() && m.freshness.value == Freshness.Live }
+        val written = host.status.last().writtenText()
+        assertTrue(written.contains("w1:p2") && !written.contains("w1:p1"), "the retry names the session as it is now: $written")
+        assertTrue(m.lastLoss.value == null, "one refusal is handled without a reconnect: ${m.lastLoss.value}")
         m.stop()
     }
 }

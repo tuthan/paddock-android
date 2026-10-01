@@ -151,12 +151,16 @@ class Phase04LiveTest {
         until("a Done row") { h.home.value?.rows?.any { it.paneId == base && it.state == StateWord.Done } == true }
         val row = h.home.value!!.rows.first { it.paneId == base }
         val before = env.session.commands.size
+        val stdinBefore = env.session.stdinLog.size
 
         h.markSeen(row)
 
         until("the row to read Ready locally") { h.home.value?.rows?.any { it.paneId == base && it.state == StateWord.Ready } == true }
         val during = env.session.commands.drop(before)
-        assertTrue(during.none { argv -> "focus" in argv }, "no focus command of any kind was sent: $during")
+        // Both channels: argv (CLI calls) and stdin (relay requests such as `agent.focus` or `pane.focus`).
+        assertTrue(during.none { argv -> argv.any { "focus" in it } }, "no focus command of any kind was sent: $during")
+        val requests = env.session.stdinLog.drop(stdinBefore)
+        assertTrue(requests.none { "focus" in it }, "no focus request went to the relay: $requests")
         assertTrue(ledger.actions().any { it.kind == ActionKind.MarkSeen && it.terminalId == row.key.target.terminalId })
         // herdr itself still says working: the acknowledgement is the phone's and nothing was written back.
         assertEquals("working", agentList().first { it.paneId == base }.agentStatus.wire)

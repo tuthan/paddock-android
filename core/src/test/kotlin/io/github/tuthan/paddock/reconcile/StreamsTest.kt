@@ -10,6 +10,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Test
@@ -117,4 +118,20 @@ class StreamsTest {
         withTimeout(2_000) { while (got.isEmpty()) delay(5) }
         assertIs<EventOutcome.Status>(got[0]); streams.stop()
     }
+
+    @Test fun stopWhileARequestIsInFlightMeansItsStreamIsNeverPromoted() = runBlocking<Unit> {
+        val pending = CopyOnWriteArrayList<FakeStream>()
+        val session = FakeSession(onStream = { st -> pending += st })     // acknowledged by hand below
+        val ended = CopyOnWriteArrayList<Throwable>()
+        val streams = StatusStreams(client(session), scope, { emptySet() }, { }, { ended += it })
+        val update = scope.launch { streams.update(setOf("w1:p1")) }
+        withTimeout(2_000) { while (pending.isEmpty()) delay(5) }
+        streams.stop()                                                 // the owner gives up on this connection
+        pending[0].feed(ack.acked("id-1") + "\n")
+        update.join()
+        assertEquals(emptySet(), streams.coveredPanes(), "a stream acknowledged after stop is not adopted")
+        withTimeout(2_000) { while (!pending[0].closed) delay(5) }
+        assertEquals(emptyList(), ended)
+    }
 }
+

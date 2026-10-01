@@ -19,10 +19,16 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** An authoritative read and when the phone made it. [epoch] is the phone-local epoch it belongs to. */
+/**
+ * An authoritative read and when the phone made it. [readAtMillis] is when the read *started*: the snapshot shows the
+ * session at some moment after that, so ages measured from it are never understated, and "read after X" means it.
+ * [epoch] is the phone-local epoch it belongs to.
+ */
 data class Installed(val snapshot: Snapshot, val readAtMillis: Long, val epoch: Long)
 
 /**
@@ -94,17 +100,20 @@ class Reconciler(
 
     @Volatile private var previous: Installed? = null
 
-    /** The read loop. Runs until cancelled. */
+    /**
+     * The read loop. Runs until the coroutine running it is cancelled, and only then: a cancellation that comes out of
+     * a read (a timeout inside the transport) is a failed read, retried with backoff like any other.
+     */
     suspend fun run() {
         for (signal in wake) {
             while (dirty.getAndSet(false)) {
                 reads++
+                val started = clock.nowMillis()
                 try {
-                    install(read())
+                    install(read(), started)
                     backoff.succeeded(clock.nowMillis())
-                } catch (e: CancellationException) {
-                    throw e
                 } catch (e: Throwable) {
+                    if (e is CancellationException) currentCoroutineContext().ensureActive()
                     _failure.value = e
                     dirty.set(true)
                     sleep(backoff.nextDelayMillis(clock.nowMillis()))
@@ -121,10 +130,10 @@ class Reconciler(
         }
     }
 
-    private fun install(snapshot: Snapshot) {
+    private fun install(snapshot: Snapshot, startedAt: Long) {
         val newEpoch = epochs.onSnapshot(snapshot)
         if (newEpoch) previous = null
-        val now = Installed(snapshot, clock.nowMillis(), epochs.epoch)
+        val now = Installed(snapshot, startedAt, epochs.epoch)
         val before = previous
         _installed.value = now
         _failure.value = null

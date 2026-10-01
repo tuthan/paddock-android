@@ -74,7 +74,9 @@ class RelayClientTest {
 
     @Test fun silenceTimesOutAndStillCloses() = runBlocking<Unit> {
         val session = FakeSession()
-        assertFailsWith<kotlinx.coroutines.TimeoutCancellationException> { client(session).call("ping", timeout = 100.milliseconds) }
+        // RelayTimeout is a plain exception, not a CancellationException: the caller's loop must survive a host that does not answer.
+        val e = assertFailsWith<RelayTimeout> { client(session).call("ping", timeout = 100.milliseconds) }
+        assertEquals("ping", e.method)
         assertTrue(session.streams.single().closed)
     }
 
