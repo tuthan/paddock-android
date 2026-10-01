@@ -91,7 +91,7 @@ class PhoneKey internal constructor(
     }
 
     private fun markStrongBox() {
-        if (sdk >= Build.VERSION_CODES.S) return // KeyInfo.securityLevel says it directly
+        if (sdk >= Build.VERSION_CODES.S && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return // KeyInfo.securityLevel says it directly
         runCatching {
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, PROVIDER)
                 .apply { init(KeyGenParameterSpec.Builder(strongBoxMarker, KeyProperties.PURPOSE_SIGN).build()) }
@@ -101,7 +101,8 @@ class PhoneKey internal constructor(
 
     private fun backingOf(key: PrivateKey): KeyBacking = try {
         val info = KeyFactory.getInstance(key.algorithm, PROVIDER).getKeySpec(key, KeyInfo::class.java)
-        if (sdk >= Build.VERSION_CODES.S) {
+        // [sdk] picks the path under test; the platform check keeps a test's higher [sdk] from calling a missing method.
+        if (sdk >= Build.VERSION_CODES.S && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             when (info.securityLevel) {
                 KeyProperties.SECURITY_LEVEL_STRONGBOX -> KeyBacking.StrongBox
                 KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> KeyBacking.Tee
