@@ -1,0 +1,34 @@
+# JVM tier only; emulator and physical tiers run locally (see README.md).
+name: build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  jvm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify the Gradle wrapper jar
+        run: echo "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle/wrapper/gradle-wrapper.jar" | sha256sum -c -
+
+      - name: Verify the pinned protocol and fixtures
+        run: |
+          jq -r '.files|to_entries[]|"\(.value|sub("sha256:";""))  \(.key)"' protocol/SOURCE.json | sha256sum -c -
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 17.0.20+8
+          cache: gradle
+
+      - name: JVM tests and debug build
+        run: ./gradlew --no-daemon --stacktrace :core:test :app:assembleDebug
