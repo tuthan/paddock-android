@@ -53,7 +53,8 @@ data class HostProfile(
         /** Also the imported-key id rule, so a profile id can name its key. */
         val ID = Regex("[a-z0-9][a-z0-9-]{0,40}")
         private val HOST = Regex("[A-Za-z0-9._:\\[][A-Za-z0-9._:%\\[\\]-]*")
-        val SESSION = Regex("[A-Za-z0-9._][A-Za-z0-9._-]{0,63}")
+        /** The CLI's rule, so a profile can never hold a name the herdr calls would refuse. */
+        val SESSION = io.github.tuthan.paddock.cli.HerdrCli.SESSION_NAME
         private val USER = Regex("[A-Za-z0-9._][A-Za-z0-9._-]{0,63}")
     }
 }

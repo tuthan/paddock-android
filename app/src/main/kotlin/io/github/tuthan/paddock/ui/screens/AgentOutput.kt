@@ -102,8 +102,9 @@ private fun OutputBody(
     when (output) {
         OutputState.Loading -> Text("Reading output…", style = PaddockTokens.type.body, color = c.dim)
         is OutputState.Unavailable -> Banner("Output is unavailable: ${output.message}")
-        OutputState.PaneGone -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("This terminal is no longer in the session.", style = PaddockTokens.type.body, color = c.title)
+        OutputState.PaneGone, OutputState.AgentGone -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val what = if (output == OutputState.AgentGone) "The agent in this terminal has exited." else "This terminal is no longer in the session."
+            Text(what, style = PaddockTokens.type.body, color = c.title)
             Text("Back to the list", style = PaddockTokens.type.rowTitle, color = c.accent, modifier = Modifier.clickable(role = Role.Button, onClick = onBack).minimumInteractiveComponentSize())
         }
         is OutputState.Showing -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

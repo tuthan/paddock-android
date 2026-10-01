@@ -20,10 +20,13 @@ class HostUiModel(private val scope: CoroutineScope) {
     private val _view = MutableStateFlow(HostView())
     val view: StateFlow<HostView> = _view.asStateFlow()
     private var job: Job? = null
+    private var profileId: String? = null
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun attach(controller: HostSessionController) {
         job?.cancel()
+        // Another machine's last home is not this one's fallback.
+        if (controller.profile.id != profileId) { profileId = controller.profile.id; _view.value = HostView() }
         job = scope.launch {
             controller.phase.collectLatest { phase ->
                 if (phase is HostPhase.Monitoring) {

@@ -104,6 +104,35 @@ class AnsiTextTest {
         assertEquals("a    b", one("a\tb").text)
     }
 
+    @Test fun invisibleCharactersThatHideTextAreRemovedButJoinersStay() {
+        assertEquals("ab", one("a\u200B\u2060\uFEFFb").text)
+        assertEquals("ab", one("a\uDB40\uDC41\uDB40\uDC7Fb").text) // tag characters U+E0041, U+E007F
+        assertEquals("ab", one("a\u2066\u2069\u200Fb").text)
+        val coder = "\uD83D\uDC68\u200D\uD83D\uDCBB" // man technologist: a ZWJ sequence
+        assertEquals("x${coder}y", one("x${coder}y").text)
+    }
+
+    @Test fun aCsiWithAPrivateMarkerIsNotSgrEvenWhenItEndsInM() {
+        assertEquals(AnsiStyle(), one("$esc[>4;2mx").spans.single().style) // xterm modifyOtherKeys
+        assertEquals(AnsiStyle(), one("$esc[?1;31mx").spans.single().style)
+        assertEquals("x", one("$esc[>4;2mx").text)
+    }
+
+    @Test fun underlineColourArgumentsAreConsumedNotReadAsCodes() {
+        assertEquals(AnsiStyle(), one("$esc[58;5;31mx").spans.single().style)
+        assertEquals(AnsiStyle(bold = true), one("$esc[58;2;255;0;0;1mx").spans.single().style)
+        assertEquals(AnsiStyle(fg = AnsiColor.Red), one("$esc[58:5:4;31mx").spans.single().style)
+    }
+
+    @Test fun safeTextKeepsWhatIsWrittenAndDropsWhatHidesOrReorders() {
+        assertEquals("fix the build", SafeText.clean("fix the build"))
+        assertEquals("ab", SafeText.clean("a\u202Eb"))
+        assertEquals("a b", SafeText.clean("a\tb"))
+        assertEquals("ab", SafeText.clean("a\u001B\u0007\u0085\u2028b"))
+        assertEquals("ab", SafeText.clean("a\uDB40\uDC20b"))
+        assertEquals("caf\u00E9 \u4F60\u597D \u05E9\u05DC\u05D5\u05DD", SafeText.clean("caf\u00E9 \u4F60\u597D \u05E9\u05DC\u05D5\u05DD"), "letters of any script stay")
+    }
+
     @Test fun aTruncatedEscapeAtTheEndIsDropped() {
         assertEquals("a", one("a$esc").text)
         assertEquals("a", one("a$esc[").text)
@@ -120,12 +149,12 @@ class AnsiTextTest {
 
     @Test fun nothingThatComesInEverLeavesAnEscapeOrControlCharacterOut() {
         val rnd = Random(1234)
-        val alphabet = "\u001B[]P_^X\\;:0123456789mHJ?\u0007\r\n\tabc \u009B\u202E".toList()
+        val alphabet = "\u001B[]P_^X\\;:0123456789mHJ?>\u0007\r\n\tabc \u009B\u202E\u200B\uDB40\uDC41".toList()
         repeat(3_000) {
             val s = buildString { repeat(rnd.nextInt(0, 120)) { append(alphabet[rnd.nextInt(alphabet.size)]) } }
             val out = Ansi.parse(s) // must not throw
             for (line in out) for (c in line.text) {
-                assertTrue(c >= ' ' && c != '\u007F' && c !in '\u0080'..'\u009F' && c != '\u001B', "leaked U+%04X from %s".format(c.code, s.replace("\u001B", "<ESC>")))
+                assertTrue(c >= ' ' && c != '\u007F' && c !in '\u0080'..'\u009F' && c != '\u001B' && c != '\u202E' && c != '\u200B', "leaked U+%04X from %s".format(c.code, s.replace("\u001B", "<ESC>")))
             }
         }
     }

@@ -44,7 +44,8 @@ class HerdrCli(private val herdr: String, private val session: String) {
         const val MAX_READ_LINES = 500
         /** `w2:p1`, `w2:t1`, `term_65cbe353cc3172`: letters, digits, `_`, `:`, `.`, `-`, never leading `-`. */
         val ID = Regex("[A-Za-z0-9_][A-Za-z0-9_:.-]{0,63}")
-        val SESSION_NAME = Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+        /** One rule for every place a session name is accepted (the profile form included): starts with a letter or digit. */
+        val SESSION_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
     }
 }
 

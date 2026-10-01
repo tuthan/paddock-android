@@ -23,10 +23,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 /** What one host's screen has to show, from "connecting" to a live monitor. */
 sealed interface HostPhase {
@@ -57,11 +59,17 @@ fun chooseSession(catalog: SessionCatalog, wanted: String? = null): SessionEntry
  * Takes one host from a lease to a live [MonitoredHost]: waits for the connection, checks the relay on the host, asks
  * (through [phase]) before installing it, picks the herdr session, and starts monitoring. When the connection is replaced
  * or lost it stops the old monitor; the next connection starts a fresh one. It reads and writes nothing about agents.
+ *
+ * The controller lives as long as the machine is watched, not as long as a screen is visible: [pause] releases the
+ * claim on the connection when the app is hidden and [resume] claims it again. A quick return finds the owner still
+ * holding the same session, so the monitor, the home and any open output screen carry on untouched; after the owner's
+ * grace the session closes, the monitor stops, and the next [resume] connects again.
  */
 class HostSessionController(
     private val scope: CoroutineScope,
-    private val profile: HostProfile,
-    private val lease: Lease,
+    val profile: HostProfile,
+    /** Claims the profile's connection; called on [start] and on every [resume]. */
+    private val acquire: () -> Lease,
     private val ledger: Ledger,
     private val clock: Clock,
     private val foreground: StateFlow<Boolean>,
@@ -74,49 +82,53 @@ class HostSessionController(
     private val _phase = MutableStateFlow<HostPhase>(HostPhase.Connecting)
     val phase: StateFlow<HostPhase> = _phase.asStateFlow()
 
+    private val lock = Any()
     private var job: Job? = null
     private var current: MonitoredHost? = null
-    private val bringUpLock = Mutex()
-    @Volatile private var pending: Pending? = null
+    private var held: Lease? = null
+    private var stopped = false
+    /** The lease whose state is followed. It stays set after [pause], so the session closing after the grace is still seen. */
+    private val leases = MutableStateFlow<Lease?>(null)
+    /** Completed by [installRelay] while the bring-up waits for the user's agreement. */
+    private val consent = MutableStateFlow<CompletableDeferred<Unit>?>(null)
 
-    private class Pending(val session: SshSession, val installer: RelayInstaller, val home: String)
-
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun start() {
         job = scope.launch {
-            lease.state.collectLatest { c ->
+            // Same connection, same session object: a resume within the grace re-emits an equal state and changes nothing.
+            leases.filterNotNull().flatMapLatest { it.state }.distinctUntilChanged().collectLatest { c ->
                 stopHost()
                 when (c) {
                     Connection.Idle, Connection.Connecting -> _phase.value = HostPhase.Connecting
                     is Connection.Failed -> _phase.value = HostPhase.Failed(c.reason, c.retryAtMillis)
+                    // Runs inside collectLatest: a replaced or lost connection cancels a bring-up, including one waiting for consent.
                     is Connection.Connected -> bringUp(c.session)
                 }
             }
         }
+        resume()
     }
+
+    /** The app is visible: claim the connection again. Harmless when already claimed. */
+    fun resume() = synchronized(lock) {
+        if (stopped || held != null) return@synchronized
+        val lease = acquire()
+        held = lease
+        leases.value = lease
+    }
+
+    /** The app is hidden: release the claim. The owner closes the session after its grace; the monitor stops when it does. */
+    fun pause() = synchronized(lock) { held?.release(); held = null }
 
     /** The user agreed to install the pinned relay shown in [HostPhase.NeedsRelayInstall]. */
-    fun installRelay() {
-        val p = pending ?: return
-        scope.launch {
-            bringUpLock.withLock {
-                if (pending !== p) return@withLock
-                _phase.value = HostPhase.InstallingRelay
-                try {
-                    p.installer.install(p.home)
-                    pending = null
-                    proceed(p.session, p.installer, p.home)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: RelayRefused) {
-                    _phase.value = HostPhase.Problem("The relay on the host did not match after installing. Nothing was started.")
-                } catch (e: Throwable) {
-                    _phase.value = HostPhase.Problem("Could not install the relay: ${e.message ?: e.javaClass.simpleName}".take(200))
-                }
-            }
-        }
-    }
+    fun installRelay() { consent.value?.complete(Unit) }
 
-    fun stop() { job?.cancel(); job = null; stopHost(); lease.release() }
+    fun stop() {
+        synchronized(lock) { stopped = true }
+        job?.cancel(); job = null
+        stopHost()
+        pause()
+    }
 
     /** A non-interactive SSH command often has a short PATH, so the usual install locations are checked by absolute path. */
     private suspend fun discoverHerdr(session: SshSession): String? {
@@ -126,23 +138,45 @@ class HostSessionController(
         return r.stdout.toString(Charsets.UTF_8).trim().takeIf { it.startsWith("/") && '\n' !in it }
     }
 
-    private fun stopHost() { pending = null; current?.stop(); current = null }
+    private fun stopHost() { synchronized(lock) { current.also { current = null } }?.stop() }
 
-    private suspend fun bringUp(session: SshSession) = bringUpLock.withLock {
+    private suspend fun bringUp(session: SshSession) {
+        val installer: RelayInstaller
+        val home: String
         try {
-            val installer = RelayInstaller(session, relayScript, relaySha256)
-            val home = installer.homeDirectory()
-            when (val state = installer.state(home)) {
-                RelayState.Current -> proceed(session, installer, home)
-                RelayState.Missing, is RelayState.Mismatch -> {
-                    pending = Pending(session, installer, home)
-                    _phase.value = HostPhase.NeedsRelayInstall(installer.destination(home), relaySha256, replacing = state is RelayState.Mismatch)
+            installer = RelayInstaller(session, relayScript, relaySha256)
+            home = installer.homeDirectory()
+            val state = installer.state(home)
+            if (state != RelayState.Current) {
+                val asked = CompletableDeferred<Unit>()
+                consent.value = asked
+                _phase.value = HostPhase.NeedsRelayInstall(installer.destination(home), relaySha256, replacing = state is RelayState.Mismatch)
+                try { asked.await() } finally { consent.compareAndSet(asked, null) }
+                _phase.value = HostPhase.InstallingRelay
+                try {
+                    installer.install(home)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: RelayRefused) {
+                    _phase.value = HostPhase.Problem("The relay on the host did not match after installing. Nothing was started.")
+                    return
+                } catch (e: Throwable) {
+                    _phase.value = HostPhase.Problem("Could not install the relay: ${e.message ?: e.javaClass.simpleName}".take(200))
+                    return
                 }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             _phase.value = HostPhase.Problem("Could not check the host: ${e.message ?: e.javaClass.simpleName}".take(200))
+            return
+        }
+        try {
+            proceed(session, installer, home)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            _phase.value = HostPhase.Problem("Could not start watching the host: ${e.message ?: e.javaClass.simpleName}".take(200))
         }
     }
 
@@ -162,14 +196,28 @@ class HostSessionController(
         }
         val chosen = chooseSession(catalog, sessionName)
         if (chosen == null) {
-            _phase.value = HostPhase.Problem(
-                if (sessionName != null) "herdr session \"$sessionName\" is not running on the host." else "No herdr session is running on the host.",
-            )
+            _phase.value = HostPhase.Problem(noSessionMessage(catalog))
             return
         }
-        val host = MonitoredHost(scope, profile, chosen.name, session, path, chosen.socketPath, ledger, clock, foreground, herdr)
-        current = host
-        host.start()
+        // The relay is checked again before each reconnect of this monitor, not only now.
+        val host = MonitoredHost(
+            scope, profile, chosen.name, session, path, chosen.socketPath, ledger, clock, foreground, herdr,
+            beforeReconnect = { installer.verifiedPath(home) },
+        )
+        synchronized(lock) {
+            if (stopped) return
+            current = host
+            host.start()
+        }
         _phase.value = HostPhase.Monitoring(host)
+    }
+
+    private fun noSessionMessage(catalog: SessionCatalog): String {
+        val running = catalog.sessions.filter { it.running }.map { it.name }
+        return when {
+            sessionName != null -> "herdr session \"$sessionName\" is not running on the host."
+            running.size > 1 -> "${running.size} herdr sessions are running (${running.take(4).joinToString(", ")}) and none is the default. Choose the session to watch for this machine."
+            else -> "No herdr session is running on the host."
+        }
     }
 }

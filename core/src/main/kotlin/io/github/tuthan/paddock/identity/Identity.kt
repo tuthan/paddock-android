@@ -22,21 +22,30 @@ data class TargetRef(val host: HostProfileId, val session: String, val terminalI
  */
 data class TerminalKey(val target: TargetRef, val epoch: Long)
 
-/** Counts epochs. A reconnect or a changed server version or protocol starts a new one. */
-class EpochTracker(initial: Long = 1) {
-    var epoch: Long = initial; private set
+/**
+ * Counts epochs. A reconnect or a changed server version or protocol starts a new one. Epochs come from [allocate],
+ * which the owner backs with the ledger so they never repeat for a host and session: not across reconnects, not
+ * across app restarts. A fact stored under one epoch therefore never applies to a later connection by accident.
+ */
+class EpochTracker(private val allocate: () -> Long) {
+    /** In-process numbering from [initial]; for tests and tools that store nothing. */
+    constructor(initial: Long = 1) : this(LocalEpochs(initial)::next)
+
+    var epoch: Long = allocate(); private set
     private var version: String? = null
     private var protocol: Int? = null
 
-    fun onReconnect(): Long = ++epoch
+    fun onReconnect(): Long { epoch = allocate(); return epoch }
 
     /** Returns true when this snapshot started a new epoch. The first snapshot only records the baseline. */
     fun onSnapshot(s: Snapshot): Boolean {
         val changed = version != null && (version != s.version || protocol != s.protocol)
         version = s.version; protocol = s.protocol
-        if (changed) epoch++
+        if (changed) epoch = allocate()
         return changed
     }
+
+    private class LocalEpochs(private var next: Long) { fun next(): Long = next++ }
 }
 
 /** The pane a call may be sent to was not the one the caller named. Refused before anything is sent. */

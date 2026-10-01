@@ -30,8 +30,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-class FakeLease(initial: Connection = Connection.Connecting) : Lease {
-    val flow = MutableStateFlow(initial)
+class FakeLease(initial: Connection = Connection.Connecting, val flow: MutableStateFlow<Connection> = MutableStateFlow(initial)) : Lease {
     val released = AtomicBoolean(false)
     override val state: StateFlow<Connection> get() = flow
     override fun release() { released.set(true) }
@@ -65,7 +64,7 @@ class HostSessionControllerTest {
     private val ledger = Ledger(InMemoryLedgerStore()) { System.currentTimeMillis() }
     @After fun stop() { scope.coroutineContext[Job]?.cancel() }
 
-    private fun controller(lease: FakeLease) = HostSessionController(scope, profile, lease, ledger, clock, MutableStateFlow(true), script, sha)
+    private fun controller(lease: FakeLease) = HostSessionController(scope, profile, { lease }, ledger, clock, MutableStateFlow(true), script, sha)
 
     private suspend fun until(what: String, cond: () -> Boolean) {
         try { withTimeout(3_000) { while (!cond()) delay(5) } } catch (e: kotlinx.coroutines.TimeoutCancellationException) { throw AssertionError("timed out waiting for $what") }
@@ -137,6 +136,58 @@ class HostSessionControllerTest {
         until("problem") { c.phase.value is HostPhase.Problem }
         assertEquals("No herdr session is running on the host.", (c.phase.value as HostPhase.Problem).message)
         c.stop()
+    }
+
+    @Test fun twoRunningSessionsWithoutADefaultAreNamedSoTheUserCanChoose() = runBlocking<Unit> {
+        val catalog = """{"sessions":[{"name":"api","default":false,"running":true,"session_dir":"/d/api","socket_path":"/d/api/herdr.sock"},{"name":"web","default":false,"running":true,"session_dir":"/d/web","socket_path":"/d/web/herdr.sock"}]}"""
+        val session = host(sha256sum = { result(0, "$sha  x\n") }, other = { result(0, catalog) })
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("problem") { c.phase.value is HostPhase.Problem }
+        val message = (c.phase.value as HostPhase.Problem).message
+        assertTrue("api" in message && "web" in message, message)
+        c.stop()
+    }
+
+    /** Leases on one shared connection, as the owner hands them out: each claim is new, the connection is the same. */
+    private class Owner(initial: Connection) {
+        val connection = MutableStateFlow(initial)
+        val leases = java.util.concurrent.CopyOnWriteArrayList<FakeLease>()
+        fun acquire(): Lease = FakeLease(flow = connection).also { leases += it }
+    }
+
+    @Test fun pausingReleasesTheClaimAndAQuickResumeOnTheSameSessionStartsNothingAgain() = runBlocking<Unit> {
+        val session = host(sha256sum = { result(1) })
+        val owner = Owner(Connection.Connected(session, 1))
+        val c = HostSessionController(scope, profile, owner::acquire, ledger, clock, MutableStateFlow(true), script, sha).also { it.start() }
+        until("ask") { c.phase.value is HostPhase.NeedsRelayInstall }
+        val checks = session.execs.size
+        c.pause()
+        assertTrue(owner.leases.single().released.get())
+        c.resume()
+        assertEquals(2, owner.leases.size, "resuming claims the connection again")
+        c.resume()
+        assertEquals(2, owner.leases.size, "a second resume is harmless")
+        delay(100)
+        assertEquals(checks, session.execs.size, "same session: the bring-up is not run again")
+        assertIs<HostPhase.NeedsRelayInstall>(c.phase.value)
+        c.stop()
+    }
+
+    @Test fun whenTheSessionClosesWhilePausedTheNextResumeStartsFresh() = runBlocking<Unit> {
+        val session = host(sha256sum = { result(1) })
+        val owner = Owner(Connection.Connected(session, 1))
+        val c = HostSessionController(scope, profile, owner::acquire, ledger, clock, MutableStateFlow(true), script, sha).also { it.start() }
+        until("ask") { c.phase.value is HostPhase.NeedsRelayInstall }
+        c.pause()
+        owner.connection.value = Connection.Idle // the owner's grace ran out
+        until("connecting") { c.phase.value == HostPhase.Connecting }
+        c.resume()
+        owner.connection.value = Connection.Connected(session, 2)
+        until("ask again") { c.phase.value is HostPhase.NeedsRelayInstall }
+        c.stop()
+        assertTrue(owner.leases.all { it.released.get() })
+        c.resume()
+        assertEquals(2, owner.leases.size, "a stopped controller claims nothing")
     }
 
     @Test fun aLostConnectionStopsTheOldPhaseAndReconnectingStartsFromTheCheckAgain() = runBlocking<Unit> {

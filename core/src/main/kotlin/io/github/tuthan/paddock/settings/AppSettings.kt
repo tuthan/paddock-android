@@ -17,7 +17,11 @@ import kotlinx.serialization.json.Json
  * turning it off is a deliberate act.
  */
 @Serializable
-data class AppSettings(val protectSensitiveScreens: Boolean = true)
+data class AppSettings(
+    val protectSensitiveScreens: Boolean = true,
+    /** The machine to watch on start; null (or a removed profile) falls back to the first one. */
+    val watchedProfileId: String? = null,
+)
 
 interface AppSettingsStore {
     suspend fun load(): AppSettings
@@ -41,7 +45,7 @@ class FileAppSettingsStore(private val file: File) : AppSettingsStore {
     override suspend fun load(): AppSettings = lock.withLock {
         withContext(Dispatchers.IO) {
             if (!file.exists()) AppSettings()
-            else try { json.decodeFromString(AppSettings.serializer(), file.readText()) } catch (_: IllegalArgumentException) { AppSettings() } catch (_: IOException) { AppSettings() }
+            else try { json.decodeFromString(AppSettings.serializer(), file.readText()) } catch (_: RuntimeException) { AppSettings() } catch (_: IOException) { AppSettings() }
         }
     }
 

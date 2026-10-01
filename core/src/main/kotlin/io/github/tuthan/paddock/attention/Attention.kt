@@ -4,6 +4,7 @@ import io.github.tuthan.paddock.herdr.Agent
 import io.github.tuthan.paddock.herdr.AgentStatus
 import io.github.tuthan.paddock.herdr.Snapshot
 import io.github.tuthan.paddock.herdr.boundedForUi
+import io.github.tuthan.paddock.output.SafeText
 import io.github.tuthan.paddock.identity.HostProfileId
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
@@ -78,17 +79,22 @@ object AttentionModel {
             if (seen.seenSeq(a.terminalId)?.let { it >= (a.stateChangeSeq ?: 0) } == true) StateWord.Ready to Section.Ready
             else StateWord.Done to Section.Done
         AgentStatus.Working -> StateWord.Working to Section.Working
-        // Ready only when interactiveReady is true, or the status is idle and herdr does not say otherwise.
-        AgentStatus.Idle -> if (a.interactiveReady == false) StateWord.IdleNotReady to Section.Ready else StateWord.Ready to Section.Ready
-        AgentStatus.Unknown -> if (a.interactiveReady == true) StateWord.Ready to Section.Ready else StateWord.Unknown to Section.Unknown
+        // Ready is an idle agent herdr does not say is still starting: `interactive_ready` false or `launch_pending` true
+        // makes it "Idle · starting". An unknown status is Unknown whatever the hints say. (Phase 06's send rule adds a
+        // fresh read and requires interactive_ready true; a Ready row is not by itself permission to type.)
+        AgentStatus.Idle -> if (a.interactiveReady == false || a.launchPending == true) StateWord.IdleNotReady to Section.Ready else StateWord.Ready to Section.Ready
+        AgentStatus.Unknown -> StateWord.Unknown to Section.Unknown
     }
 
     /** The title chain: the presentation title an integration set, then the terminal's own title with its prompt stripped, else the agent kind and pane id. */
     fun title(a: Agent): String =
-        (a.title?.takeIf { it.isNotBlank() } ?: a.terminalTitleStripped?.takeIf { it.isNotBlank() } ?: "${a.displayAgent ?: a.agent ?: "agent"} · ${a.paneId}").boundedForUi(120)
+        (a.title.shown() ?: a.terminalTitleStripped.shown() ?: "${a.displayAgent.shown() ?: a.agent.shown() ?: "agent"} · ${a.paneId}").boundedForUi(120)
 
     private fun context(a: Agent): String =
-        (a.foregroundCwd ?: a.cwd)?.let { it.trimEnd('/').substringAfterLast('/').ifEmpty { it } } ?: ""
+        (a.foregroundCwd ?: a.cwd)?.let { it.trimEnd('/').substringAfterLast('/').ifEmpty { it } }?.let(SafeText::clean) ?: ""
+
+    /** Titles come from terminals and integrations: untrusted text, cleaned of controls and reordering marks before display. */
+    private fun String?.shown(): String? = this?.let(SafeText::clean)?.takeIf { it.isNotBlank() }
 
     private fun row(a: Agent, s: Snapshot, readAt: Long, host: HostProfileId, session: String, epoch: Long, observedAt: ObservedAt, seen: SeenLookup): AgentRowModel {
         val (word, section) = section(a, seen)

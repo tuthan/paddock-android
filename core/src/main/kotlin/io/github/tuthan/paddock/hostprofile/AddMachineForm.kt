@@ -57,7 +57,7 @@ object AddMachineForm {
             }
         }
         val name = input.session.trim()
-        val sessionError = if (name.isNotEmpty() && !HostProfile.SESSION.matches(name)) "Use letters, digits, dots, dashes or underscores, as `herdr session list` shows it." else null
+        val sessionError = if (name.isNotEmpty() && !HostProfile.SESSION.matches(name)) "Start with a letter or digit; then letters, digits, dots, dashes or underscores, as `herdr session list` shows it." else null
         return FieldErrors(hostError, portError, userError, sessionError)
     }
 

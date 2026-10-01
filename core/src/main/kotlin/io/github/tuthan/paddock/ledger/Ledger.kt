@@ -4,14 +4,21 @@ import io.github.tuthan.paddock.attention.SeenLookup
 import io.github.tuthan.paddock.identity.HostProfileId
 import io.github.tuthan.paddock.identity.TerminalKey
 import java.io.IOException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * The phone's own record: what it observed and what the user did here. Entries come from observations and phone
  * actions only, never from herdr history. Marking a Done seen is local; it never calls herdr (`agent focus` included).
+ *
+ * Every call updates memory at once and returns; the file is written on one background thread, newest state wins, so
+ * a tap on the main thread never waits for the disk. [flush] waits for the write (tests, and before the process ends).
  */
 class Ledger(private val store: LedgerStore, private val now: () -> Long) {
     private val lock = Any()
-    private var data: LedgerData = store.load()
+    private var data: LedgerData = pruned(store.load(), now())
+    private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "paddock-ledger").apply { isDaemon = true } }
+    private var writeQueued = false
 
     /** True when the last write to the store failed. The in-memory ledger stays correct; the next write retries. */
     @Volatile var saveFailed: Boolean = false; private set
@@ -45,8 +52,36 @@ class Ledger(private val store: LedgerStore, private val now: () -> Long) {
         }
     }
 
+    /** A new epoch for [host] and [session], never handed out before on this phone. */
+    fun allocateEpoch(host: HostProfileId, session: String): Long = synchronized(lock) {
+        val mark = data.epochs.firstOrNull { it.host == host.value && it.session == session }
+        val next = (mark?.allocated ?: 0) + 1
+        commit(data.copy(epochs = data.epochs.filterNot { it === mark } + EpochMark(host.value, session, next, mark?.installed)))
+        next
+    }
+
+    /**
+     * A read was installed in [epoch]. On the first install of a new epoch, an acknowledgement from the previous
+     * installed epoch carries over only for a terminal this fresh read still shows Done at the same seq ([doneSeqs]:
+     * terminal id to `state_change_seq` of every Done agent in the read). Anything else stays behind in its old epoch.
+     */
+    fun onInstalled(host: HostProfileId, session: String, epoch: Long, doneSeqs: Map<String, Long>) = synchronized(lock) {
+        val mark = data.epochs.firstOrNull { it.host == host.value && it.session == session }
+        if (mark?.installed == epoch) return@synchronized
+        val from = mark?.installed
+        val carried = if (from == null) emptyList() else data.seen
+            .filter { it.host == host.value && it.session == session && it.epoch == from && doneSeqs[it.terminalId] == it.stateChangeSeq }
+            .filter { old -> data.seen.none { it.host == old.host && it.session == old.session && it.terminalId == old.terminalId && it.epoch == epoch } }
+            .map { it.copy(epoch = epoch) }
+        val updated = EpochMark(host.value, session, maxOf(mark?.allocated ?: 0, epoch), epoch)
+        commit(data.copy(seen = data.seen + carried, epochs = data.epochs.filterNot { it === mark } + updated))
+    }
+
     fun observations(): List<Observation> = synchronized(lock) { data.observations }
     fun actions(): List<PhoneAction> = synchronized(lock) { data.actions }
+
+    /** Waits until everything committed so far is on disk (or failed to be). */
+    fun flush() { writer.submit {}.get(10, TimeUnit.SECONDS) }
 
     private fun append(kind: ObservationKind, host: HostProfileId, session: String, epoch: Long, terminalId: String?, detail: String) {
         val o = Observation(data.nextId, host.value, session, terminalId, epoch, kind, now(), detail.take(MAX_DETAIL))
@@ -54,14 +89,20 @@ class Ledger(private val store: LedgerStore, private val now: () -> Long) {
     }
 
     private fun commit(next: LedgerData) {
-        val t = now()
-        data = next.copy(
-            observations = Retention.prune(next.observations, t) { it.at },
-            seen = Retention.prune(next.seen, t) { it.at },
-            actions = Retention.prune(next.actions, t) { it.at },
-        )
-        try { store.save(data); saveFailed = false } catch (_: IOException) { saveFailed = true }
+        data = pruned(next, now())
+        if (writeQueued) return
+        writeQueued = true
+        writer.execute {
+            val snapshot = synchronized(lock) { writeQueued = false; data }
+            try { store.save(snapshot); saveFailed = false } catch (_: IOException) { saveFailed = true }
+        }
     }
+
+    private fun pruned(d: LedgerData, t: Long) = d.copy(
+        observations = Retention.prune(d.observations, t) { it.at },
+        seen = Retention.prune(d.seen, t) { it.at },
+        actions = Retention.prune(d.actions, t) { it.at },
+    )
 
     companion object { const val MAX_DETAIL = 80 }
 }

@@ -37,6 +37,7 @@ class LedgerTest {
         l.markSeen(key(), 9)
         l.markSeen(key(), 4)
         assertEquals(9L, l.seenLookup(host, "paddock-test", 1).seenSeq("t1"))
+        l.flush()
         assertEquals(1, store.load().seen.size)
     }
 
@@ -77,6 +78,7 @@ class LedgerTest {
         ledger(FileLedgerStore(file)).apply {
             observe(ObservationKind.StateChanged, key(), "idle -> blocked")
             markSeen(key("t2"), 3)
+            flush()
         }
         val reloaded = ledger(FileLedgerStore(file))
         assertEquals(1, reloaded.observations().size)
@@ -84,12 +86,63 @@ class LedgerTest {
         assertFalse(File(file.absolutePath + ".tmp").exists())
     }
 
-    @Test fun anUnreadableFileLoadsEmptyInsteadOfThrowing() {
+    @Test fun anUnreadableFileLoadsEmptyAndIsKeptAsideInsteadOfThrowing() {
         val file = File(tmp.root, "ledger.json").apply { writeText("{ not json") }
         val l = ledger(FileLedgerStore(file))
         assertTrue(l.observations().isEmpty())
-        l.markSeen(key(), 1) // and the next write replaces the bad file
+        assertEquals("the damaged file is kept for a person to look at", "{ not json", File(file.absolutePath + ".corrupt").readText())
+        l.markSeen(key(), 1); l.flush() // and the next write starts a good file
         assertEquals(1, ledger(FileLedgerStore(file)).actions().size)
+    }
+
+    @Test fun aShapeKotlinxRejectsWithANonSerializationErrorIsAlsoTreatedAsUnreadable() {
+        val file = File(tmp.root, "ledger.json").apply { writeText("""{"observations":[["not","an","object"]]}""") }
+        assertTrue(ledger(FileLedgerStore(file)).observations().isEmpty())
+    }
+
+    @Test fun rowsOlderThanTheRetentionWindowArePrunedOnLoadNotOnlyOnTheNextWrite() {
+        val old = Observation(1, "h1", "paddock-test", "t1", 1, ObservationKind.AgentAppeared, at = clock - Retention.MAX_AGE_MILLIS - 1)
+        val l = ledger(InMemoryLedgerStore(LedgerData(nextId = 2, observations = listOf(old))))
+        assertTrue(l.observations().isEmpty())
+    }
+
+    // ---- epochs: never repeated, and a seen Done survives a reconnect only when a fresh read confirms it -----
+
+    @Test fun epochsAreNeverHandedOutTwiceForAHostAndSessionEvenAcrossARestart() {
+        val file = File(tmp.root, "ledger.json")
+        val first = ledger(FileLedgerStore(file))
+        assertEquals(listOf(1L, 2L, 3L), List(3) { first.allocateEpoch(host, "paddock-test") })
+        assertEquals(1L, first.allocateEpoch(host, "other"))
+        first.flush()
+        assertEquals(4L, ledger(FileLedgerStore(file)).allocateEpoch(host, "paddock-test"))
+    }
+
+    @Test fun aSeenDoneCarriesIntoTheNextEpochOnlyWhenTheFreshReadShowsItDoneAtTheSameSeq() {
+        val l = ledger()
+        l.onInstalled(host, "paddock-test", 1, emptyMap())
+        l.markSeen(key("same", 1), 7)
+        l.markSeen(key("moved-on", 1), 7)
+        l.markSeen(key("gone", 1), 7)
+        l.markSeen(key("not-done", 1), 7)
+        // The reconnect's first read: "same" is still Done at 7, "moved-on" is Done again at 9, "gone" is absent,
+        // and "not-done" is no longer Done (it is not in the map at all).
+        l.onInstalled(host, "paddock-test", 4, mapOf("same" to 7L, "moved-on" to 9L))
+        val now = l.seenLookup(host, "paddock-test", 4)
+        assertEquals(7L, now.seenSeq("same"))
+        assertNull(now.seenSeq("moved-on")); assertNull(now.seenSeq("gone")); assertNull(now.seenSeq("not-done"))
+        assertEquals("the old fact stays in its own epoch", 7L, l.seenLookup(host, "paddock-test", 1).seenSeq("moved-on"))
+    }
+
+    @Test fun carryingStartsFromTheLastInstalledEpochSoEpochsWithNoReadInBetweenLoseNothing() {
+        val l = ledger()
+        l.onInstalled(host, "paddock-test", 1, emptyMap())
+        l.markSeen(key("t1", 1), 5)
+        // Two reconnect attempts allocate epochs 2 and 3 but fail before any read; epoch 4 is the first installed.
+        repeat(3) { l.allocateEpoch(host, "paddock-test") }
+        l.onInstalled(host, "paddock-test", 4, mapOf("t1" to 5L))
+        assertEquals(5L, l.seenLookup(host, "paddock-test", 4).seenSeq("t1"))
+        l.onInstalled(host, "paddock-test", 4, emptyMap())   // later reads of the same epoch change nothing
+        assertEquals(5L, l.seenLookup(host, "paddock-test", 4).seenSeq("t1"))
     }
 
     @Test fun aFailingStoreKeepsTheInMemoryLedgerAndFlagsIt() {
@@ -99,6 +152,7 @@ class LedgerTest {
         }
         val l = ledger(failing)
         l.markSeen(key(), 2)
+        l.flush()
         assertTrue(l.saveFailed)
         assertEquals(2L, l.seenLookup(host, "paddock-test", 1).seenSeq("t1"))
     }

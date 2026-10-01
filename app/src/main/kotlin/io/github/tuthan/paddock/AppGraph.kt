@@ -73,7 +73,9 @@ class AppGraph(private val app: Application) {
     val profile: StateFlow<HostProfile?> = _profile.asStateFlow()
 
     val hostUi = HostUiModel(scope)
-    private var controller: HostSessionController? = null
+    private val lock = Any()
+    /** Lives while its machine is watched: paused when the app is hidden, resumed when it returns, replaced only for another machine. */
+    @Volatile private var controller: HostSessionController? = null
 
     private val _settings = MutableStateFlow(AppSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
@@ -82,11 +84,13 @@ class AppGraph(private val app: Application) {
         triggers.install()
         scope.launch {
             _settings.value = settingsStore.load()
-            val first = runCatching { profiles.list().firstOrNull() }.getOrNull()
-            _profile.value = first
-            _boot.value = if (first == null) Boot.NoMachines else Boot.Ready
-            // The connection is held while the app is visible and released when it is not (the owner closes it after its grace).
-            triggers.foreground.collectLatest { visible -> if (visible) _profile.value?.let { open(it) } else close() }
+            val all = runCatching { profiles.list() }.getOrDefault(emptyList())
+            // The machine watched last time, not whichever sorts first.
+            val watched = all.firstOrNull { it.id == _settings.value.watchedProfileId } ?: all.firstOrNull()
+            _profile.value = watched
+            _boot.value = if (watched == null) Boot.NoMachines else Boot.Ready
+            // The connection is claimed while the app is visible and released when it is not (the owner closes it after its grace).
+            triggers.foreground.collectLatest { visible -> if (visible) _profile.value?.let { watch(it) } else controller?.pause() }
         }
     }
 
@@ -102,21 +106,23 @@ class AppGraph(private val app: Application) {
     /** Saves [profile], makes it the watched machine and connects. */
     suspend fun addMachine(profile: HostProfile) {
         profiles.put(profile)
+        _settings.value = _settings.value.copy(watchedProfileId = profile.id)
+        settingsStore.save(_settings.value)
         _profile.value = profile
         _boot.value = Boot.Ready
-        if (triggers.foreground.value) open(profile)
+        if (triggers.foreground.value) watch(profile)
     }
 
-    private fun open(profile: HostProfile) {
-        close()
-        val lease = owner.acquire(profile)
-        val c = HostSessionController(scope, profile, lease, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session)
-        controller = c
-        hostUi.attach(c)
-        c.start()
+    /** Resumes the controller already watching [profile]; for any other profile, stops it and starts a new one. */
+    private fun watch(profile: HostProfile) = synchronized(lock) {
+        val c = controller
+        if (c != null && c.profile == profile) { c.resume(); return@synchronized }
+        c?.stop()
+        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session)
+        controller = next
+        hostUi.attach(next)
+        next.start()
     }
-
-    private fun close() { controller?.stop(); controller = null }
 
     fun retry() { _profile.value?.let { owner.refresh(it.id) } }
     fun installRelay() { controller?.installRelay() }

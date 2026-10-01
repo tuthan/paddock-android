@@ -31,17 +31,28 @@ object Activity {
         return items.sortedByDescending { it.at }
     }
 
-    /** A gap opens at a Disconnected and closes at the next Connected for the same host and session. */
+    /**
+     * A gap opens at a Disconnected and closes at the next Connected for the same host and session. A Connected that
+     * follows another Connected with no Disconnected between means the app stopped without recording one (the process
+     * ended): that gap runs from the last thing the phone recorded for that host and session.
+     */
     fun gaps(observations: List<Observation>): List<ActivityItem.Gap> {
         val open = HashMap<Pair<String, String>, Long>()
+        val watching = HashSet<Pair<String, String>>()
+        val lastAt = HashMap<Pair<String, String>, Long>()
         val out = ArrayList<ActivityItem.Gap>()
-        for (o in observations.filter { it.kind in connectionKinds }.sortedBy { it.at }) {
+        for (o in observations.sortedWith(compareBy<Observation> { it.at }.thenBy { it.id })) {
             val k = o.host to o.session
             when (o.kind) {
-                ObservationKind.Disconnected -> open.putIfAbsent(k, o.at)
-                ObservationKind.Connected -> open.remove(k)?.let { out += ActivityItem.Gap(it, o.at, o.host, o.session) }
+                ObservationKind.Disconnected -> { open.putIfAbsent(k, o.at); watching -= k }
+                ObservationKind.Connected -> {
+                    val from = open.remove(k) ?: lastAt[k]?.takeIf { k in watching }
+                    if (from != null) out += ActivityItem.Gap(from, o.at, o.host, o.session)
+                    watching += k
+                }
                 else -> Unit
             }
+            lastAt[k] = o.at
         }
         open.forEach { (k, from) -> out += ActivityItem.Gap(from, null, k.first, k.second) }
         return out

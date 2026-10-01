@@ -63,4 +63,16 @@ class ActivityTest {
         assertEquals(3, Activity.build(o, listOf(action), ActivityFilter.Connection).size)
         assertEquals(listOf<ActivityItem>(ActivityItem.Acted(action)), Activity.build(o, listOf(action), ActivityFilter.PhoneActions))
     }
+
+    @Test fun aConnectedAfterAConnectedIsAGapFromTheLastRecordedThingBecauseTheAppStoppedWithoutSayingSo() {
+        val gaps = Activity.gaps(listOf(
+            obs(ObservationKind.Connected, 10), obs(ObservationKind.StateChanged, 15, terminal = "t1"),
+            obs(ObservationKind.Connected, 40),
+        ))
+        assertEquals(listOf(15L to 40L), gaps.map { it.from to it.to })
+    }
+
+    @Test fun theFirstConnectedEverIsNotAGap() {
+        assertTrue(Activity.gaps(listOf(obs(ObservationKind.Connected, 10), obs(ObservationKind.StateChanged, 15, terminal = "t1"))).isEmpty())
+    }
 }

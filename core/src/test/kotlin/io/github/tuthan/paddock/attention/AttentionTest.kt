@@ -11,9 +11,9 @@ import org.junit.Test
 
 class AttentionTest {
     private val host = HostProfileId("laptop")
-    private fun agent(pane: String, status: AgentStatus, seq: Long? = null, title: String? = null, ready: Boolean? = null, cwd: String? = "/home/u/proj", name: String? = "claude") =
+    private fun agent(pane: String, status: AgentStatus, seq: Long? = null, title: String? = null, ready: Boolean? = null, cwd: String? = "/home/u/proj", name: String? = "claude", launching: Boolean? = null) =
         Agent(paneId = pane, terminalId = "term_$pane", workspaceId = "w1", tabId = "w1:t1", agent = name, agentStatus = status, stateChangeSeq = seq,
-            terminalTitleStripped = title, interactiveReady = ready, foregroundCwd = cwd)
+            terminalTitleStripped = title, interactiveReady = ready, foregroundCwd = cwd, launchPending = launching)
     private fun home(vararg a: Agent, seen: SeenLookup = SeenLookup { null }, observed: ObservedAt = ObservedAt { null }) =
         AttentionModel.home(Snapshot("0.9.1", 22, agents = a.toList()), 5_000, host, "main", 1, observed, seen)
 
@@ -28,15 +28,25 @@ class AttentionTest {
         assertEquals(listOf("w1:p2", "w1:p1", "w1:p3", "w1:p4"), h.rows.map { it.paneId })
     }
 
-    @Test fun readyNeedsInteractiveReadyOrIdleAndNeverOtherwise() {
-        fun state(status: AgentStatus, ready: Boolean?) = home(agent("w1:p1", status, ready = ready)).rows.single().state
+    @Test fun readyIsIdleThatIsNotMarkedUnreadyOrStillLaunching() {
+        fun state(status: AgentStatus, ready: Boolean?, launching: Boolean? = null) = home(agent("w1:p1", status, ready = ready, launching = launching)).rows.single().state
         assertEquals(StateWord.Ready, state(AgentStatus.Idle, null))
         assertEquals(StateWord.Ready, state(AgentStatus.Idle, true))
         assertEquals(StateWord.IdleNotReady, state(AgentStatus.Idle, false))
-        assertEquals(StateWord.Ready, state(AgentStatus.Unknown, true))
+        assertEquals(StateWord.IdleNotReady, state(AgentStatus.Idle, true, launching = true), "a launch in progress is not ready")
+        assertEquals(StateWord.Ready, state(AgentStatus.Idle, null, launching = false))
+        // herdr could not say what the agent is doing: a readiness hint never turns that into Ready.
+        assertEquals(StateWord.Unknown, state(AgentStatus.Unknown, true))
         assertEquals(StateWord.Unknown, state(AgentStatus.Unknown, null))
         assertEquals(StateWord.Unknown, state(AgentStatus.Unknown, false))
         assertEquals(StateWord.Working, state(AgentStatus.Working, true), "working is never promoted to Ready")
+    }
+
+    @Test fun titlesAndContextCannotCarryControlOrDirectionCharacters() {
+        val a = agent("w1:p1", AgentStatus.Idle, title = "fix\u001b[31m the\u202E build\u200B\u0007", cwd = "/home/u/pro\u2066j")
+        assertEquals("fix[31m the build", AttentionModel.title(a))
+        assertEquals("proj", home(a).rows.single().context)
+        assertEquals("claude · w1:p1", AttentionModel.title(agent("w1:p1", AgentStatus.Idle, title = "\u202E\u200B")), "a title of nothing but controls falls through")
     }
 
     @Test fun aSeenDoneBecomesReadyLocallyButANewerDoneComesBack() {

@@ -23,8 +23,10 @@ import kotlinx.coroutines.launch
 /** One `agent read`, already classified. */
 sealed interface OutputRead {
     data class Text(val text: String) : OutputRead
-    /** herdr says the pane or agent is not there. */
+    /** herdr says the pane is not there. */
     data object PaneMissing : OutputRead
+    /** The pane is there but no agent runs in it any more (`agent_not_found`): the shell is left. */
+    data object AgentMissing : OutputRead
     data class Failed(val message: String) : OutputRead
 }
 
@@ -38,24 +40,37 @@ sealed interface OutputState {
     /** The terminal is no longer in the session. The screen says so and offers back; it never shows another pane's text. */
     data object PaneGone : OutputState
 
+    /** The terminal is still there but its agent has exited. The screen says so; the last text it showed stays out. */
+    data object AgentGone : OutputState
+
     /** Nothing has been read yet and the read is failing. */
     data class Unavailable(val message: String) : OutputState
 }
 
-/** Runs `agent read --source <source> --lines N --format ansi` over [session] (recent-unwrapped by default) and classifies the answer. */
+/**
+ * Runs `agent read --source <source> --lines N --format ansi` over [session] (recent-unwrapped by default) and classifies
+ * the answer. A usage error (exit 2) means this build and herdr disagree about the command: the reader stops sending it
+ * and answers every later read with the same failure until the app is updated, as the Phase 03 CLI rule asks.
+ */
 class AgentOutputReader(
     private val session: SshSession,
     private val cli: HerdrCli,
     private val lines: Int = OutputFeed.LINES,
     private val source: ReadSource = ReadSource.RecentUnwrapped,
 ) {
+    @Volatile private var disabled: OutputRead.Failed? = null
+
     suspend fun read(paneId: String): OutputRead {
+        disabled?.let { return it }
         val result = session.exec(cli.agentRead(paneId, source, lines, ansi = true), limits = ExecLimits.default)
         return when (val outcome = CliResult.classify(result)) {
             is CliOutcome.Ok -> OutputRead.Text(outcome.stdout)
-            is CliOutcome.Failure ->
-                if (outcome.code.endsWith("_not_found")) OutputRead.PaneMissing else OutputRead.Failed("${outcome.code}: ${outcome.message}".take(200))
-            is CliOutcome.ClientBug -> OutputRead.Failed("herdr rejected the read")
+            is CliOutcome.Failure -> when {
+                outcome.code == "agent_not_found" -> OutputRead.AgentMissing
+                outcome.code.endsWith("_not_found") -> OutputRead.PaneMissing
+                else -> OutputRead.Failed("${outcome.code}: ${outcome.message}".take(200))
+            }
+            is CliOutcome.ClientBug -> OutputRead.Failed("This herdr does not accept Paddock's read command; update Paddock.").also { disabled = it }
             is CliOutcome.Unparsed -> OutputRead.Failed("unreadable answer (exit ${outcome.exit})")
         }
     }
@@ -64,8 +79,10 @@ class AgentOutputReader(
 /**
  * The live tail of one terminal. The pane id is looked up from the installed snapshot by `terminal_id` on every poll,
  * so a renumbered pane is followed and a vanished one ends the feed instead of reading whatever now holds that id.
- * It polls every [intervalMillis] only while the screen is visible and following; scrolling up pauses it (the text
- * stays, nothing is read) and [resumeFollowing] reads again at once.
+ * It polls every [intervalMillis] only while the screen is visible, following and [live]; scrolling up pauses it (the
+ * text stays, nothing is read) and [resumeFollowing] reads again at once. The CLI's answer names no pane, so a read is
+ * kept only if the installed snapshot still maps the terminal to the pane it was sent to; while the monitor is not
+ * live (reconnecting, so the mapping cannot be trusted) nothing is read and the last text is marked stale.
  */
 class OutputFeed(
     private val scope: CoroutineScope,
@@ -76,6 +93,7 @@ class OutputFeed(
     private val intervalMillis: Long = 1_000,
     private val maxLines: Int = LINES,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    private val live: StateFlow<Boolean> = MutableStateFlow(true),
 ) {
     private val _state = MutableStateFlow<OutputState>(OutputState.Loading)
     val state: StateFlow<OutputState> = _state.asStateFlow()
@@ -110,6 +128,10 @@ class OutputFeed(
     private suspend fun poll() {
         while (true) {
             combine(visible, _following) { v, f -> v && f }.first { it }
+            if (!live.value) {
+                (_state.value as? OutputState.Showing)?.let { if (!it.stale) _state.value = it.copy(stale = true) }
+                live.first { it }
+            }
             val snapshot = installed.first { it != null }!!.snapshot
             val pane = snapshot.panes.firstOrNull { it.terminalId == target.terminalId } ?: return goneAndStop()
             reads++
@@ -120,15 +142,18 @@ class OutputFeed(
             } catch (e: Throwable) {
                 OutputRead.Failed(e.message ?: e.javaClass.simpleName)
             }
+            val stillThatPane = live.value && installed.value?.snapshot?.panes?.firstOrNull { it.terminalId == target.terminalId }?.paneId == pane.paneId
             when (outcome) {
-                is OutputRead.Text -> _state.value = OutputState.Showing(Ansi.parse(outcome.text, maxLines), clock.nowMillis(), stale = false)
-                OutputRead.PaneMissing -> return goneAndStop()
+                is OutputRead.Text -> if (stillThatPane) _state.value = OutputState.Showing(Ansi.parse(outcome.text, maxLines), clock.nowMillis(), stale = false)
+                OutputRead.PaneMissing -> if (stillThatPane) return goneAndStop()
+                OutputRead.AgentMissing -> if (stillThatPane) { _state.value = OutputState.AgentGone; jobs.forEach { it.cancel() }; return }
                 is OutputRead.Failed -> _state.value = when (val last = _state.value) {
                     is OutputState.Showing -> last.copy(stale = true)
                     else -> OutputState.Unavailable(outcome.message)
                 }
             }
-            sleep(intervalMillis)
+            // A read for a pane that changed under it is retried at once with the new mapping; anything else waits.
+            if (stillThatPane || outcome is OutputRead.Failed) sleep(intervalMillis)
         }
     }
 

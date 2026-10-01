@@ -21,7 +21,10 @@ data class Observation(
     val detail: String = "",
 )
 
-/** The user acknowledged a Done at this `state_change_seq`. Scoped to the epoch it was acknowledged in. */
+/**
+ * The user acknowledged a Done at this `state_change_seq`. Scoped to the epoch it was acknowledged in; a new epoch
+ * inherits it only when its first read still shows that terminal Done at the same seq ([Ledger.onInstalled]).
+ */
 @Serializable
 data class SeenEntry(
     val host: String,
@@ -49,12 +52,17 @@ data class PhoneAction(
     val outcome: ActionOutcome,
 )
 
+/** Epoch bookkeeping for one host and session: the last epoch handed out and the epoch of the last installed read. */
+@Serializable
+data class EpochMark(val host: String, val session: String, val allocated: Long, val installed: Long? = null)
+
 @Serializable
 data class LedgerData(
     val nextId: Long = 1,
     val observations: List<Observation> = emptyList(),
     val seen: List<SeenEntry> = emptyList(),
     val actions: List<PhoneAction> = emptyList(),
+    val epochs: List<EpochMark> = emptyList(),
 )
 
 /** Observations 30 days or 5,000 rows, whichever first. Rows are in insertion order, so the newest are kept. */

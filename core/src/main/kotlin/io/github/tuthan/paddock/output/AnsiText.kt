@@ -46,7 +46,12 @@ object Ansi {
                 c == ESC -> i = skipEscape(input, i, onSgr = { params -> flush(); style = applySgr(style, params) })
                 c == '\n' -> { endLine(); i++ }
                 c == '\t' -> { repeat(4) { put(' ') }; i++ }
-                c < ' ' || c == '\u007F' || c in '\u0080'..'\u009F' || isBidiControl(c) -> i++
+                Character.isHighSurrogate(c) && i + 1 < n && Character.isLowSurrogate(input[i + 1]) -> {
+                    // Tag characters (U+E0000 to U+E007F) are invisible and can smuggle text; drop them, keep the rest.
+                    if (!SafeText.isUnsafe(Character.toCodePoint(c, input[i + 1]))) { put(c); put(input[i + 1]) }
+                    i += 2
+                }
+                SafeText.isUnsafe(c.code) -> i++
                 else -> { put(c); i++ }
             }
         }
@@ -55,7 +60,6 @@ object Ansi {
         return if (lines.size > maxLines) lines.subList(lines.size - maxLines, lines.size).toList() else lines
     }
 
-    private fun isBidiControl(c: Char) = c in '\u202A'..'\u202E' || c in '\u2066'..'\u2069' || c == '\u200E' || c == '\u200F' || c == '\u061C'
 
     /** Consumes the escape sequence starting at [start] and returns the index after it. Only SGR reaches [onSgr]. */
     private inline fun skipEscape(s: String, start: Int, onSgr: (String) -> Unit): Int {
@@ -69,7 +73,9 @@ object Ansi {
                 val paramEnd = i
                 while (i < s.length && i - paramStart < MAX_CSI && s[i] in ' '..'/') i++
                 if (i < s.length && s[i] in '@'..'~') {
-                    if (s[i] == 'm' && i == paramEnd) onSgr(s.substring(paramStart, paramEnd)) // an intermediate byte makes it not SGR
+                    // An intermediate byte, or a private marker (`<`, `=`, `>`, `?`, as in `CSI > 4 ; 2 m`), makes it not SGR.
+                    val params = s.substring(paramStart, paramEnd)
+                    if (s[i] == 'm' && i == paramEnd && params.none { it in '<'..'?' }) onSgr(params)
                     return i + 1
                 }
                 return i // malformed or over-long: what was consumed is dropped, the rest reads as text
@@ -112,9 +118,10 @@ object Ansi {
                 in 30..37 -> s = s.copy(fg = AnsiColor.entries[code - 30])
                 in 90..97 -> s = s.copy(fg = AnsiColor.entries[8 + code - 90])
                 39 -> s = s.copy(fg = null)
-                38, 48 -> {
-                    // 38/48 take a following selector in either form (`38;5;n`, `38;2;r;g;b`, or colon-separated). The
-                    // arguments must be consumed even for 48, which this renderer ignores, or they would read as codes.
+                38, 48, 58 -> {
+                    // 38/48/58 take a following selector in either form (`38;5;n`, `38;2;r;g;b`, or colon-separated). The
+                    // arguments must be consumed even for 48 and 58 (background and underline colour, not rendered), or
+                    // they would read as codes.
                     val args: List<Int?>
                     if (parts.size > 1) {
                         args = parts.drop(1).map { it.toIntOrNull() }
@@ -172,5 +179,26 @@ object Ansi {
             if (d < bestD) { bestD = d; best = i }
         }
         return AnsiColor.entries[best]
+    }
+}
+
+/**
+ * Untrusted text the UI shows outside the output slab (titles, working directories): no control characters, no
+ * bidirectional overrides or isolates that reorder what is read, no zero-width or tag characters that hide text, and
+ * no line or paragraph separators that break a one-line row. What is left is shown as written.
+ */
+object SafeText {
+    fun isUnsafe(cp: Int): Boolean =
+        cp < 0x20 || cp == 0x7F || cp in 0x80..0x9F ||
+            cp in 0x202A..0x202E || cp in 0x2066..0x2069 || cp == 0x200E || cp == 0x200F || cp == 0x061C ||
+            // Zero-width space and invisible operators go; the joiners (U+200C, U+200D) stay, as emoji and many scripts need them.
+            cp == 0x200B || cp in 0x2060..0x2064 || cp == 0xFEFF || cp == 0x2028 || cp == 0x2029 ||
+            cp in 0xE0000..0xE007F
+
+    fun clean(s: String): String {
+        if (s.codePoints().noneMatch(::isUnsafe)) return s
+        val out = StringBuilder(s.length)
+        s.codePoints().forEach { cp -> if (!isUnsafe(cp)) out.appendCodePoint(cp) else if (cp == '\t'.code) out.append(' ') }
+        return out.toString()
     }
 }

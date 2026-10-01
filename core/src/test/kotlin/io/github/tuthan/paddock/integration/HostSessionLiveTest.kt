@@ -46,7 +46,7 @@ class HostSessionLiveTest {
         val lease = FakeLease(Connection.Connected(session, 1))
         val ledger = Ledger(InMemoryLedgerStore()) { System.currentTimeMillis() }
         val c = HostSessionController(
-            scope, HostProfile("local", "Local", "127.0.0.1", 22, "tester"), lease, ledger, Clock { System.currentTimeMillis() },
+            scope, HostProfile("local", "Local", "127.0.0.1", 22, "tester"), { lease }, ledger, Clock { System.currentTimeMillis() },
             MutableStateFlow(true), script, sha256Hex(script), sessionName = env.sessionName, herdr = env.herdr,
         ).also { it.start() }
 

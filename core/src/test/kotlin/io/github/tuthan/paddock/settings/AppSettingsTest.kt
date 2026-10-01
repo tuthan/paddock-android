@@ -32,6 +32,15 @@ class AppSettingsTest {
         assertEquals(AppSettings(false), FileAppSettingsStore(file).load())
     }
 
+    @Test fun theWatchedMachineIsRememberedAndAnOlderFileHasNone() = runBlocking {
+        FileAppSettingsStore(file).save(AppSettings(watchedProfileId = "laptop"))
+        assertEquals("laptop", FileAppSettingsStore(file).load().watchedProfileId)
+        file.writeText("""{"protectSensitiveScreens": false}""")
+        assertEquals(AppSettings(false, watchedProfileId = null), FileAppSettingsStore(file).load())
+        file.writeText("""{"watchedProfileId": [1]}""")
+        assertEquals(AppSettings(), FileAppSettingsStore(file).load())
+    }
+
     @Test fun saveLeavesNoTempFileBehind() = runBlocking {
         FileAppSettingsStore(file).save(AppSettings(false))
         assertEquals(listOf("settings.json"), dir.list()!!.toList())

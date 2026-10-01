@@ -164,7 +164,19 @@ class Phase04LiveTest {
         assertTrue(ledger.actions().any { it.kind == ActionKind.MarkSeen && it.terminalId == row.key.target.terminalId })
         // herdr itself still says working: the acknowledgement is the phone's and nothing was written back.
         assertEquals("working", agentList().first { it.paneId == base }.agentStatus.wire)
+        val epoch = h.reconciler.installed.value!!.epoch
         h.stop()
+        assertEquals(ObservationKind.Disconnected, ledger.observations().last().kind, "a live monitor that stops records the disconnect")
+
+        // A new monitor (a reconnect, a restart) takes a new epoch; the same Done at the same seq stays seen.
+        val again = host { snap ->
+            fun done(status: io.github.tuthan.paddock.herdr.AgentStatus) = if (status == io.github.tuthan.paddock.herdr.AgentStatus.Working) io.github.tuthan.paddock.herdr.AgentStatus.Done else status
+            snap.copy(agents = snap.agents.map { it.copy(agentStatus = done(it.agentStatus)) }, panes = snap.panes.map { it.copy(agentStatus = done(it.agentStatus)) })
+        }
+        until("the base row again") { again.home.value?.rows?.any { it.paneId == base } == true }
+        assertTrue(again.reconciler.installed.value!!.epoch > epoch, "epochs are never reused")
+        assertEquals(StateWord.Ready, again.home.value!!.rows.first { it.paneId == base }.state, "the seen Done carried into the new epoch")
+        again.stop()
     }
 
     // ---- ledger from real observations -------------------------------------------------------------------------

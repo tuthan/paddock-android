@@ -15,6 +15,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -35,8 +36,12 @@ class OutputFeedTest {
 
     private fun snapshotWith(vararg panes: Pane) = Installed(Snapshot("0.9.1", 22, panes = panes.toList()), 0, 1)
 
+    private val live = MutableStateFlow(true)
+    /** Runs inside each read, after it is sent and before its answer is classified. */
+    @Volatile private var duringRead: () -> Unit = {}
+
     private fun feed(interval: Long = 1_000) =
-        OutputFeed(scope, target, installed, { id -> paneIds += id; next(paneIds.size) }, clock, intervalMillis = interval, sleep = { sleeps += it; delay(5) })
+        OutputFeed(scope, target, installed, { id -> paneIds += id; duringRead(); next(paneIds.size) }, clock, intervalMillis = interval, sleep = { sleeps += it; delay(5) }, live = live)
 
     @After fun stop() { scope.coroutineContext[Job]?.cancel() }
 
@@ -127,6 +132,41 @@ class OutputFeedTest {
         f.stop()
     }
 
+    @Test fun anExitedAgentEndsTheFeedWithItsOwnState() = runBlocking<Unit> {
+        next = { n -> if (n == 1) OutputRead.Text("last words") else OutputRead.AgentMissing }
+        val f = feed(); f.start(); f.setVisible(true)
+        until("agent gone") { f.state.value == OutputState.AgentGone }
+        val n = paneIds.size; delay(120)
+        assertEquals(n, paneIds.size, "no reads once the agent has exited")
+        f.stop()
+    }
+
+    @Test fun whileTheMonitorIsNotLiveNothingIsReadAndTheTextIsMarkedStale() = runBlocking<Unit> {
+        val f = feed(); f.start(); f.setVisible(true)
+        until("first read") { (f.state.value as? OutputState.Showing)?.stale == false }
+        live.value = false
+        until("stale") { (f.state.value as? OutputState.Showing)?.stale == true }
+        val n = paneIds.size; delay(150)
+        assertEquals(n, paneIds.size, "the mapping cannot be trusted while reconnecting")
+        live.value = true
+        until("fresh again") { (f.state.value as? OutputState.Showing)?.stale == false && paneIds.size > n }
+        f.stop()
+    }
+
+    @Test fun aReadWhosePaneWasRenumberedMeanwhileIsDiscardedAndRetriedOnTheNewId() = runBlocking<Unit> {
+        // While the first read is out, term_a moves to w2:p7 and a different terminal takes w1:p1.
+        duringRead = { if (paneIds.size == 1) installed.value = snapshotWith(Pane("w2:p7", "term_a", "w2", "w2:t1"), Pane("w1:p1", "term_b", "w1", "w1:t1")) }
+        next = { n -> OutputRead.Text(if (n == 1) "someone else's text" else "ours") }
+        val f = feed()
+        val shown = CopyOnWriteArrayList<String>()
+        scope.launch { f.state.collect { s -> (s as? OutputState.Showing)?.let { shown += it.lines.joinToString("\n") { l -> l.text } } } }
+        f.start(); f.setVisible(true)
+        until("read on the new id") { (f.state.value as? OutputState.Showing)?.lines?.singleOrNull()?.text == "ours" }
+        assertEquals(listOf("w1:p1", "w2:p7"), paneIds.take(2))
+        assertFalse("someone else's text" in shown, "shown: $shown")
+        f.stop()
+    }
+
     @Test fun aFailedReadKeepsTheLastTextMarkedStaleAndRecovers() = runBlocking<Unit> {
         next = { n -> if (n == 2) OutputRead.Failed("boom") else OutputRead.Text("ok $n") }
         val f = feed(); f.start(); f.setVisible(true)
@@ -167,15 +207,21 @@ class OutputFeedTest {
         val answers = ArrayDeque(listOf(
             FakeSession.result(0, out = "hello\n"),
             FakeSession.result(1, err = """{"error":{"code":"agent_not_found","message":"agent target w1:p1 not found"},"id":"x"}"""),
-            FakeSession.result(2, err = "usage"),
+            FakeSession.result(1, err = """{"error":{"code":"pane_not_found","message":"pane w1:p1 not found"},"id":"x"}"""),
             FakeSession.result(1, err = "segfault"),
+            FakeSession.result(2, err = "usage"),
         ))
         val session = FakeSession(onExec = { _, _ -> answers.removeFirst() })
         val reader = AgentOutputReader(session, cli)
         assertEquals(OutputRead.Text("hello\n"), reader.read("w1:p1"))
+        assertEquals(OutputRead.AgentMissing, reader.read("w1:p1"), "the pane is there, its agent is not")
         assertEquals(OutputRead.PaneMissing, reader.read("w1:p1"))
         assertIs<OutputRead.Failed>(reader.read("w1:p1"))
-        assertIs<OutputRead.Failed>(reader.read("w1:p1"))
+        val usage = assertIs<OutputRead.Failed>(reader.read("w1:p1"))
+        // A usage error means this build and herdr disagree about the command: it is not sent again.
+        assertEquals(usage, reader.read("w1:p1"))
+        assertEquals(usage, reader.read("w1:p1"))
+        assertEquals(5, session.execs.size)
         val argv = session.execs.first().first
         assertEquals(
             listOf("/usr/local/bin/herdr", "--session", "main", "agent", "read", "w1:p1", "--source", "recent-unwrapped", "--lines", "200", "--format", "ansi"),

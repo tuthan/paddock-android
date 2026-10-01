@@ -20,6 +20,9 @@ import io.github.tuthan.paddock.reconcile.Reconciler
 import io.github.tuthan.paddock.reconcile.SessionMonitor
 import io.github.tuthan.paddock.relay.RelayClient
 import io.github.tuthan.paddock.identity.TargetRef
+import io.github.tuthan.paddock.identity.EpochTracker
+import io.github.tuthan.paddock.attention.ObservedAt
+import io.github.tuthan.paddock.herdr.AgentStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,8 +42,11 @@ import kotlinx.coroutines.launch
  * terminals. It owns no connection: the caller holds the lease and builds a new instance for a new session.
  *
  * Ledger rules kept here: only observations the reconciler made between two reads of one epoch are recorded (so a
- * reconnect never invents a change), `Connected` and `Disconnected` follow freshness going live and going stale, and
- * [markSeen] is local: it writes the ledger and never reaches herdr.
+ * reconnect never invents a change), `Connected` and `Disconnected` follow freshness going live and going stale (and
+ * [stop] records the Disconnected for a live monitor, so time the phone was not watching always shows as a gap), and
+ * [markSeen] is local: it writes the ledger and never reaches herdr. Epochs come from the ledger, so they never repeat
+ * across connections or app restarts; an acknowledged Done carries into a new epoch only when its first read still
+ * shows that terminal Done at the same `state_change_seq`.
  */
 class MonitoredHost(
     private val scope: CoroutineScope,
@@ -55,28 +61,64 @@ class MonitoredHost(
     herdr: String,
     /** Applied to every authoritative read. Only a test uses it, to stand in for a state herdr cannot be told to report. */
     private val transformRead: (io.github.tuthan.paddock.herdr.Snapshot) -> io.github.tuthan.paddock.herdr.Snapshot = { it },
+    /** Runs before each reconnect of the monitor; the controller re-verifies the relay on the host here. */
+    beforeReconnect: suspend () -> Unit = {},
 ) {
     private val relay = RelayClient(session, relayPath, socketPath)
     private val readSnapshot = SessionMonitor.snapshotReader(relay)
     val monitor = SessionMonitor(
         scope, relay,
-        Reconciler(clock, profile.hostId, sessionName, read = { transformRead(readSnapshot()) }),
-        foreground, clock,
+        Reconciler(
+            clock, profile.hostId, sessionName, read = { transformRead(readSnapshot()) },
+            epochs = EpochTracker { ledger.allocateEpoch(profile.hostId, sessionName) },
+        ),
+        foreground, clock, beforeReconnect = beforeReconnect,
     )
     val reconciler: Reconciler get() = monitor.reconciler
     val freshness: StateFlow<Freshness> get() = monitor.freshness
+    /** Why the monitor last went stale (a dropped stream, a failed or unreadable read), for the host's banner. */
+    val lastLoss: StateFlow<Throwable?> get() = monitor.lastLoss
     private val cli = HerdrCli(herdr, sessionName)
     private val jobs = ArrayList<Job>()
+    private val live = MutableStateFlow(false)
+    /** Whether a Connected was recorded without its Disconnected yet; flipped atomically so stop and the collector never both record. */
+    private val wasLive = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** Bumped by [markSeen] so a home built from the same snapshot is rebuilt with the new fact. */
     private val seenVersion = MutableStateFlow(0)
 
+    private data class FirstSeen(val status: AgentStatus, val seq: Long?, val at: Long, val epoch: Long)
+
+    /** When the phone first saw each terminal in its current state. */
+    private val firstSeen = HashMap<String, FirstSeen>()
+
     /** The home list, null before the first authoritative read. Rebuilt on every installed read and every Done tap. */
     val home: StateFlow<HomeModel?> = combine(reconciler.installed, seenVersion) { installed, _ ->
         installed?.let {
-            AttentionModel.home(it.snapshot, it.readAtMillis, profile.hostId, sessionName, it.epoch, seen = ledger.seenLookup(profile.hostId, sessionName, it.epoch))
+            val doneSeqs = it.snapshot.agents.filter { a -> a.agentStatus == AgentStatus.Done && a.stateChangeSeq != null }.associate { a -> a.terminalId to a.stateChangeSeq!! }
+            ledger.onInstalled(profile.hostId, sessionName, it.epoch, doneSeqs)
+            val observed = observedAt(it)
+            AttentionModel.home(it.snapshot, it.readAtMillis, profile.hostId, sessionName, it.epoch, observedAt = observed, seen = ledger.seenLookup(profile.hostId, sessionName, it.epoch))
         }
     }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    /**
+     * "Observed N ago" is the time since the phone first saw the state, never a server duration. A state seen in an
+     * earlier read keeps its time while herdr's `state_change_seq` for that terminal is unchanged (also across a
+     * reconnect: the seq is herdr's own count of state changes); a new state or a new seq starts the clock at this read.
+     */
+    private fun observedAt(i: io.github.tuthan.paddock.reconcile.Installed): ObservedAt = synchronized(firstSeen) {
+        val current = i.snapshot.agents.associateBy { it.terminalId }
+        firstSeen.keys.retainAll(current.keys)
+        for ((id, a) in current) {
+            val prior = firstSeen[id]
+            // Without a seq, a state is only known unchanged within one epoch: it may have changed and back while disconnected.
+            val unchanged = prior != null && prior.status == a.agentStatus && prior.seq == a.stateChangeSeq && (a.stateChangeSeq != null || prior.epoch == i.epoch)
+            if (!unchanged) firstSeen[id] = FirstSeen(a.agentStatus, a.stateChangeSeq, i.readAtMillis, i.epoch)
+        }
+        val copy = firstSeen.mapValues { it.value.at }
+        ObservedAt { copy[it] }
+    }
 
     private val _blockedPreview = MutableStateFlow<BlockedPreview?>(null)
 
@@ -88,6 +130,8 @@ class MonitoredHost(
 
     private val promptReader by lazy { AgentOutputReader(session, cli, lines = 12, source = ReadSource.Detection) }
     @Volatile private var previewJob: Job? = null
+    /** The agent the preview is for now; a read that finishes for another one is dropped. */
+    @Volatile private var previewKey: Key? = null
 
     private data class Key(val terminalId: String, val seq: Long?)
 
@@ -96,20 +140,26 @@ class MonitoredHost(
         jobs += scope.launch {
             home.map { h -> h?.rows?.firstOrNull { it.state == io.github.tuthan.paddock.attention.StateWord.Blocked }?.let { Key(it.key.target.terminalId, it.stateChangeSeq) } }
                 .distinctUntilChanged()
-                .collectLatest { key -> if (key == null) _blockedPreview.value = null else loadPreview(key) }
+                .collectLatest { key -> previewKey = key; if (key == null) _blockedPreview.value = null else loadPreview(key) }
         }
         jobs += scope.launch { reconciler.observations.collect { record(it) } }
         jobs += scope.launch {
-            var wasLive = false
             freshness.collect { f ->
+                live.value = f == Freshness.Live
                 val epoch = reconciler.installed.value?.epoch ?: 0
-                if (f == Freshness.Live && !wasLive) { wasLive = true; ledger.observeHost(ObservationKind.Connected, profile.hostId, sessionName, epoch) }
-                else if (f == Freshness.Stale && wasLive) { wasLive = false; ledger.observeHost(ObservationKind.Disconnected, profile.hostId, sessionName, epoch) }
+                if (f == Freshness.Live && wasLive.compareAndSet(false, true)) ledger.observeHost(ObservationKind.Connected, profile.hostId, sessionName, epoch)
+                else if (f == Freshness.Stale && wasLive.compareAndSet(true, false)) ledger.observeHost(ObservationKind.Disconnected, profile.hostId, sessionName, epoch)
             }
         }
     }
 
-    fun stop() { jobs.forEach { it.cancel() }; jobs.clear(); monitor.stop() }
+    /** Stops monitoring. A monitor that was live records the Disconnected that its stale transition would have. */
+    fun stop() {
+        jobs.forEach { it.cancel() }; jobs.clear()
+        monitor.stop()
+        live.value = false
+        if (wasLive.compareAndSet(true, false)) ledger.observeHost(ObservationKind.Disconnected, profile.hostId, sessionName, reconciler.installed.value?.epoch ?: 0)
+    }
 
     private fun record(o: Observation) {
         when (o) {
@@ -128,27 +178,31 @@ class MonitoredHost(
     }
 
     private suspend fun loadPreview(key: Key) {
-        _blockedPreview.value = BlockedPreview(key.terminalId, key.seq, PreviewState.Loading)
-        val pane = reconciler.installed.value?.snapshot?.panes?.firstOrNull { it.terminalId == key.terminalId }
-        val state = if (pane == null) PreviewState.Unavailable else try {
-            when (val r = promptReader.read(pane.paneId)) {
-                is OutputRead.Text -> PreviewState.Showing(PreviewText.trim(Ansi.parse(r.text, maxLines = 40)), clock.nowMillis())
+        if (previewKey == key) _blockedPreview.value = BlockedPreview(key.terminalId, key.seq, PreviewState.Loading)
+        val paneId = reconciler.installed.value?.snapshot?.panes?.firstOrNull { it.terminalId == key.terminalId }?.paneId
+        val state = if (paneId == null) PreviewState.Unavailable else try {
+            when (val r = promptReader.read(paneId)) {
+                // The CLI answer carries no id: keep it only if the pane still holds this terminal after the read.
+                is OutputRead.Text -> if (paneOf(key.terminalId) != paneId) PreviewState.Unavailable
+                    else PreviewState.Showing(PreviewText.trim(Ansi.parse(r.text, maxLines = 40)), clock.nowMillis())
                 else -> PreviewState.Unavailable
             }
         } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) { PreviewState.Unavailable }
-        _blockedPreview.value = BlockedPreview(key.terminalId, key.seq, state)
+        if (previewKey == key) _blockedPreview.value = BlockedPreview(key.terminalId, key.seq, state)
     }
+
+    private fun paneOf(terminalId: String) = reconciler.installed.value?.snapshot?.panes?.firstOrNull { it.terminalId == terminalId }?.paneId
 
     /** Reads the prompt again for the current first blocked agent, for a Review prompt tap. */
     fun refreshPreview() {
-        val current = _blockedPreview.value ?: return
+        val key = previewKey ?: return
         previewJob?.cancel()
-        previewJob = scope.launch { loadPreview(Key(current.terminalId, current.stateChangeSeq)) }
+        previewJob = scope.launch { loadPreview(key) }
     }
 
     /** A feed for one terminal; the caller starts it, drives visibility and stops it. */
     fun outputFeed(terminalId: String): OutputFeed {
         val reader = AgentOutputReader(session, cli)
-        return OutputFeed(scope, TargetRef(profile.hostId, sessionName, terminalId), reconciler.installed, reader::read, clock)
+        return OutputFeed(scope, TargetRef(profile.hostId, sessionName, terminalId), reconciler.installed, reader::read, clock, live = live)
     }
 }
