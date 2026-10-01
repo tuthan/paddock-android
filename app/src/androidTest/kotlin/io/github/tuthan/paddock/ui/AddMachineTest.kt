@@ -69,8 +69,19 @@ class AddMachineTest {
         File(dir, "$name.png").outputStream().use { rule.onNode(androidx.compose.ui.test.isDialog()).captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
+    private var keyboard: androidx.compose.ui.platform.SoftwareKeyboardController? = null
+
+    /** Puts the keyboard away and lets the layout settle, so a tap lands where the node is and not where it was mid-animation. */
+    private fun hideKeyboard() {
+        rule.runOnIdle { keyboard?.hide() }
+        rule.waitForIdle()
+        Thread.sleep(400)
+        rule.waitForIdle()
+    }
+
     private fun show(state: AddMachineState = state(), fontScale: Float? = null, calls: Calls = Calls(), dark: Boolean = true): Calls {
         rule.setContent {
+            keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
                 PaddockTheme(darkTheme = dark) { screen(state, calls) }
@@ -155,9 +166,11 @@ class AddMachineTest {
         val calls = show(state(grant = GateDecision.NeedsGrant, key = line, denied = true))
         rule.onNodeWithText("Host or IP address").performTextInput("192.168.1.20")
         rule.onNodeWithText("Local-network access is off", substring = true).assertIsDisplayed()
-        rule.onNodeWithText("Open settings").performScrollTo().performClick()
-        assertEquals(1, calls.settings)
+        hideKeyboard()
+        rule.onNodeWithText("Open settings").performScrollTo()
         shoot("add-machine-permission-denied")
+        rule.onNodeWithText("Open settings").performClick()
+        assertEquals(1, calls.settings)
     }
 
     @Test fun aVpnOrNamedHostNeedsNoGrantAndSaysSo() {

@@ -25,6 +25,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -101,8 +102,12 @@ internal fun PaddockColors.stateColor(state: StateWord): Color = when (state) {
 /** A plain 8 dp dot. */
 @Composable
 fun Dot(color: Color, modifier: Modifier = Modifier, size: Dp = 8.dp) {
-    Canvas(modifier.size(size).clearAndSetSemantics { }) { drawCircle(color) }
+    Canvas(modifier.size(size * dotScale()).clearAndSetSemantics { }) { drawCircle(color) }
 }
+
+/** Dots grow a little with the font, so an 8 dp dot is not lost beside 200% text. */
+@Composable
+private fun dotScale(): Float = LocalDensity.current.fontScale.coerceIn(1f, 1.5f)
 
 /**
  * A state's dot. The shape differs as well as the colour, so the state never rests on colour alone: filled for a known
@@ -111,7 +116,7 @@ fun Dot(color: Color, modifier: Modifier = Modifier, size: Dp = 8.dp) {
 @Composable
 fun StateDot(state: StateWord, modifier: Modifier = Modifier, size: Dp = 8.dp) {
     val c = PaddockTokens.colors
-    Canvas(modifier.size(size).clearAndSetSemantics { }) {
+    Canvas(modifier.size(size * dotScale()).clearAndSetSemantics { }) {
         val w = 1.5.dp.toPx()
         when (state) {
             StateWord.Blocked -> drawCircle(c.needsYou)
@@ -347,7 +352,9 @@ fun HostChip(name: String, status: String, modifier: Modifier = Modifier, health
 fun Banner(text: String, modifier: Modifier = Modifier, actionLabel: String? = null, onAction: () -> Unit = {}) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.row)
-    val stacked = LocalDensity.current.fontScale >= 1.3f
+    // Side by side only when there is room: on a narrow phone or at a large font the action goes under the sentence.
+    val width = LocalConfiguration.current.screenWidthDp
+    val stacked = LocalDensity.current.fontScale >= 1.3f || width < 400
     val body: @Composable (Modifier) -> Unit = { m ->
         Row(m, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(PaddockIcons.Warning, contentDescription = null, tint = c.attention, modifier = Modifier.size(20.dp))
@@ -355,7 +362,7 @@ fun Banner(text: String, modifier: Modifier = Modifier, actionLabel: String? = n
         }
     }
     val action: @Composable () -> Unit = {
-        if (actionLabel != null) PaddockButton(actionLabel, onAction, kind = ButtonKind.Ghost, small = true, fillWidth = stacked, tint = c.attention)
+        if (actionLabel != null) PaddockButton(actionLabel, onAction, Modifier.padding(start = if (stacked) 30.dp else 0.dp), kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = c.attention)
     }
     val frame = modifier.fillMaxWidth().clip(shape).background(c.bannerWash(c.attention)).border(1.dp, c.bannerBorder(c.attention), shape)
         .padding(horizontal = 12.dp, vertical = 10.dp)
