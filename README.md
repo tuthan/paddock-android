@@ -27,7 +27,7 @@ tools/check.sh --offline                     # the CI gate: wrapper, SDK revisio
 | --- | --- |
 | JVM unit | `./gradlew :core:test` (fixtures only; no herdr needed) |
 | JVM integration | Phase 03 onward: start the disposable session (below), set `PADDOCK_TEST_SOCKET` to its socket |
-| Emulator | `tools/run-ui-tests.sh <serial>` (Compose tests plus screenshots); `tools/run-live-e2e.sh <serial>` (the whole app against a throwaway sshd and `paddock-test`); `tools/run-terminal-e2e.sh <serial>` (the Terminal tab: observe, conflict, takeover, typing, scroll timing, resize, release, rotation, link loss; `LINK_CUT=airplane` for real airplane mode on Android 12+); `tools/check-permission-flow.py` (Android 17, adb-driven); `tools/check-add-machine-ime.py` (keyboard and rotation) |
+| Emulator | `tools/run-ui-tests.sh <serial>` (Compose tests plus screenshots); `tools/run-live-e2e.sh <serial>` (the whole app against a throwaway sshd and `paddock-test`); `tools/run-terminal-e2e.sh <serial>` (the Terminal tab: observe, conflict, takeover, typing, scroll timing, resize, release, rotation, background and Back while controlling, link loss; `LINK_CUT=airplane` for real airplane mode on Android 12+); `tools/check-permission-flow.py` (Android 17, adb-driven); `tools/check-add-machine-ime.py` (keyboard and rotation) |
 | Physical | Phase 02 onward |
 
 ## The disposable session
