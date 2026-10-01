@@ -16,6 +16,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
@@ -63,19 +65,30 @@ class HerdHomeTest {
         File(dir, "$name.png").outputStream().use { rule.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    private fun show(state: HomeUiState, dark: Boolean = true, fontScale: Float? = null, onOpen: (String) -> Unit = {}) = rule.setContent {
+    /** [tall] lays the list out in a viewport taller than any phone, so every row is composed even on a 360 x 640 dp screen. */
+    private fun show(state: HomeUiState, dark: Boolean = true, fontScale: Float? = null, tall: Boolean = false, onOpen: (String) -> Unit = {}) = rule.setContent {
         val base = LocalDensity.current
         CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
-            PaddockTheme(darkTheme = dark) { HerdHome(state, now, onOpenAgent = onOpen) }
+            PaddockTheme(darkTheme = dark) {
+                if (tall) androidx.compose.foundation.layout.Box(Modifier.requiredHeight3000()) { HerdHome(state, now, onOpenAgent = onOpen) }
+                else HerdHome(state, now, onOpenAgent = onOpen)
+            }
         }
     }
+
+    private fun Modifier.requiredHeight3000() = this.then(Modifier.requiredHeight(3000.dp))
 
     private fun live(m: HomeModel) = HomeUiState.Live("laptop", m, 40_000)
 
     @Test fun busyHomeListsSectionsInAttentionOrder() {
-        show(live(busy))
+        show(live(busy), tall = true)
         val tops = listOf("NEEDS YOU", "DONE", "WORKING", "READY", "UNKNOWN").map { rule.onNodeWithText(it).getUnclippedBoundsInRoot().top.value }
         assertEquals(tops.sorted(), tops)
+        rule.onNodeWithText("1 needs you · 1 done · 1 working · 1 ready · 1 unknown").assertExists()
+    }
+
+    @Test fun busyHomeShowsItsSummaryFirst() {
+        show(live(busy))
         rule.onNodeWithText("1 needs you · 1 done · 1 working · 1 ready · 1 unknown").assertIsDisplayed()
         shoot("home-busy-dark-100")
     }
@@ -87,7 +100,7 @@ class HerdHomeTest {
     }
 
     @Test fun everyRowMeetsTheMinimumTouchTarget() {
-        show(live(busy))
+        show(live(busy), tall = true)
         rule.onAllNodesWithContentDescription("observed", substring = true).assertCountEquals5()
     }
 

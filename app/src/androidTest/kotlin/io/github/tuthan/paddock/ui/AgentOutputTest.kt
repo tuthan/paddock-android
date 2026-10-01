@@ -119,7 +119,7 @@ class AgentOutputTest {
     }
 
     @Test fun aStaleReadKeepsTheTextAndSaysHowOldItIs() {
-        show(showing(stale = true, readAt = now - 12_000))
+        show(showing(n = 5, stale = true, readAt = now - 12_000))
         rule.onNodeWithText("The last read failed. This is the output from 12 s ago.").assertIsDisplayed()
         rule.onNodeWithText("line 1 of the agent output").assertIsDisplayed()
         shoot("output-stale-dark-100")

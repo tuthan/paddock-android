@@ -49,6 +49,14 @@ class LiveFlowTest {
     private fun waitFor(what: String, ms: Long = 20_000, cond: () -> Boolean) {
         try { rule.waitUntil(ms, cond) } catch (e: androidx.compose.ui.test.ComposeTimeoutException) { shoot("timeout-" + what.replace(Regex("[^a-z0-9]+"), "-").take(30)); throw AssertionError("timed out waiting for $what") }
     }
+    /** Lets the script take a screenshot from outside the process (a shell capture honours FLAG_SECURE; an in-process one does not). */
+    private fun hold(marker: String) {
+        val ms = args.getString("holdMs")?.toLongOrNull() ?: 0L
+        if (ms <= 0) return
+        android.util.Log.i("E2E", "HOLD $marker")
+        Thread.sleep(ms)
+    }
+
     private fun hasNode(m: androidx.compose.ui.test.SemanticsMatcher) = rule.onAllNodes(m).fetchSemanticsNodes().isNotEmpty()
     private fun text(t: String, substring: Boolean = false) = hasText(t, substring = substring)
 
@@ -94,11 +102,13 @@ class LiveFlowTest {
         waitFor("terminal output") { hasNode(hasContentDescription("Terminal output")) }
         waitFor("some pane text") { hasNode(text(user, substring = true)) || hasNode(text("paddock-test", substring = true)) }
         shoot("output")
+        hold("OUTPUT")
         val secure = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
         assertTrue("Output is FLAG_SECURE by default", secure)
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         waitFor("back on home") { hasNode(text("Activity")) }
         rule.waitForIdle()
+        hold("HOME")
         val notSecureOnHome = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE == 0
         assertTrue("leaving Output removes the flag", notSecureOnHome)
 

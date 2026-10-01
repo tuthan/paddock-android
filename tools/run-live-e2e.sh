@@ -42,7 +42,19 @@ $ADB shell am instrument -w -e class "$PKG.e2e.LiveFlowTest#t0_exportAppKey" "$R
 $ADB pull "/sdcard/Android/data/$PKG/files/app-phone.pub" "$OUT/transport.pub" >/dev/null 2>&1 \
   && "$HERE/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
 $ADB shell rm -rf "/sdcard/Android/data/$PKG/files/screens"; $ADB logcat -c
-$ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" -e port 2233 -e home "$TEST_SSHD_HOME" -e session paddock-test -e class "$PKG.e2e.LiveFlowTest#addAMachineTrustItInstallTheRelayWatchAgentsReadOutputAndSeeActivity" "$RUNNER" >"$OUT/instrument.txt" 2>&1
+$ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" -e port 2233 -e home "$TEST_SSHD_HOME" -e session paddock-test -e holdMs 6000 -e class "$PKG.e2e.LiveFlowTest#addAMachineTrustItInstallTheRelayWatchAgentsReadOutputAndSeeActivity" "$RUNNER" >"$OUT/instrument.txt" 2>&1 &
+INSTR=$!
+# While the test holds on Output and then on Home, capture from the shell: FLAG_SECURE windows come back black.
+for marker in OUTPUT HOME; do
+  for _ in $(seq 1 240); do $ADB logcat -d -s E2E:I | grep -q "HOLD $marker" && break; sleep 0.5; done
+  sleep 1; $ADB exec-out screencap -p >"$OUT/shell-capture-$marker.png"
+done
+wait $INSTR
+for marker in OUTPUT HOME; do
+  f="$OUT/shell-capture-$marker.png"
+  if [ ! -s "$f" ]; then echo "shell capture on $marker: refused (0 bytes)"
+  else echo "shell capture on $marker: pixel standard deviation $(magick "$f" -colorspace Gray -format '%[fx:standard_deviation]' info: 2>/dev/null) (0 = one flat colour)"; fi
+done
 $ADB pull "/sdcard/Android/data/$PKG/files/screens" "$OUT/" >/dev/null 2>&1
 $ADB logcat -d -s E2E:I >"$OUT/e2e-log.txt"
 echo "relay on the isolated host home: $(ls -la "$TEST_SSHD_HOME"/.local/share/paddock/ 2>&1 | tail -n +2 | tr '\n' ' ')"
