@@ -71,6 +71,7 @@ fun Field(
     label: String, value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier,
     error: String? = null, keyboardType: KeyboardType = KeyboardType.Text, imeAction: ImeAction = ImeAction.Next,
     placeholder: String? = null, onDone: (() -> Unit)? = null,
+    secret: Boolean = false, singleLine: Boolean = true,
 ) {
     val c = PaddockTokens.colors
     val colors = TextFieldDefaults.colors(
@@ -83,15 +84,16 @@ fun Field(
         focusedSupportingTextColor = c.dim, unfocusedSupportingTextColor = c.dim, errorSupportingTextColor = c.needsYou,
     )
     TextField(
-        value = value, onValueChange = onValueChange, singleLine = true, isError = error != null, colors = colors,
+        value = value, onValueChange = onValueChange, singleLine = singleLine, minLines = if (singleLine) 1 else 3, maxLines = if (singleLine) 1 else 6, isError = error != null, colors = colors,
         label = { Text(label) },
         placeholder = placeholder?.let { { Text(it) } },
         supportingText = error?.let { { Text(it) } },
         shape = RoundedCornerShape(PaddockTokens.radii.field),
         keyboardOptions = KeyboardOptions(
-            capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = keyboardType, imeAction = imeAction,
+            capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = if (secret) KeyboardType.Password else keyboardType, imeAction = imeAction,
         ),
         keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { onDone?.invoke() }),
+        visualTransformation = if (secret) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         modifier = modifier.fillMaxWidth().semantics { if (error != null) error(error) },
     )
 }

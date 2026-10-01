@@ -131,4 +131,43 @@ class LiveFlowTest {
         android.util.Log.i("E2E", "first launch to populated home: $toHome ms (emulator, informational)")
         assertEquals(true, toHome > 0)
     }
+
+    /**
+     * A second run on cleared app data: import a real (throwaway) private key by pasting it, come back to the form with
+     * what was typed still there, and sign in with that key instead of the phone's. The script generated the key and
+     * authorized its public half on the throwaway sshd; the key text is read from the app's files dir and deleted after.
+     */
+    @Test fun importAKeyThenConnectWithIt() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val keyFile = File(ctx.getExternalFilesDir(null), "e2e-import-key")
+        val pem = keyFile.readText()
+        try {
+            waitFor("the Add machine screen") { hasNode(text("Add a machine")) }
+            rule.onNodeWithText("Host or IP address").performTextInput(host)
+            rule.onNodeWithText("User").performTextInput(user)
+            rule.onNode(hasText("Port") and hasSetTextAction()).performTextReplacement(port)
+            rule.onNode(hasText("herdr session (optional)") and hasSetTextAction()).performScrollTo().performTextInput(session)
+            rule.onNodeWithText("An imported key").performScrollTo().performClick()
+            rule.onNodeWithText("Import a private key").performScrollTo().performClick()
+
+            waitFor("the import screen") { hasNode(text("Or paste the key")) }
+            assertTrue("the import screen is FLAG_SECURE by default", rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+            rule.onNodeWithText("Or paste the key").performTextInput(pem)
+            shoot("import-key")
+            rule.onNodeWithText("Import key").performClick()
+
+            waitFor("back on the form with the key stored") { hasNode(hasContentDescription("Imported key: ssh-ed25519", substring = true)) }
+            rule.onNodeWithText(host).assertIsDisplayed()
+            assertTrue("the key text is nowhere on the form", rule.onAllNodes(hasText("PRIVATE KEY", substring = true)).fetchSemanticsNodes().isEmpty())
+            shoot("import-key-stored")
+            rule.onNodeWithText("Connect").performClick()
+
+            waitFor("the first-trust dialog") { hasNode(text("Trust $host:$port?")) }
+            rule.onNodeWithText("Trust and connect").performClick()
+            waitFor("the relay prompt or the home") { hasNode(text("Install the relay on $host?")) || hasNode(hasContentDescription("live", substring = true)) }
+            if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()
+            waitFor("the home with agents, signed in with the imported key") { hasNode(hasContentDescription("Blocked", substring = true)) && hasNode(hasContentDescription("live", substring = true)) }
+            shoot("import-key-home")
+        } finally { keyFile.delete() }
+    }
 }

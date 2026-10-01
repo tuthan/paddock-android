@@ -27,6 +27,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import io.github.tuthan.paddock.ssh.ImportCheck
+import io.github.tuthan.paddock.ssh.ImportedKeyInfo
+import io.github.tuthan.paddock.ui.screens.ImportKey
+import io.github.tuthan.paddock.ui.screens.PickedKeyFile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -274,23 +282,83 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, onBack: () -> U
         if (granted && input != null) finish(input)
     }
     val key = remember(keyTick) { if (graph.phoneKey.exists()) graph.phoneKey.info() else null }
+    var importedTick by remember { mutableStateOf(0) }
+    val imported by produceState<ImportedKeyInfo?>(null, importedTick) { value = graph.importedKey() }
+    var importing by rememberSaveable { mutableStateOf(false) }
+    // The form is kept by the holder while the import screen is up, so typed values are still there on return.
+    val holder = rememberSaveableStateHolder()
+    if (importing) {
+        ImportKeyRoute(graph, onDone = { importedTick++; importing = false }, onBack = { importing = false })
+        return
+    }
     val state = AddMachineState(
         route = { host -> AddMachineForm.route(host, graph.gate.decide(AddMachineForm.normalizeHost(host))) },
         publicKeyLine = key?.let { graph.phoneKey.publicLine("paddock@phone") },
         keyBacking = key?.backing,
+        importedKeyId = imported?.id,
+        importedKeySummary = imported?.let { "${it.keyType} · ${it.fingerprint}" },
         permissionDenied = denied,
     )
-    AddMachine(
-        state,
-        onConnect = { input ->
-            if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input)
+    holder.SaveableStateProvider("add-machine") {
+        AddMachine(
+            state,
+            onConnect = { input ->
+                if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input)
+            },
+            onGenerateKey = { graph.phoneKey.getOrCreate(); keyTick++ },
+            onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },
+            onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
+            onBack = { if (canGoBack) onBack() },
+            onImportKey = { importing = true },
+        )
+    }
+}
+
+private const val MAX_KEY_FILE_BYTES = 64 * 1024
+
+@Composable
+private fun ImportKeyRoute(graph: AppGraph, onDone: () -> Unit, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val settings by graph.settings.collectAsState()
+    SecureWindow(settings.protectSensitiveScreens)
+    // Held in plain remember state on purpose: key text must not reach saved instance state.
+    var picked by remember { mutableStateOf<PickedKeyFile?>(null) }
+    var pickError by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<ImportCheck?>(null) }
+    val chooser = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            pickError = null
+            val file = withContext(Dispatchers.IO) { readKeyFile(ctx, uri) }
+            if (file == null) pickError = "That file could not be read, or it is too large to be a private key." else picked = file
+            result = null
+        }
+    }
+    ImportKey(
+        picked, pickError, busy, result,
+        onChooseFile = { chooser.launch(arrayOf("*/*")) },
+        onClearFile = { picked = null; result = null },
+        onImport = { pem, pass ->
+            busy = true
+            scope.launch {
+                val check = graph.importKey(pem, pass)
+                busy = false
+                result = check
+                if (check is ImportCheck.Ready) onDone()
+            }
         },
-        onGenerateKey = { graph.phoneKey.getOrCreate(); keyTick++ },
-        onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },
-        onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
-        onBack = { if (canGoBack) onBack() },
+        onBack = onBack,
     )
 }
+
+/** Reads at most [MAX_KEY_FILE_BYTES]; a larger file is refused rather than truncated. */
+private fun readKeyFile(ctx: Context, uri: android.net.Uri): PickedKeyFile? = runCatching {
+    val name = ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null } ?: "key file"
+    val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readNBytes(MAX_KEY_FILE_BYTES + 1) } ?: return null
+    if (bytes.size > MAX_KEY_FILE_BYTES) null else PickedKeyFile(name, String(bytes, Charsets.UTF_8))
+}.getOrNull()
 
 @Composable
 private fun HostKeyDialogs(graph: AppGraph, reviewKey: Boolean, dismissReview: () -> Unit) {

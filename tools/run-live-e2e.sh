@@ -57,6 +57,17 @@ for marker in OUTPUT HOME; do
 done
 $ADB pull "/sdcard/Android/data/$PKG/files/screens" "$OUT/" >/dev/null 2>&1
 $ADB logcat -d -s E2E:I >"$OUT/e2e-log.txt"
+
+# Second run on cleared app data: sign in with an imported key. The key is generated here, authorized on the throwaway sshd
+# only, pushed for the test to read (the test deletes it), and removed from build/ afterwards.
+IMPORT_KEY="$OUT/import-key"; ssh-keygen -q -t ed25519 -N '' -C paddock-e2e-import -f "$IMPORT_KEY"
+"$HERE/test-sshd.sh" authorize "$IMPORT_KEY.pub" >/dev/null
+$ADB shell pm clear $PKG >/dev/null
+$ADB push "$IMPORT_KEY" "/sdcard/Android/data/$PKG/files/e2e-import-key" >/dev/null 2>&1
+$ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" -e port 2233 -e home "$TEST_SSHD_HOME" -e session paddock-test -e class "$PKG.e2e.LiveFlowTest#importAKeyThenConnectWithIt" "$RUNNER" >"$OUT/import.txt" 2>&1
+rm -f "$IMPORT_KEY" "$IMPORT_KEY.pub"; $ADB shell rm -f "/sdcard/Android/data/$PKG/files/e2e-import-key"
+$ADB pull "/sdcard/Android/data/$PKG/files/screens" "$OUT/screens-import/" >/dev/null 2>&1
+echo "imported-key flow: $(grep -E '^OK|FAILURES' "$OUT/import.txt" | head -1) $(grep -E '^Error in|AssertionError' "$OUT/import.txt" | sort -u | head -3 | tr '\n' ' ')"
 echo "relay on the isolated host home: $(ls -la "$TEST_SSHD_HOME"/.local/share/paddock/ 2>&1 | tail -n +2 | tr '\n' ' ')"
 grep -E "^OK|FAILURES|Tests run" "$OUT/instrument.txt"; grep -E "^Error in|AssertionError|Exception" "$OUT/instrument.txt" | sort -u | head -10
 cat "$OUT/e2e-log.txt" | sed 's/^.* I E2E *: //'

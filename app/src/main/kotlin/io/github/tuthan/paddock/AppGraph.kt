@@ -90,6 +90,15 @@ class AppGraph(private val app: Application) {
         }
     }
 
+    /** The one imported-key slot: importing again replaces the key, and profiles that use it keep working. */
+    suspend fun importedKey(): io.github.tuthan.paddock.ssh.ImportedKeyInfo? = importedKeys.info(IMPORTED_KEY_ID)
+
+    /** Checks and stores a private key. An encrypted key's passphrase is kept because connecting never asks for one. */
+    suspend fun importKey(pem: String, passphrase: String): io.github.tuthan.paddock.ssh.ImportCheck {
+        val chars = pem.toCharArray()
+        try { return importedKeys.import(IMPORTED_KEY_ID, chars, passphrase.ifEmpty { null }, rememberPassphrase = true) } finally { chars.fill('\u0000') }
+    }
+
     /** Saves [profile], makes it the watched machine and connects. */
     suspend fun addMachine(profile: HostProfile) {
         profiles.put(profile)
@@ -139,3 +148,5 @@ class AppGraph(private val app: Application) {
         }
     }
 }
+
+const val IMPORTED_KEY_ID = "imported"

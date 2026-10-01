@@ -14,6 +14,7 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -50,10 +51,10 @@ class AddMachineTest {
     @get:Rule val rule = createComposeRule()
 
     private val line = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHt paddock@phone"
-    private class Calls { var connect: AddMachineInput? = null; var generate = 0; var copied: String? = null; var settings = 0; var back = 0 }
+    private class Calls { var importKey = 0; var connect: AddMachineInput? = null; var generate = 0; var copied: String? = null; var settings = 0; var back = 0 }
 
-    private fun state(grant: GateDecision = GateDecision.NotRequired, key: String? = null, backing: KeyBacking? = null, denied: Boolean = false, imported: String? = null, connecting: Boolean = false) =
-        AddMachineState({ AddMachineForm.route(it, grant) }, key, backing, imported, denied, connecting)
+    private fun state(grant: GateDecision = GateDecision.NotRequired, key: String? = null, backing: KeyBacking? = null, denied: Boolean = false, imported: String? = null, connecting: Boolean = false, summary: String? = null) =
+        AddMachineState({ AddMachineForm.route(it, grant) }, key, backing, imported, denied, connecting, importedKeySummary = summary)
 
     private fun shoot(name: String) {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
@@ -74,7 +75,7 @@ class AddMachineTest {
     @androidx.compose.runtime.Composable
     private fun screen(state: AddMachineState, calls: Calls) = AddMachine(
         state, onConnect = { calls.connect = it }, onGenerateKey = { calls.generate++ }, onCopyPublicKey = { calls.copied = it },
-        onOpenSettings = { calls.settings++ }, onBack = { calls.back++ },
+        onOpenSettings = { calls.settings++ }, onBack = { calls.back++ }, onImportKey = { calls.importKey++ },
     )
 
     private fun fill(host: String = "192.168.1.20", user: String = "jdoe", port: String? = null) {
@@ -174,6 +175,22 @@ class AddMachineTest {
         rule.onNodeWithText("Connect").performClick()
         assertEquals(KeyKind.Imported, calls.connect!!.key)
         assertEquals("work-key", calls.connect!!.importedKeyId)
+    }
+
+    @Test fun theImportedChoiceWithNoKeyOffersToImportOne() {
+        val calls = show(state(key = line))
+        rule.onNodeWithText("An imported key").performScrollTo().performClick()
+        rule.onNodeWithText("Import a private key").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.importKey)
+    }
+
+    @Test fun aStoredImportedKeyShowsWhichKeyItIsAndOffersToReplaceIt() {
+        val calls = show(state(key = line, imported = "imported", summary = "ssh-ed25519 · SHA256:abcDEF"))
+        rule.onNodeWithText("An imported key").performScrollTo().performClick()
+        rule.onNode(hasContentDescription("Imported key: ssh-ed25519 · SHA256:abcDEF")).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Replace the imported key").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.importKey)
+        assertEquals(0, rule.onAllNodesWithText("Import a private key").fetchSemanticsNodes().size)
     }
 
     @Test fun connectingDisablesTheButtonSoItCannotBeTappedTwice() {

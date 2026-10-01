@@ -57,6 +57,8 @@ data class AddMachineState(
     val permissionDenied: Boolean = false,
     val connecting: Boolean = false,
     val connectError: String? = null,
+    /** `ssh-ed25519 · SHA256:…` of the stored imported key, shown so the user can tell which key is in use. */
+    val importedKeySummary: String? = null,
 )
 
 /** Where the phone's key is held, in words. Shown after generation, from what the platform reported, never assumed. */
@@ -80,6 +82,7 @@ fun AddMachine(
     onCopyPublicKey: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onBack: () -> Unit,
+    onImportKey: () -> Unit = {},
     modifier: Modifier = Modifier,
     initial: AddMachineInput = AddMachineInput(),
 ) {
@@ -134,6 +137,7 @@ fun AddMachine(
                 key == KeyKind.Imported, { key = KeyKind.Imported },
             )
             if (key == KeyKind.Phone) PhoneKeySection(state, showQr, { showQr = it }, onGenerateKey, onCopyPublicKey)
+            if (key == KeyKind.Imported) ImportedKeySection(state, onImportKey)
             if (key == KeyKind.Imported && state.importedKeyId == null && showErrors) Banner("Import a key before connecting, or use this phone's key.")
             if (key == KeyKind.Phone && state.publicKeyLine == null && showErrors) Banner("Create this phone's key first, then authorize it on the machine and press Connect.")
 
@@ -164,6 +168,16 @@ private fun RouteHint(route: RouteNote, denied: Boolean, onOpenSettings: () -> U
                 "This is a local-network address. When you press Connect, Android asks to let Paddock reach devices on your network. It is used only to connect to this machine.",
                 style = PaddockTokens.type.secondary, color = c.dim,
             )
+    }
+}
+
+@Composable
+private fun ImportedKeySection(state: AddMachineState, onImport: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (state.importedKeyId != null) {
+            if (state.importedKeySummary != null) Fact("Imported key", state.importedKeySummary)
+            PaddockButton("Replace the imported key", onImport, kind = ButtonKind.Quiet)
+        } else PaddockButton("Import a private key", onImport, kind = ButtonKind.Quiet)
     }
 }
 
