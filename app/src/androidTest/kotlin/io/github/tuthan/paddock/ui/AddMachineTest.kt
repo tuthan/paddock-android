@@ -32,6 +32,7 @@ import io.github.tuthan.paddock.hostprofile.AddMachineForm
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
 import io.github.tuthan.paddock.hostprofile.KeyKind
 import io.github.tuthan.paddock.hostprofile.RouteNote
+import io.github.tuthan.paddock.net.EndpointClass
 import io.github.tuthan.paddock.net.GateDecision
 import io.github.tuthan.paddock.ssh.KeyBacking
 import io.github.tuthan.paddock.ui.components.FingerprintDialog
@@ -62,8 +63,9 @@ class AddMachineTest {
         File(dir, "$name.png").outputStream().use { rule.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    /** A dialog is its own window: capture that, not the activity's root. */
+    /** A dialog is its own window: capture that, not the activity's root. Compose cannot capture a dialog below API 28, so older APIs skip the picture, not the test. */
     private fun shootDialog(name: String) {
+        if (android.os.Build.VERSION.SDK_INT < 28) return
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val dir = File(ctx.getExternalFilesDir(null), "screens").apply { mkdirs() }
         File(dir, "$name.png").outputStream().use { rule.onNode(androidx.compose.ui.test.isDialog()).captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -177,6 +179,37 @@ class AddMachineTest {
         show(state(grant = GateDecision.NeedsGrant, key = line))
         rule.onNodeWithText("Host or IP address").performTextInput("box.example.ts.net")
         rule.onNodeWithText("no local-network access needed", substring = true).assertIsDisplayed()
+    }
+
+    @Test fun aLanNameIsDescribedAsLocalOnceTypingSettles() {
+        // The text says nothing about where nas.lan goes; the resolved answer replaces the text-only hint.
+        val resolved = state(grant = GateDecision.NeedsGrant, key = line).copy(
+            resolveRoute = { h -> AddMachineForm.route(h, GateDecision.NeedsGrant, if (h == "nas.lan") EndpointClass.Local else EndpointClass.NotLocal) },
+        )
+        show(resolved)
+        rule.onNodeWithText("Host or IP address").performTextInput("nas.lan")
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("This is a local-network address", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("no local-network access needed", substring = true).assertDoesNotExist()
+    }
+
+    @Test fun settingUpTheKeyStartsFromTheWatchedMachineAndConnectsWithItsValues() {
+        val calls = Calls()
+        rule.setContent {
+            PaddockTheme {
+                AddMachine(
+                    state(key = line, backing = KeyBacking.Tee), onConnect = { calls.connect = it }, onGenerateKey = {}, onCopyPublicKey = {},
+                    onOpenSettings = {}, onBack = {},
+                    initial = AddMachineInput("box.lan", "2222", "jdoe", KeyKind.Phone, null, "main"), title = "Set up the key",
+                    intro = io.github.tuthan.paddock.ui.screens.SET_UP_KEY_INTRO,
+                )
+            }
+        }
+        rule.onNodeWithText("Set up the key").assertIsDisplayed()
+        rule.onNodeWithText("can't be read on this phone", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("box.lan").assertIsDisplayed()
+        rule.onNodeWithText("Connect").performClick()
+        assertEquals(AddMachineInput("box.lan", "2222", "jdoe", KeyKind.Phone, null, "main"), calls.connect)
+        shoot("add-machine-set-up-key")
     }
 
     @Test fun anImportedKeyProfileNeedsAKeyFirst() {

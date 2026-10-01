@@ -73,7 +73,9 @@ class HomeUiMapperTest {
         val s = r.state as HomeUiState.Degraded
         assertTrue(s.reason, s.reason.startsWith("The key stored on this phone can't be read. Import it again or create a new phone key"))
         assertTrue(s.reason, "reach" !in s.reason)
-        assertEquals(Recovery.Retry, r.recovery)
+        // Retrying cannot fix it: the action opens the key setup for this machine.
+        assertEquals(Recovery.SetUpKey, r.recovery)
+        assertEquals("Set up the key", s.recoveryLabel)
     }
 
     @Test fun unreadableHostKeysPointToTheStorageReset() {

@@ -17,6 +17,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -49,12 +50,14 @@ import io.github.tuthan.paddock.ui.components.Kicker
 import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.QrView
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
+import kotlinx.coroutines.delay
 
 /**
  * What the screen needs from outside: the phone's public key once it exists, where it is held, whether an imported
  * key is available, whether the local-network grant was refused, and whether a connect is in flight.
  */
 data class AddMachineState(
+    /** The route hint from the typed text alone, shown at once. */
     val route: (String) -> RouteNote,
     val publicKeyLine: String? = null,
     val keyBacking: KeyBacking? = null,
@@ -64,6 +67,8 @@ data class AddMachineState(
     val connectError: String? = null,
     /** `ssh-ed25519 · SHA256:…` of the stored imported key, shown so the user can tell which key is in use. */
     val importedKeySummary: String? = null,
+    /** The route hint from where the host resolves, asked once typing settles; null keeps the text-only hint. */
+    val resolveRoute: (suspend (String) -> RouteNote)? = null,
 )
 
 /** Where the phone's key is held, in words. Shown after generation, from what the platform reported, never assumed. */
@@ -90,6 +95,8 @@ fun AddMachine(
     modifier: Modifier = Modifier,
     onImportKey: () -> Unit = {},
     initial: AddMachineInput = AddMachineInput(),
+    title: String = "Add a machine",
+    intro: String = ADD_MACHINE_INTRO,
 ) {
     val c = PaddockTokens.colors
     var host by rememberSaveable { mutableStateOf(initial.host) }
@@ -101,7 +108,15 @@ fun AddMachine(
     var showQr by rememberSaveable { mutableStateOf(false) }
     val input = AddMachineInput(host, port, user, key, if (key == KeyKind.Imported) state.importedKeyId else null, session)
     val errors = AddMachineForm.errors(input)
-    val route = state.route(host)
+    val typed = state.route(host)
+    // The text-only hint shows while typing; the resolved one replaces it once the host has been still for a moment.
+    val route by produceState(typed, host, typed) {
+        value = typed
+        val resolve = state.resolveRoute ?: return@produceState
+        if (host.isBlank()) return@produceState
+        delay(ROUTE_SETTLE_MILLIS)
+        value = resolve(host)
+    }
 
     fun connect() {
         showErrors = true
@@ -109,12 +124,9 @@ fun AddMachine(
     }
 
     Column(modifier.fillMaxSize().imePadding()) {
-        ScreenHeader("Add a machine", onBack = onBack)
+        ScreenHeader(title, onBack = onBack)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = PaddockTokens.spacing.gutter).padding(top = 8.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(
-                "Paddock reaches the machine that runs herdr over SSH. Over a VPN such as Tailscale it works from anywhere; on the same Wi-Fi a LAN address is enough.",
-                style = PaddockTokens.type.body, color = c.dim,
-            )
+            Text(intro, style = PaddockTokens.type.body, color = c.dim)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Field("Host or IP address", host, { host = it }, error = if (showErrors) errors.host else null, keyboardType = KeyboardType.Uri, placeholder = "192.168.1.20 or box.example.ts.net", mono = true)
                 RouteHint(route, state.permissionDenied, onOpenSettings)
@@ -154,6 +166,14 @@ fun AddMachine(
         }
     }
 }
+
+private const val ROUTE_SETTLE_MILLIS = 500L
+
+const val ADD_MACHINE_INTRO =
+    "Paddock reaches the machine that runs herdr over SSH. Over a VPN such as Tailscale it works from anywhere; on the same Wi-Fi a LAN address is enough."
+
+const val SET_UP_KEY_INTRO =
+    "The key this machine signs in with can't be read on this phone. Create a new phone key or import yours again, authorize it on the machine, then press Connect."
 
 @Composable
 private fun RouteHint(route: RouteNote, denied: Boolean, onOpenSettings: () -> Unit) {

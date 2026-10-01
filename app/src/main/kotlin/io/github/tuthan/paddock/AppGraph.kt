@@ -105,6 +105,18 @@ class AppGraph(private val app: Application) {
         try { return withContext(Dispatchers.Default) { importedKeys.import(IMPORTED_KEY_ID, chars, passphrase.ifEmpty { null }, rememberPassphrase = true) } } finally { chars.fill('\u0000') }
     }
 
+    /**
+     * The user asked for this phone's key. An entry that exists but cannot be read can never sign, so it is replaced; the
+     * new key has to be authorized on the host again. A connect never does this on its own.
+     */
+    suspend fun createPhoneKey() = withContext(Dispatchers.Default) {
+        runCatching { phoneKey.getOrCreate() }.recoverCatching { e ->
+            if (e !is ConnectFailure.KeyUnavailable || !phoneKey.exists()) throw e
+            phoneKey.delete()
+            phoneKey.getOrCreate()
+        }
+    }
+
     /** Saves [profile], makes it the watched machine and connects. */
     suspend fun addMachine(profile: HostProfile) {
         profiles.put(profile)

@@ -47,6 +47,15 @@ class LocalNetworkGate(
         return LocalNetworkPolicy.decide(targetSdk, deviceSdk, classifyResolved(host, resolver, resolveTimeout), isGranted())
     }
 
+    /**
+     * The route hint once typing settles: where the grant is enforced, [host] is resolved as a connect would resolve it, so a
+     * LAN name is described as local; elsewhere the text decides, and nothing is looked up where it cannot matter.
+     */
+    suspend fun resolvedRoute(host: String): Pair<EndpointClass, GateDecision> {
+        val endpoint = if (LocalNetworkPolicy.enforced(targetSdk, deviceSdk)) classifyResolved(host, resolver, resolveTimeout) else classifyEndpoint(host)
+        return endpoint to LocalNetworkPolicy.decide(targetSdk, deviceSdk, endpoint, isGranted())
+    }
+
     /** Whether this device and build enforce the grant for LAN endpoints at all, and it is missing. For the Settings row. */
     fun lanAccessMissing(): Boolean =
         LocalNetworkPolicy.decide(targetSdk, deviceSdk, EndpointClass.Local, isGranted()) == GateDecision.NeedsGrant

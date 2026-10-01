@@ -1,5 +1,6 @@
 package io.github.tuthan.paddock.hostprofile
 
+import io.github.tuthan.paddock.net.EndpointClass
 import io.github.tuthan.paddock.net.GateDecision
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -87,5 +88,11 @@ class AddMachineFormTest {
         assertEquals(RouteNote.LocalNeedsGrant, AddMachineForm.route("192.168.1.20", GateDecision.NeedsGrant))
         assertEquals(RouteNote.LocalNeedsGrant, AddMachineForm.route("[fe80::1]", GateDecision.NeedsGrant))
         assertEquals(RouteNote.LocalNeedsGrant, AddMachineForm.route("printer.local", GateDecision.NeedsGrant))
+    }
+
+    @Test fun aNameThatResolvesToTheLanIsDescribedAsLocal() {
+        assertEquals(RouteNote.LocalNeedsGrant, AddMachineForm.route("nas.lan", GateDecision.NeedsGrant, EndpointClass.Local))
+        assertEquals(RouteNote.LocalReady, AddMachineForm.route("nas.lan", GateDecision.Granted, EndpointClass.Local))
+        assertEquals(RouteNote.NotLocal, AddMachineForm.route("nas.lan", GateDecision.NotRequired, EndpointClass.NotLocal))
     }
 }

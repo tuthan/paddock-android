@@ -26,7 +26,7 @@ data class HostView(
 )
 
 /** What tapping the degraded banner's action does. */
-enum class Recovery { OpenSettings, ReviewKey, Retry, InstallRelay }
+enum class Recovery { OpenSettings, ReviewKey, Retry, InstallRelay, SetUpKey }
 
 data class HostScreen(val state: HomeUiState, val recovery: Recovery? = null, val relayPrompt: HostPhase.NeedsRelayInstall? = null)
 
@@ -77,7 +77,8 @@ object HomeUiMapper {
             DownReason.AuthFailed -> degraded("The host did not accept this phone's key. Authorize it on the host, then try again.", "Try again", Recovery.Retry, null)
             DownReason.Refused -> degraded("The connection was not accepted.", "Try again", Recovery.Retry, null)
             DownReason.KeyUnavailable -> degraded(
-                "The key stored on this phone can't be read. Import it again or create a new phone key, then try again.", "Try again", Recovery.Retry, null,
+                "The key stored on this phone can't be read. Import it again or create a new phone key, then authorize it on the host.",
+                "Set up the key", Recovery.SetUpKey, null,
             )
             DownReason.HostKeysUnreadable -> degraded(
                 "Saved host keys can't be read, so Paddock can't check this host's identity. Nothing was signed in. " +

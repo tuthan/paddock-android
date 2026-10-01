@@ -65,7 +65,9 @@ import io.github.tuthan.paddock.output.OutputState
 import io.github.tuthan.paddock.ui.components.FingerprintDialog
 import io.github.tuthan.paddock.ui.components.SecureWindow
 import io.github.tuthan.paddock.ui.screens.ActivityLog
+import io.github.tuthan.paddock.ui.screens.ADD_MACHINE_INTRO
 import io.github.tuthan.paddock.ui.screens.AddMachine
+import io.github.tuthan.paddock.ui.screens.SET_UP_KEY_INTRO
 import io.github.tuthan.paddock.ui.screens.AddMachineState
 import io.github.tuthan.paddock.ui.screens.AgentHeader
 import io.github.tuthan.paddock.ui.screens.AgentOutput
@@ -104,6 +106,8 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
     var terminalId by rememberSaveable { mutableStateOf<String?>(null) }
     var relayDismissed by rememberSaveable { mutableStateOf(false) }
     var reviewKey by rememberSaveable { mutableStateOf(false) }
+    // Add machine opened to set up the watched machine's key (its key could not be read), not to add another.
+    var editing by rememberSaveable { mutableStateOf(false) }
 
     val effective = if (boot == Boot.NoMachines) Route.AddMachine else route
     val backTo = if (effective == Route.AddMachine) addFrom else Route.Home
@@ -118,13 +122,17 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
                         if (effective == Route.Home) HomeRoute(
                             graph, relayDismissed, { relayDismissed = it }, { reviewKey = true },
                             onOpen = { terminalId = it; route = Route.Output }, onSettings = { route = Route.Settings },
+                            onSetUpKey = { editing = true; addFrom = Route.Home; route = Route.AddMachine },
                         ) else ActivityRoute(graph)
                     }
                     PaddockNavBar(NAV, if (effective == Route.Home) 0 else 1, { route = if (it == 0) Route.Home else Route.Activity })
                 }
                 Route.Output -> OutputRoute(graph, terminalId, onBack = { route = Route.Home })
-                Route.Settings -> SettingsRoute(graph, onBack = { route = Route.Home }, onAddMachine = { addFrom = Route.Settings; route = Route.AddMachine })
-                Route.AddMachine -> AddMachineRoute(graph, canGoBack = boot == Boot.Ready, onBack = { route = backTo }, onAdded = { route = Route.Home; relayDismissed = false })
+                Route.Settings -> SettingsRoute(graph, onBack = { route = Route.Home }, onAddMachine = { editing = false; addFrom = Route.Settings; route = Route.AddMachine })
+                Route.AddMachine -> AddMachineRoute(
+                    graph, canGoBack = boot == Boot.Ready, editing = editing && boot == Boot.Ready,
+                    onBack = { editing = false; route = backTo }, onAdded = { editing = false; route = Route.Home; relayDismissed = false },
+                )
             }
         }
         HostKeyDialogs(graph, reviewKey) { reviewKey = false }
@@ -154,7 +162,7 @@ private fun rememberResumes(): Int {
 @Composable
 private fun HomeRoute(
     graph: AppGraph, relayDismissed: Boolean, setRelayDismissed: (Boolean) -> Unit, onReviewKey: () -> Unit,
-    onOpen: (terminalId: String) -> Unit, onSettings: () -> Unit,
+    onOpen: (terminalId: String) -> Unit, onSettings: () -> Unit, onSetUpKey: () -> Unit,
 ) {
     val profile by graph.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
@@ -195,6 +203,7 @@ private fun HomeRoute(
                 Recovery.ReviewKey -> onReviewKey()
                 Recovery.InstallRelay -> setRelayDismissed(false)
                 Recovery.Retry -> graph.retry()
+                Recovery.SetUpKey -> onSetUpKey()
                 null -> Unit
             }
         },
@@ -283,8 +292,11 @@ private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () 
 }
 
 @Composable
-private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, onBack: () -> Unit, onAdded: () -> Unit) {
+private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, editing: Boolean, onBack: () -> Unit, onAdded: () -> Unit) {
     val ctx = LocalContext.current
+    val watched by graph.profile.collectAsState()
+    // Setting up the key keeps the machine (its id, so its pinned host key and history) while it is the same host and port.
+    val fixing = watched.takeIf { editing }
     val scope = rememberCoroutineScope()
     var keyTick by remember { mutableIntStateOf(0) }
     var denied by rememberSaveable { mutableStateOf(false) }
@@ -293,8 +305,12 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, onBack: () -> U
     fun finish(input: AddMachineInput) {
         scope.launch {
             val existing = graph.profiles.list().map { it.id }.toSet()
-            val profile = AddMachineForm.profile(input, existing) ?: return@launch
+            val made = AddMachineForm.profile(input, existing - setOfNotNull(fixing?.id)) ?: return@launch
+            val same = fixing != null && made.host == fixing.host && made.port == fixing.port
+            val profile = if (same) made.copy(id = fixing.id, name = fixing.name) else made
             graph.addMachine(profile)
+            // The same profile is resumed, not rebuilt: ask for the reconnect that picks up the new key.
+            if (same) graph.retry()
             onAdded()
         }
     }
@@ -325,24 +341,33 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, onBack: () -> U
     }
     val state = AddMachineState(
         route = { host -> AddMachineForm.route(host, graph.gate.decide(AddMachineForm.normalizeHost(host))) },
+        resolveRoute = { host ->
+            val h = AddMachineForm.normalizeHost(host)
+            val (endpoint, grant) = graph.gate.resolvedRoute(h)
+            AddMachineForm.route(host, grant, endpoint)
+        },
         publicKeyLine = key?.first,
         keyBacking = key?.second,
         importedKeyId = imported?.id,
         importedKeySummary = imported?.let { "${it.keyType} · ${it.fingerprint}" },
         permissionDenied = denied,
     )
-    holder.SaveableStateProvider("add-machine") {
+    // Its own saved form: setting up a key starts from the watched machine's values, not from a half-typed new one.
+    holder.SaveableStateProvider(fixing?.let { "key-${it.id}" } ?: "add-machine") {
         AddMachine(
             state,
             onConnect = { input ->
                 // Decided from where the name resolves (a LAN hostname needs the grant too); the lookup is bounded and off the main thread.
                 scope.launch { if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input) }
             },
-            onGenerateKey = { scope.launch { withContext(Dispatchers.Default) { runCatching { graph.phoneKey.getOrCreate() } }; keyTick++ } },
+            onGenerateKey = { scope.launch { graph.createPhoneKey(); keyTick++ } },
             onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },
             onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
             onBack = { if (canGoBack) onBack() },
             onImportKey = { importing = true },
+            initial = fixing?.let { AddMachineInput(it.host, it.port.toString(), it.user, it.key, it.importedKeyId, it.session ?: "") } ?: AddMachineInput(),
+            title = if (fixing != null) "Set up the key" else "Add a machine",
+            intro = if (fixing != null) SET_UP_KEY_INTRO else ADD_MACHINE_INTRO,
         )
     }
 }

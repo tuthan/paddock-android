@@ -83,10 +83,13 @@ object AddMachineForm {
         return "$base-$n"
     }
 
-    /** [grant] is the gate's decision for this host on this device and build. */
-    fun route(host: String, grant: GateDecision): RouteNote = when {
+    /**
+     * [grant] is the gate's decision for this host on this device and build. [endpoint] defaults to the text alone; once
+     * typing settles the caller passes the resolved class, so a LAN name such as `nas.lan` is described as local.
+     */
+    fun route(host: String, grant: GateDecision, endpoint: EndpointClass = classifyEndpoint(normalizeHost(host))): RouteNote = when {
         host.isBlank() -> RouteNote.Empty
-        classifyEndpoint(normalizeHost(host)) == EndpointClass.NotLocal -> RouteNote.NotLocal
+        endpoint == EndpointClass.NotLocal -> RouteNote.NotLocal
         grant == GateDecision.NeedsGrant -> RouteNote.LocalNeedsGrant
         else -> RouteNote.LocalReady
     }
