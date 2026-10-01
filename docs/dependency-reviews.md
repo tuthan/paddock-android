@@ -1,0 +1,29 @@
+# Dependency reviews
+
+One row per coordinate in `gradle/libs.versions.toml`, written before the catalog entry (Phase 01 rule). Matrix classes are from the dependency-guard decision matrix. Every `block_pending_human_review` or `block` row carries the human disposition that let it in; no row is accepted by default.
+
+**Dispositions: Hung Vo, 2026-10-01**, given through the Phase 01 dependency prompt ("Approve full set"). Controls that apply to every row: repositories restricted to Google Maven groups `com.android.*`, `com.google.*`, `androidx.*` plus Maven Central, no Gradle Plugin Portal, `FAIL_ON_PROJECT_REPOS`, locked configurations, SHA-256 verification metadata.
+
+## Sources
+
+- **Fresh, 2026-10-01:** `socket package score` (CLI 1.1.176, `scripts/check_dependency.sh maven <group>/<artifact> <version>`, deep mode) for the two new coordinates below.
+- **Carried over:** the same coordinates and versions were reviewed for `steamos-companion-android` on 2026-09-25 and 2026-09-28 (see that repository's `docs/build-decision.md`, "Dependency reviews"). That evidence is cited, not re-run, because Socket rate-limits deep scores to about one per ten minutes. Where that record says Socket returned no data, the row says so.
+
+## Reviews
+
+| Coordinate | Scope | Socket result | Matrix | Disposition |
+| --- | --- | --- | --- | --- |
+| `org.jetbrains.kotlinx:kotlinx-serialization-json` 1.11.0 and the `org.jetbrains.kotlin.plugin.serialization` 2.4.20 compiler plugin | `:core` ships; plugin build only | Fresh. Package itself 100 in every category, no capabilities, no alerts. Deep over 4 packages: overall 36, supply chain 36, quality 89, others 100; the low scorers are the transitives `kotlin-stdlib` 2.3.20 (medium `networkAccess`, low `filesystemAccess`) and `org.jetbrains:annotations` 13.0 (medium `usesEval`). The plugin has no separate score and tracks the pinned Kotlin version | block_pending_human_review (medium alerts, via stdlib) | **Approved.** JSON decoding is the point of `:core`; nothing in the finding is attributable to the package itself, and stdlib is inseparable from Kotlin |
+| `org.jetbrains.kotlinx:kotlinx-coroutines-core` 1.11.0 | `:core` ships | Fresh. Package itself 100 in every category, no capabilities, no alerts. Deep: overall 36, supply chain 36, quality 89, others 100, again from `kotlin-stdlib` 2.2.20 and `annotations` 23.0.0 (the same medium alerts) | block_pending_human_review | **Approved.** Same basis. Replaces the stale 1.8.1 that androidx.concurrent pulls into androidTest |
+| `org.jetbrains.kotlin:kotlin-stdlib` 2.4.20 (+ `org.jetbrains:annotations` 13.0) | Ships | Carried over: package 100; deep 89 overall; medium `networkAccess` and `usesEval` are standard-library APIs | block_pending_human_review | **Approved.** Inseparable from Kotlin; R8 shrinks it |
+| `org.jetbrains.kotlin:kotlin-gradle-plugin` 2.4.20 (`kotlin.jvm`, `kotlin.plugin.compose`) | Build only | Carried over: package 100; deep over 516 transitives: overall 27, supply chain 27; high `cve` in npm `serialize-javascript` 6.0.2 and `obfuscatedFile` in `commons-io` 2.16.1, mostly the Kotlin/JS npm tree. No compose-plugin score of its own | block | **Approved as build-only tooling.** The npm tree installs only for Kotlin/JS or Wasm targets, which this project does not have. Nothing ships in the APK |
+| `com.android.tools.build:gradle` 9.3.3 (AGP) | Build only | Carried over: no package result (404 / rate limit); its POM depends on `kotlin-gradle-plugin` and `commons-io`, inheriting the alerts above | block_pending_human_review | **Approved as build-only tooling**, same controls |
+| `junit:junit` 4.13.2 (+ `org.hamcrest:hamcrest-core` 1.3) and `org.jetbrains.kotlin:kotlin-test-junit` 2.4.20 | Test only | Carried over: package 100; deep 36 (hamcrest); high `obfuscatedFile` (`MaxHistory.class`, warn in the org policy); EPL-1.0 licence flags | block | **Approved, test only.** Neither the flagged class nor the licence reaches the APK |
+| `androidx.test:runner` 1.7.0, `androidx.test.ext:junit` 1.3.0 | androidTest only | Carried over: no alerts in the repository scan; no per-package deep score (rate limit) | block_pending_human_review (deep score unavailable) | **Approved, androidTest only** |
+| Compose BOM 2026.09.00 with `ui`, `ui-tooling-preview`, `ui-tooling`, `ui-test-junit4`, `ui-test-manifest`, `material3` | UI runtime; tooling and UI-test artifacts only in debug and tests | Carried over: no Socket data at all (404 / no result for the BOM and Material 3); a 334-component candidate graph was resolved but not scored | block_pending_human_review (no evidence) | **Approved despite missing Socket evidence**, matching the 2026-09-28 steamos-companion decision. Group-filtered Google Maven, locks and SHA-256 verification are the compensating controls; revisit when Socket covers Google Maven |
+| `androidx.activity:activity-compose` 1.13.0 | UI runtime | Carried over: rate-limited (429), no score; transitive alerts unknown | block_pending_human_review (no evidence) | **Approved** on the same basis |
+| GitHub Actions `actions/checkout` v7.0.1 (`3d3c42e5aac5ba805825da76410c181273ba90b1`), `actions/setup-java` v6.0.1 (`de7274f081f381c8f8158605e0321c36c376e2e6`) | CI | Not reviewable by package score | block_pending_human_review (tooling unavailable) | **Approved** as first-party actions pinned by commit SHA, `permissions: contents: read`, `persist-credentials: false` |
+
+## Not in the catalog
+
+SSH library, Room, DataStore, Glance, a terminal engine and push libraries stay out until the phase that needs them reviews them here first. Phase 02 owns the SSH library choice.
