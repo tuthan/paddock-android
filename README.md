@@ -6,15 +6,16 @@ Status: Phase 04 implemented (monitor UI): connection ownership, host-key trust,
 
 ## Requirements
 
-- JDK 17 (`mise install` reads `mise.toml`) and the Android SDK with platform 37 and build-tools 36. Set `sdk.dir` in `local.properties` or `ANDROID_HOME`.
+- Temurin JDK 17 (`mise install` reads `mise.toml`; point `JAVA_HOME` at it, since `gradle/gradle-daemon-jvm.properties` requires an Adoptium 17 daemon) and the Android SDK packages `platforms;android-37.0` (revision 2) and `build-tools;36.0.0`, installed with `sdkmanager`: the build never downloads them (`android.builder.sdkDownload=false`). Set `sdk.dir` in `local.properties` or `ANDROID_HOME`.
 - For the tools: `herdr` 0.9.1, `jq`, `python3`.
 
 ## Build and test
 
 ```sh
+tools/check.sh --offline                     # the CI gate: wrapper, SDK revisions, pins, script self-tests, check, unit tests, lint, debug APK
 ./gradlew :core:test :app:assembleDebug      # JVM tests and the debug APK
 ./tools/check-pins.sh                        # installed herdr and the pinned schema and fixtures still agree
-./tools/check-pins.sh --pins-only            # the same hash and coverage rule without herdr (what CI runs)
+./tools/check-pins.sh --pins-only            # the same hash and coverage rule without herdr (part of tools/check.sh)
 ./tools/test-scripts.sh                      # self-tests of the fixture and pin scripts against a fake herdr
 ```
 
