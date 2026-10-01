@@ -19,6 +19,9 @@ import io.github.tuthan.paddock.reconcile.Observation
 import io.github.tuthan.paddock.reconcile.Reconciler
 import io.github.tuthan.paddock.reconcile.SessionMonitor
 import io.github.tuthan.paddock.relay.RelayClient
+import io.github.tuthan.paddock.terminal.ControlHelperPort
+import io.github.tuthan.paddock.terminal.TerminalOptions
+import io.github.tuthan.paddock.terminal.TerminalSession
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.EpochTracker
 import io.github.tuthan.paddock.attention.ObservedAt
@@ -63,6 +66,9 @@ class MonitoredHost(
     private val transformRead: (io.github.tuthan.paddock.herdr.Snapshot) -> io.github.tuthan.paddock.herdr.Snapshot = { it },
     /** Runs before each reconnect of the monitor; the controller re-verifies the relay on the host here. */
     beforeReconnect: suspend () -> Unit = {},
+    /** The host's pinned control helper; null on a build that has none, which leaves terminals observe-only. */
+    private val controlHelper: ControlHelperPort? = null,
+    private val terminalOptions: TerminalOptions = TerminalOptions(),
 ) {
     private val relay = RelayClient(session, relayPath, socketPath)
     private val readSnapshot = SessionMonitor.snapshotReader(relay)
@@ -158,6 +164,7 @@ class MonitoredHost(
 
     /** Stops monitoring. A monitor that was live records the Disconnected that its stale transition would have. */
     fun stop() {
+        closeTerminal()
         jobs.forEach { it.cancel() }; jobs.clear()
         monitor.stop()
         live.value = false
@@ -207,5 +214,25 @@ class MonitoredHost(
     fun outputFeed(terminalId: String): OutputFeed {
         val reader = AgentOutputReader(session, cli)
         return OutputFeed(scope, TargetRef(profile.hostId, sessionName, terminalId), reconciler.installed, reader::read, clock, live = live)
+    }
+
+    private val terminalLock = Any()
+    private var terminal: TerminalSession? = null
+
+    /**
+     * The one terminal session of this host. A host has at most one terminal channel open: asking for another closes the
+     * first (which releases control if it held it), so two screens can never both write to a terminal. The pane is looked
+     * up by terminal id each time a channel opens, so a pane id that moved is followed and a closed pane is reported.
+     */
+    fun terminalSession(terminalId: String): TerminalSession = synchronized(terminalLock) {
+        terminal?.close()
+        TerminalSession(scope, session, cli, { paneOf(terminalId) }, controlHelper, clock, options = terminalOptions).also { terminal = it }
+    }
+
+    /** Closes the terminal session, if any, when its screen is done with it. */
+    fun closeTerminal(which: TerminalSession? = null) = synchronized(terminalLock) {
+        val t = terminal ?: return@synchronized
+        if (which != null && t !== which) { which.close(); return@synchronized }
+        t.close(); terminal = null
     }
 }

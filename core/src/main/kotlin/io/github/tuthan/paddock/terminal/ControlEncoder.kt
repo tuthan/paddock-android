@@ -34,7 +34,10 @@ object ControlEncoder {
         return line(buildJsonObject { put("type", "terminal.scroll"); put("direction", direction.wire); put("lines", lines); put("source", source.wire) })
     }
 
-    /** [column] and [row] address a cell of the controller's viewport. Whether herdr counts from 0 or 1 is not verified. */
+    /**
+     * [column] and [row] address a cell of the controller's viewport. Whether herdr counts from 0 or 1 is not verified.
+     * The installed herdr 0.9.1 rejects `terminal.mouse` (it arrived in 0.9.3), so nothing in the app sends it yet.
+     */
     fun mouse(action: MouseAction, button: MouseButton, column: Int, row: Int, modifiers: Int = 0): ByteArray {
         require(column in 0..MAX_CELL && row in 0..MAX_CELL && modifiers in 0..255) { "mouse arguments out of range" }
         return line(buildJsonObject {

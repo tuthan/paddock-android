@@ -31,6 +31,32 @@ class HerdrCli(private val herdr: String, private val session: String) {
     fun workspaceList() = scoped("workspace", "list")
     fun tabList() = scoped("tab", "list")
     fun paneGet(paneId: String) = scoped("pane", "get", id(paneId))
+    /** `pane process-info`: the shell's pid, whose controlling terminal's size is the pane's real size (see [io.github.tuthan.paddock.terminal.PtyProbe]). */
+    fun paneProcessInfo(paneId: String) = scoped("pane", "process-info", "--pane", id(paneId))
+
+    /**
+     * `terminal session observe`: a read-only stream of frames drawn for a [cols] x [rows] viewport. It owns neither input
+     * nor the terminal's size, so any number can run beside the desktop.
+     */
+    fun terminalObserve(paneId: String, cols: Int, rows: Int): List<String> {
+        requireGeometry(cols, rows)
+        return scoped("terminal", "session", "observe", id(paneId), "--cols", cols.toString(), "--rows", rows.toString())
+    }
+
+    /**
+     * Control runs through `paddock-control.py` ([helperPath], already verified by the caller) so that a phone which loses its
+     * link releases the terminal within [leaseSeconds]; plain `terminal session control` is never started by Paddock. The
+     * helper builds herdr's own command from these arguments and refuses anything else. Attaching sets the terminal's size to
+     * [cols] x [rows]: pass its current size unless the user has agreed to resize it.
+     */
+    fun terminalControl(python: String, helperPath: String, leaseSeconds: Int, paneId: String, cols: Int, rows: Int, takeover: Boolean): List<String> {
+        requireGeometry(cols, rows)
+        require(leaseSeconds in 5..120) { "lease out of range" }
+        require(helperPath.startsWith("/")) { "helper path must be absolute" }
+        return listOf(python, helperPath, leaseSeconds.toString(), herdr, session, id(paneId), cols.toString(), rows.toString()) + if (takeover) listOf("takeover") else emptyList()
+    }
+
+    private fun requireGeometry(cols: Int, rows: Int) = require(io.github.tuthan.paddock.terminal.TerminalLimits.validGeometry(cols, rows)) { "geometry ${cols}x$rows out of range" }
 
     /** `agent read` prints plain text, not the socket's JSON. [lines] is bounded so a caller cannot ask for a transcript. */
     fun agentRead(paneId: String, source: ReadSource, lines: Int = 40, ansi: Boolean = false): List<String> {

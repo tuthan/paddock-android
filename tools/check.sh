@@ -2,7 +2,7 @@
 # The CI gate, runnable locally: .github/workflows/build.yml installs the JDK and the SDK packages, then runs exactly this.
 #   tools/check.sh [extra gradle args, e.g. --offline]
 # Stages: wrapper jar hash, SDK packages at the recorded revisions, protocol and fixture pins, self-tests of the fixture
-# and pin scripts, then :core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:compileDebugAndroidTestKotlin. Needs no herdr, adb or
+# and pin scripts, the host control helper self-test, then :core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:compileDebugAndroidTestKotlin. Needs no herdr, adb or
 # emulator. PADDOCK_TEST_SOCKET is removed from the environment so the integration tests skip here as they do in CI.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,6 +33,9 @@ tools/check-pins.sh --pins-only
 stage "Fixture and pin script self-tests"
 tools/test-scripts.sh
 tools/validate-fixtures.sh --self-test
+
+stage "Host control helper self-test (fake herdr, about 40 seconds)"
+python3 tools/test-control-script.py
 
 stage "Gradle: :core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:compileDebugAndroidTestKotlin"
 env -u PADDOCK_TEST_SOCKET ./gradlew --no-daemon --stacktrace "$@" :core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:compileDebugAndroidTestKotlin

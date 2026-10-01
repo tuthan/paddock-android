@@ -17,6 +17,7 @@ import io.github.tuthan.paddock.ports.SshSession
 import io.github.tuthan.paddock.relay.RelayInstaller
 import io.github.tuthan.paddock.relay.RelayRefused
 import io.github.tuthan.paddock.relay.RelayState
+import io.github.tuthan.paddock.terminal.SshControlHelper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -78,6 +79,9 @@ class HostSessionController(
     private val sessionName: String? = null,
     /** Absolute path of herdr on the host, or null to look in the usual places. */
     private val herdr: String? = null,
+    /** The pinned `paddock-control.py` and its hash; null leaves terminals observe-only. Installed only when the user asks for control. */
+    private val controlScript: ByteArray? = null,
+    private val controlSha256: String? = null,
 ) {
     private val _phase = MutableStateFlow<HostPhase>(HostPhase.Connecting)
     val phase: StateFlow<HostPhase> = _phase.asStateFlow()
@@ -203,6 +207,7 @@ class HostSessionController(
         val host = MonitoredHost(
             scope, profile, chosen.name, session, path, chosen.socketPath, ledger, clock, foreground, herdr,
             beforeReconnect = { installer.verifiedPath(home) },
+            controlHelper = controlScript?.let { SshControlHelper(RelayInstaller(session, it, controlSha256!!, fileName = "paddock-control.py")) },
         )
         synchronized(lock) {
             if (stopped) return

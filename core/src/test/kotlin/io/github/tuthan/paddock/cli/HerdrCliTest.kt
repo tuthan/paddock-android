@@ -27,6 +27,26 @@ class HerdrCliTest {
         assertEquals(listOf("/usr/bin/herdr", "session", "list", "--json"), cli.sessionList())
     }
 
+    @Test fun theTerminalBuildersCarryThePaneAndTheGeometryAndNothingElse() {
+        assertEquals(listOf("/usr/bin/herdr", "--session", "paddock-test", "pane", "process-info", "--pane", "w2:p1"), cli.paneProcessInfo("w2:p1"))
+        assertEquals(listOf("/usr/bin/herdr", "--session", "paddock-test", "terminal", "session", "observe", "w2:p1", "--cols", "60", "--rows", "20"), cli.terminalObserve("w2:p1", 60, 20))
+        val control = cli.terminalControl("python3", "/home/u/.local/share/paddock/paddock-control.py", 15, "w2:p1", 60, 20, takeover = false)
+        assertEquals(listOf("python3", "/home/u/.local/share/paddock/paddock-control.py", "15", "/usr/bin/herdr", "paddock-test", "w2:p1", "60", "20"), control)
+        assertEquals(control + "takeover", cli.terminalControl("python3", "/home/u/.local/share/paddock/paddock-control.py", 15, "w2:p1", 60, 20, takeover = true))
+        for (argv in listOf(cli.terminalObserve("w2:p1", 60, 20), control)) argvToCommand(argv)
+    }
+
+    @Test fun terminalBuildersRefuseWhatTheHelperOrHerdrWouldRefuse() {
+        for ((c, r) in listOf(0 to 20, 60 to 0, 1001 to 20, 60 to 501, -1 to 5)) {
+            assertFailsWith<IllegalArgumentException> { cli.terminalObserve("w2:p1", c, r) }
+            assertFailsWith<IllegalArgumentException> { cli.terminalControl("python3", "/x/paddock-control.py", 15, "w2:p1", c, r, false) }
+        }
+        for (lease in listOf(0, 4, 121)) assertFailsWith<IllegalArgumentException> { cli.terminalControl("python3", "/x/paddock-control.py", lease, "w2:p1", 60, 20, false) }
+        assertFailsWith<IllegalArgumentException> { cli.terminalControl("python3", "relative/paddock-control.py", 15, "w2:p1", 60, 20, false) }
+        assertFailsWith<IllegalArgumentException> { cli.terminalObserve("--takeover", 60, 20) }
+        assertFailsWith<IllegalArgumentException> { cli.terminalControl("python3", "/x/paddock-control.py", 15, "w2:p1; id", 60, 20, false) }
+    }
+
     @Test fun everyBuiltCommandSurvivesQuotingUnchanged() {
         for (argv in listOf(cli.status(), cli.agentGet("w2:p1"), cli.agentRead("w2:p1", ReadSource.Recent, 40))) argvToCommand(argv)
     }
