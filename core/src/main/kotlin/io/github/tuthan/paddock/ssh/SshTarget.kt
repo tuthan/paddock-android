@@ -29,8 +29,11 @@ sealed class ConnectFailure(message: String, val reason: DownReason, cause: Thro
 /** The link is not Up (never connected, lost, or closed); nothing was sent. */
 class SessionDown(val reason: DownReason) : java.io.IOException("session is down: $reason")
 
-/** A command ran past its deadline; the channel was closed. */
+/** A command ran past its deadline (opening the channel included); the channel was closed, the remote process was not signalled. */
 class ExecTimedOut(argv: List<String>) : Exception("command timed out: ${argv.firstOrNull() ?: "<empty>"}")
+
+/** Every channel slot on the session stayed taken for [waitedMillis]; nothing was sent. Usually a caller that never closes its streams. */
+class ChannelsBusy(slots: Int, val waitedMillis: Long) : java.io.IOException("all $slots SSH channels stayed busy for $waitedMillis ms")
 
 /** Asked before any socket opens. Returns null to allow, or the reason to refuse. */
 fun interface ConnectGate {

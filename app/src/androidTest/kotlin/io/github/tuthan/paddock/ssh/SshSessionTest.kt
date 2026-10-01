@@ -15,9 +15,13 @@ import java.net.Socket
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -57,8 +61,11 @@ class SshSessionTest {
 
     private suspend fun session(
         port: Int = this.port, gate: ConnectGate = ConnectGate.Open, keepalive: kotlin.time.Duration = 15.seconds, auth: SshAuth = phoneAuth(),
-    ): SshSession = SshlibConnector(policy, clock, gate, keepalive = keepalive)
+        channelWait: kotlin.time.Duration = 30.seconds,
+    ): SshSession = SshlibConnector(policy, clock, gate, keepalive = keepalive, channelWait = channelWait)
         .connect(target(port), auth) { true }.also { opened += it }
+
+    private fun msSince(t0: Long) = (System.nanoTime() - t0) / 1_000_000
 
     /** Step 0 of the script: mint the phone key and write the public line for the host to authorize. */
     @Test
@@ -137,13 +144,91 @@ class SshSessionTest {
         note("T queue20 in $ms ms")
     }
 
+    /** The deadline ends the call and closes the channel. It does not kill `sleep` on the host: there is no pty and no signal. */
     @Test
-    fun aCommandPastItsDeadlineIsKilledAndTheSessionSurvives() = runBlocking<Unit> {
+    fun aCommandPastItsDeadlineFailsOnTimeAndTheSessionSurvives() = runBlocking<Unit> {
         val s = session(); val t0 = System.nanoTime()
         try { s.exec(listOf("sleep", "30"), limits = ExecLimits(deadline = 2.seconds)); fail("no timeout") } catch (_: ExecTimedOut) { }
         val ms = (System.nanoTime() - t0) / 1_000_000
         assertTrue("timeout took $ms ms", ms in 1_800..5_000)
         assertEquals("alive\n", String(s.exec(listOf("echo", "alive")).stdout))
+    }
+
+    /** With the link stalled the channel never opens; the deadline still ends the call, because it covers opening. */
+    @Test
+    fun theDeadlineCoversOpeningTheChannel() = runBlocking<Unit> {
+        val s = session(port = proxyPort)
+        assertEquals("up\n", String(s.exec(listOf("echo", "up")).stdout))
+        control("freeze")
+        try {
+            val t0 = System.nanoTime()
+            try { s.exec(listOf("echo", "late"), limits = ExecLimits(deadline = 2.seconds)); fail("no timeout") } catch (_: ExecTimedOut) { }
+            val ms = msSince(t0)
+            note("T deadline with a stalled open after $ms ms")
+            assertTrue("timeout took $ms ms", ms in 1_800..4_000)
+        } finally { control("thaw") }
+    }
+
+    // ---- streams: cancellation is prompt and closing frees the slot ------------------------------------------
+
+    @Test
+    fun cancellingTheCollectorOfASilentStreamReturnsAtOnce() = runBlocking<Unit> {
+        val ch = session().openStream(listOf("sleep", "60"))
+        try {
+            val collector = launch(Dispatchers.Default) { ch.stdout.collect { } }
+            delay(300)
+            val t0 = System.nanoTime(); collector.cancelAndJoin(); val ms = msSince(t0)
+            note("T silent stream collector cancelled in $ms ms")
+            assertTrue("cancel took $ms ms", ms < 1_000)
+        } finally {
+            val t0 = System.nanoTime(); ch.close()
+            assertTrue("close took ${msSince(t0)} ms", msSince(t0) < 1_000)
+        }
+    }
+
+    /**
+     * More streams than slots, one after another: each is collected, cancelled and closed. A slot that stayed taken would make
+     * the ninth open fail with ChannelsBusy after the 3 s wait. `cat` stands in for a silent subscription; it ends on the host
+     * when the channel closes (`sleep 60` would not, and would hold one of sshd's ten sessions for a minute).
+     */
+    @Test
+    fun closingAStreamReleasesItsSlotEveryTime() = runBlocking<Unit> {
+        val s = session(channelWait = 3.seconds); val t0 = System.nanoTime()
+        repeat(SshlibSession.MAX_CHANNELS + 4) { n ->
+            val ch = s.openStream(listOf("cat"))
+            try {
+                val collector = launch(Dispatchers.Default) { ch.stdout.collect { } }
+                delay(50)
+                val c0 = System.nanoTime(); collector.cancelAndJoin()
+                assertTrue("cancel $n took ${msSince(c0)} ms", msSince(c0) < 1_000)
+            } finally { ch.close() }
+        }
+        note("T ${SshlibSession.MAX_CHANNELS + 4} streams opened, cancelled and closed in ${msSince(t0)} ms")
+        assertEquals("still\n", String(s.exec(listOf("echo", "still")).stdout))
+    }
+
+    @Test
+    fun aTimeoutAroundTheFirstLineOfASilentStreamFiresOnTime() = runBlocking<Unit> {
+        val ch = session().openStream(listOf("cat"))
+        try {
+            val t0 = System.nanoTime()
+            try { withTimeout(1.seconds) { ch.stdout.first() }; fail("a silent stream produced output") } catch (_: kotlinx.coroutines.TimeoutCancellationException) { }
+            val ms = msSince(t0)
+            note("T withTimeout(1 s) on a silent stream fired after $ms ms")
+            assertTrue("timeout took $ms ms", ms in 900..1_800)
+        } finally { ch.close() }
+    }
+
+    @Test
+    fun streamsLeftOpenRunOutOfSlotsWithAClearErrorNotAHang() = runBlocking<Unit> {
+        val s = session(channelWait = 2.seconds)
+        val held = (1..SshlibSession.MAX_CHANNELS).map { s.openStream(listOf("cat")) }
+        try {
+            val t0 = System.nanoTime()
+            try { s.openStream(listOf("cat")).close(); fail("a ninth channel opened") } catch (e: ChannelsBusy) { note("T ninth stream: ${e.message} after ${msSince(t0)} ms") }
+            assertTrue("waited ${msSince(t0)} ms", msSince(t0) in 1_800..4_000)
+        } finally { held.forEach { it.close() } }
+        assertEquals("freed\n", String(s.exec(listOf("echo", "freed")).stdout))
     }
 
     @Test
