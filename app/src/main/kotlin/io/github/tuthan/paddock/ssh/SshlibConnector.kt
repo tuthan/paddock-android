@@ -106,7 +106,8 @@ class SshlibConnector(
         val importedPair = (auth as? SshAuth.Imported)?.let {
             try { ImportedKey.keyPair(it.pem, it.passphrase) }
             catch (e: InvalidImportedKey) { throw ConnectFailure.BadKey(e.check.toString()) }
-            catch (e: IOException) { throw ConnectFailure.BadKey(e.message ?: "unreadable key") }
+            // sshlib's decoder also throws unchecked exceptions on input it cannot handle.
+            catch (e: Exception) { throw ConnectFailure.BadKey(e.message ?: e.javaClass.simpleName) }
             finally { it.pem.fill('\u0000') }
         }
         val pin = try { hostKeys.pinFor(target.profileId) } catch (e: IOException) { throw ConnectFailure.HostKeysUnreadable(e) }
