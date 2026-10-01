@@ -101,6 +101,9 @@ class SshlibConnector(
         val ms = connectTimeout.inWholeMilliseconds.toInt()
         try {
             withContext(Dispatchers.IO) { connection.connect(verifier, ms, ms) }
+        } catch (e: CancellationException) {
+            // The blocking connect runs to completion even when cancelled, so the socket may be open: close it.
+            runCatching { connection.close() }; tracker.down(DownReason.Closed); throw e
         } catch (e: IOException) {
             runCatching { connection.close() }
             val f = failure ?: classify(e)
@@ -110,6 +113,8 @@ class SshlibConnector(
         try {
             val ok = withContext(Dispatchers.IO) { authenticate(connection, target.user, auth, importedPair) }
             if (!ok) throw ConnectFailure.AuthFailed()
+        } catch (e: CancellationException) {
+            runCatching { connection.close() }; tracker.down(DownReason.Closed); throw e
         } catch (e: ConnectFailure) {
             runCatching { connection.close() }; tracker.down(e.reason); throw e
         } catch (e: IOException) {

@@ -1,0 +1,50 @@
+package io.github.tuthan.paddock.lifecycle
+
+import android.app.Activity
+import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.os.Bundle
+
+/**
+ * Maps two platform signals onto [ConnectionOwner]: the app becoming visible (any activity started after none were)
+ * and the default network changing. Leases, not this class, decide which connections exist; this only nudges them.
+ */
+class AndroidTriggers(private val app: Application, private val owner: ConnectionOwner) {
+    private var started = 0
+    private var current: Network? = null
+    private var seen = false
+
+    private val activities = object : Application.ActivityLifecycleCallbacks {
+        override fun onActivityStarted(activity: Activity) { if (started++ == 0) owner.refreshAll() }
+        override fun onActivityStopped(activity: Activity) { started = maxOf(0, started - 1) }
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+        override fun onActivityResumed(activity: Activity) = Unit
+        override fun onActivityPaused(activity: Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+        override fun onActivityDestroyed(activity: Activity) = Unit
+    }
+
+    private val network = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            // The first callback only reports the network that is already there. After that, a different network, or the
+            // same one back after a loss, means sockets opened earlier may be dead.
+            val changed = seen && network != current
+            current = network; seen = true
+            if (changed) owner.onNetworkChanged()
+        }
+
+        override fun onLost(network: Network) { if (network == current) current = null }
+    }
+
+    fun install() {
+        app.registerActivityLifecycleCallbacks(activities)
+        (app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).registerDefaultNetworkCallback(network)
+    }
+
+    fun uninstall() {
+        app.unregisterActivityLifecycleCallbacks(activities)
+        runCatching { (app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(network) }
+    }
+}

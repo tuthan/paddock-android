@@ -3,6 +3,9 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- A normal permission: lets ConnectionOwner notice a default-network change and replace a dead socket. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Android 17 (target 37) gates LAN sockets behind this grant. Phase 02 requests and recovers it. -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
