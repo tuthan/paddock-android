@@ -10,8 +10,12 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -36,6 +40,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import io.github.tuthan.paddock.live.BlockedPreview
+import io.github.tuthan.paddock.live.PreviewState
+import io.github.tuthan.paddock.output.Ansi
 
 /** Compose UI tests from fixture states (Phase 04 slice 3). Screenshots land in the app's external files for evidence. */
 class HerdHomeTest {
@@ -66,12 +73,15 @@ class HerdHomeTest {
     }
 
     /** [tall] lays the list out in a viewport taller than any phone, so every row is composed even on a 360 x 640 dp screen. */
-    private fun show(state: HomeUiState, dark: Boolean = true, fontScale: Float? = null, tall: Boolean = false, onOpen: (String) -> Unit = {}) = rule.setContent {
+    private fun show(
+        state: HomeUiState, dark: Boolean = true, fontScale: Float? = null, tall: Boolean = false, onOpen: (String) -> Unit = {},
+        preview: BlockedPreview? = null, onReview: (String) -> Unit = {},
+    ) = rule.setContent {
         val base = LocalDensity.current
         CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
             PaddockTheme(darkTheme = dark) {
-                if (tall) androidx.compose.foundation.layout.Box(Modifier.requiredHeight3000()) { HerdHome(state, now, onOpenAgent = onOpen) }
-                else HerdHome(state, now, onOpenAgent = onOpen)
+                if (tall) androidx.compose.foundation.layout.Box(Modifier.requiredHeight3000()) { HerdHome(state, now, onOpenAgent = onOpen, preview = preview, onReview = onReview) }
+                else HerdHome(state, now, onOpenAgent = onOpen, preview = preview, onReview = onReview)
             }
         }
     }
@@ -164,5 +174,76 @@ class HerdHomeTest {
         show(live(busy), dark = false)
         rule.onNodeWithText("NEEDS YOU").assertIsDisplayed()
         shoot("home-busy-light-100")
+    }
+
+    // ---- the expanded first blocked row ----
+
+    private val prompt = BlockedPreview("term_w1:p2", 9, PreviewState.Showing(Ansi.parse("Allow edit to build.gradle?\n  1. Yes\n  2. No"), now - 1_000))
+
+    @Test fun theFirstBlockedRowShowsItsCapturedPromptInASlabWithAReviewAction() {
+        var reviewed: String? = null
+        show(live(busy), preview = prompt, onReview = { reviewed = it })
+        byDesc("Captured prompt: Allow edit to build.gradle?. 1. Yes. 2. No").assertIsDisplayed()
+        rule.onNodeWithText("What it is asking".uppercase()).assertIsDisplayed()
+        rule.onNodeWithText("Review prompt").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals("w1:p2", reviewed)
+        shoot("home-expanded-blocked")
+    }
+
+    @Test fun theHeaderOfTheExpandedRowStillReadsStateTitleContextAndOpensTheAgent() {
+        var opened: String? = null
+        show(live(busy), preview = prompt, onOpen = { opened = it })
+        byDesc("Blocked, approve edit to build.gradle, api, observed 40 s ago").assertHasClickAction().performClick()
+        assertEquals("w1:p2", opened)
+    }
+
+    @Test fun onlyTheFirstBlockedRowIsExpandedTheRestStayCompact() {
+        val two = home(
+            agent("w1:p2", AgentStatus.Blocked, 9, "approve edit to build.gradle", "/home/u/api"),
+            agent("w1:p6", AgentStatus.Blocked, 4, "run the migration", "/home/u/db"),
+        )
+        show(live(two), preview = prompt, tall = true)
+        assertEquals(1, rule.onAllNodesWithText("Review prompt").fetchSemanticsNodes().size)
+        byDesc("Blocked, run the migration, db, observed 40 s ago").assertHasClickAction()
+    }
+
+    @Test fun aPreviewForAnotherTerminalNeverExpandsThisRow() {
+        show(live(busy), preview = prompt.copy(terminalId = "term_other"))
+        assertEquals(0, rule.onAllNodesWithText("Review prompt").fetchSemanticsNodes().size)
+    }
+
+    @Test fun whileReadingAndWhenItFailsTheSlabSaysSoAndReviewStillOpens() {
+        show(live(busy), preview = prompt.copy(state = PreviewState.Loading))
+        rule.onNodeWithText("Reading the prompt…").assertIsDisplayed()
+    }
+
+    @Test fun anUnreadablePromptIsSaidPlainly() {
+        show(live(busy), preview = prompt.copy(state = PreviewState.Unavailable))
+        rule.onNodeWithText("The prompt could not be read. Review prompt opens the output.").assertIsDisplayed()
+        rule.onNodeWithText("Review prompt").assertIsDisplayed()
+    }
+
+    @Test fun anEmptyCaptureIsSaidPlainly() {
+        show(live(busy), preview = prompt.copy(state = PreviewState.Showing(emptyList(), now)))
+        rule.onNodeWithText("Nothing was captured. Review prompt opens the output.").assertIsDisplayed()
+    }
+
+    @Test fun aDegradedHostNeverExpandsAndOffersNoReviewAction() {
+        show(HomeUiState.Degraded("laptop", busy, "herdr is not answering on laptop", 125_000, recoveryLabel = "Retry"), preview = prompt)
+        assertEquals(0, rule.onAllNodesWithText("Review prompt").fetchSemanticsNodes().size)
+    }
+
+    @Test fun escapeSequencesInThePromptNeverReachTheScreen() {
+        val esc = "\u001B"
+        val hostile = BlockedPreview("term_w1:p2", 9, PreviewState.Showing(Ansi.parse("ok${esc}]52;c;aGk=\u0007 ${esc}[2Jchoose"), now))
+        show(live(busy), preview = hostile)
+        byDesc("Captured prompt: ok choose").assertIsDisplayed()
+    }
+
+    @Test fun theExpandedRowIsReachableAtTwoHundredPercentFont() {
+        show(live(busy), preview = prompt, fontScale = 2f)
+        rule.onNode(hasScrollAction()).performScrollToNode(hasText("Review prompt"))
+        rule.onNodeWithText("Review prompt").assertIsDisplayed()
+        shoot("home-expanded-blocked-200")
     }
 }

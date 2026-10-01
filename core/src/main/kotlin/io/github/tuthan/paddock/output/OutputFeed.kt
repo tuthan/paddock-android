@@ -42,10 +42,15 @@ sealed interface OutputState {
     data class Unavailable(val message: String) : OutputState
 }
 
-/** Runs `agent read --source recent-unwrapped --lines N --format ansi` over [session] and classifies the answer. */
-class AgentOutputReader(private val session: SshSession, private val cli: HerdrCli, private val lines: Int = OutputFeed.LINES) {
+/** Runs `agent read --source <source> --lines N --format ansi` over [session] (recent-unwrapped by default) and classifies the answer. */
+class AgentOutputReader(
+    private val session: SshSession,
+    private val cli: HerdrCli,
+    private val lines: Int = OutputFeed.LINES,
+    private val source: ReadSource = ReadSource.RecentUnwrapped,
+) {
     suspend fun read(paneId: String): OutputRead {
-        val result = session.exec(cli.agentRead(paneId, ReadSource.RecentUnwrapped, lines, ansi = true), limits = ExecLimits.default)
+        val result = session.exec(cli.agentRead(paneId, source, lines, ansi = true), limits = ExecLimits.default)
         return when (val outcome = CliResult.classify(result)) {
             is CliOutcome.Ok -> OutputRead.Text(outcome.stdout)
             is CliOutcome.Failure ->

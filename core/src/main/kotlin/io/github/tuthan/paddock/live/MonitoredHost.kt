@@ -7,7 +7,10 @@ import io.github.tuthan.paddock.cli.HerdrCli
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.ledger.Ledger
 import io.github.tuthan.paddock.ledger.ObservationKind
+import io.github.tuthan.paddock.cli.ReadSource
+import io.github.tuthan.paddock.output.Ansi
 import io.github.tuthan.paddock.output.AgentOutputReader
+import io.github.tuthan.paddock.output.OutputRead
 import io.github.tuthan.paddock.output.OutputFeed
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.SshSession
@@ -22,7 +25,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -72,8 +78,26 @@ class MonitoredHost(
         }
     }.stateIn(scope, SharingStarted.Eagerly, null)
 
+    private val _blockedPreview = MutableStateFlow<BlockedPreview?>(null)
+
+    /**
+     * The captured prompt of the first blocked agent in the home order, read once when that agent (or its state change)
+     * first appears and again on [refreshPreview]. Null when nothing is blocked. Never polled and never stored.
+     */
+    val blockedPreview: StateFlow<BlockedPreview?> = _blockedPreview.asStateFlow()
+
+    private val promptReader by lazy { AgentOutputReader(session, cli, lines = 12, source = ReadSource.Detection) }
+    @Volatile private var previewJob: Job? = null
+
+    private data class Key(val terminalId: String, val seq: Long?)
+
     fun start() {
         monitor.start()
+        jobs += scope.launch {
+            home.map { h -> h?.rows?.firstOrNull { it.state == io.github.tuthan.paddock.attention.StateWord.Blocked }?.let { Key(it.key.target.terminalId, it.stateChangeSeq) } }
+                .distinctUntilChanged()
+                .collectLatest { key -> if (key == null) _blockedPreview.value = null else loadPreview(key) }
+        }
         jobs += scope.launch { reconciler.observations.collect { record(it) } }
         jobs += scope.launch {
             var wasLive = false
@@ -101,6 +125,25 @@ class MonitoredHost(
         val seq = row.stateChangeSeq ?: return
         ledger.markSeen(row.key, seq)
         seenVersion.value++
+    }
+
+    private suspend fun loadPreview(key: Key) {
+        _blockedPreview.value = BlockedPreview(key.terminalId, key.seq, PreviewState.Loading)
+        val pane = reconciler.installed.value?.snapshot?.panes?.firstOrNull { it.terminalId == key.terminalId }
+        val state = if (pane == null) PreviewState.Unavailable else try {
+            when (val r = promptReader.read(pane.paneId)) {
+                is OutputRead.Text -> PreviewState.Showing(PreviewText.trim(Ansi.parse(r.text, maxLines = 40)), clock.nowMillis())
+                else -> PreviewState.Unavailable
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) { PreviewState.Unavailable }
+        _blockedPreview.value = BlockedPreview(key.terminalId, key.seq, state)
+    }
+
+    /** Reads the prompt again for the current first blocked agent, for a Review prompt tap. */
+    fun refreshPreview() {
+        val current = _blockedPreview.value ?: return
+        previewJob?.cancel()
+        previewJob = scope.launch { loadPreview(Key(current.terminalId, current.stateChangeSeq)) }
     }
 
     /** A feed for one terminal; the caller starts it, drives visibility and stops it. */

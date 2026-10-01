@@ -50,6 +50,7 @@ import io.github.tuthan.paddock.ledger.ActivityFilter
 import io.github.tuthan.paddock.ledger.ActivityPresenter
 import io.github.tuthan.paddock.ledger.Activity
 import io.github.tuthan.paddock.live.HostPhase
+import io.github.tuthan.paddock.live.PreviewState
 import io.github.tuthan.paddock.net.LocalNetworkPolicy
 import io.github.tuthan.paddock.output.OutputState
 import io.github.tuthan.paddock.ui.components.FingerprintDialog
@@ -124,6 +125,10 @@ private fun HomeRoute(
     val name = profile?.name ?: "this machine"
     val screen = HomeUiMapper.map(name, view, now)
     val ctx = LocalContext.current
+    // The captured prompt is agent output, so while it is on Home the window is protected like Output is.
+    val settings by graph.settings.collectAsState()
+    val promptShown = (screen.state as? HomeUiState.Live)?.model?.rows?.any { it.key.target.terminalId == view.blockedPreview?.terminalId } == true && view.blockedPreview?.state is PreviewState.Showing
+    SecureWindow(settings.protectSensitiveScreens && promptShown)
 
     val prompt = screen.relayPrompt
     if (prompt != null && !relayDismissed) {
@@ -138,7 +143,14 @@ private fun HomeRoute(
         }
         Box(Modifier.weight(1f)) {
             HerdHome(
-                screen.state, now,
+                screen.state, now, preview = view.blockedPreview,
+                onReview = { paneId ->
+                    // Review prompt: read the prompt again, then open the output for that agent (the Phase 05 terminal replaces this later).
+                    val rows = (screen.state as? HomeUiState.Live)?.model?.rows.orEmpty()
+                    val row = rows.firstOrNull { it.paneId == paneId } ?: return@HerdHome
+                    (view.phase as? HostPhase.Monitoring)?.host?.refreshPreview()
+                    onOpen(row.key.target.terminalId)
+                },
                 onOpenAgent = { paneId ->
                     val rows = (screen.state as? HomeUiState.Live)?.model?.rows ?: (screen.state as? HomeUiState.Degraded)?.model?.rows.orEmpty()
                     val row = rows.firstOrNull { it.paneId == paneId } ?: return@HerdHome

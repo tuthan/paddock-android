@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.attention.AgeText
 import io.github.tuthan.paddock.attention.AgentRowModel
 import io.github.tuthan.paddock.attention.StateWord
+import io.github.tuthan.paddock.live.PreviewState
 import io.github.tuthan.paddock.ui.theme.PaddockColors
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 
@@ -100,6 +101,56 @@ fun AgentRow(model: AgentRowModel, nowMillis: Long, enabled: Boolean, modifier: 
             listOf(model.context.ifEmpty { null }, observed).filterNotNull().joinToString(" · "),
             style = PaddockTokens.type.secondary, color = c.dim, maxLines = 2, overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+/**
+ * The first blocked agent, expanded: who it is, the captured prompt in a slab, and a Review prompt action. The prompt is
+ * the last lines of herdr's detection text for that pane, shown as plain text through the same stripping as Output; when
+ * it cannot be read the row says so and the action still opens the output, which reads again on open. Only an enabled
+ * (live) row is ever expanded: a degraded host shows its rows compact, dimmed and without actions.
+ */
+@Composable
+fun ExpandedAgentRow(model: AgentRowModel, nowMillis: Long, preview: PreviewState, onOpen: () -> Unit, onReview: () -> Unit, modifier: Modifier = Modifier) {
+    val c = PaddockTokens.colors
+    val observed = AgeText.observed(nowMillis - model.observedAtMillis)
+    val description = listOf(model.state.word, model.title, model.context.ifEmpty { null }, observed).filterNotNull().joinToString(", ")
+    val shape = RoundedCornerShape(PaddockTokens.radii.row)
+    Column(
+        modifier.fillMaxWidth().background(c.surface, shape).border(1.dp, c.washBorder(c.needsYou), shape).padding(PaddockTokens.spacing.cardPadding),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(
+            Modifier.fillMaxWidth()
+                .clickable(role = Role.Button, onClickLabel = "Open ${model.title}", onClick = onOpen).minimumInteractiveComponentSize()
+                .semantics(mergeDescendants = true) { contentDescription = description },
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            StateWord(model.state)
+            Text(model.title, style = PaddockTokens.type.rowTitle, color = c.title, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            Text(
+                listOf(model.context.ifEmpty { null }, observed).filterNotNull().joinToString(" · "),
+                style = PaddockTokens.type.secondary, color = c.dim, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Kicker("What it is asking")
+        Column(
+            Modifier.fillMaxWidth().background(c.slab, RoundedCornerShape(PaddockTokens.radii.key)).padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            when (preview) {
+                PreviewState.Loading -> Text("Reading the prompt…", style = PaddockTokens.type.secondary, color = c.dim)
+                PreviewState.Unavailable -> Text("The prompt could not be read. Review prompt opens the output.", style = PaddockTokens.type.secondary, color = c.dim)
+                is PreviewState.Showing ->
+                    if (preview.lines.isEmpty()) Text("Nothing was captured. Review prompt opens the output.", style = PaddockTokens.type.secondary, color = c.dim)
+                    else Column(
+                        Modifier.semantics(mergeDescendants = true) { contentDescription = "Captured prompt: " + preview.lines.joinToString(". ") { it.text.trim() }.trim() },
+                    ) {
+                        preview.lines.forEach { line -> Text(ansiLineToText(line, c), style = PaddockTokens.type.monoFact, color = c.text) }
+                    }
+            }
+        }
+        PaddockButton("Review prompt", onReview, kind = ButtonKind.Quiet)
     }
 }
 

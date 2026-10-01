@@ -15,6 +15,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.attention.AgeText
 import io.github.tuthan.paddock.attention.HomeModel
+import io.github.tuthan.paddock.attention.StateWord
+import io.github.tuthan.paddock.live.BlockedPreview
+import io.github.tuthan.paddock.ui.components.ExpandedAgentRow
 import io.github.tuthan.paddock.ui.components.AgentRow
 import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.HerdSummary
@@ -53,9 +56,13 @@ fun HerdHome(
     modifier: Modifier = Modifier,
     onOpenAgent: (paneId: String) -> Unit = {},
     onRecovery: () -> Unit = {},
+    /** The captured prompt of the first blocked agent, when one was read. Only a live host expands that row. */
+    preview: BlockedPreview? = null,
+    onReview: (paneId: String) -> Unit = {},
 ) {
     val model = when (state) { is HomeUiState.Live -> state.model; is HomeUiState.Degraded -> state.model; is HomeUiState.Loading -> null }
     val enabled = state is HomeUiState.Live
+    val firstBlockedId = model?.rows?.firstOrNull { it.state == StateWord.Blocked }?.key?.target?.terminalId
     val chipStatus = when (state) {
         is HomeUiState.Loading -> "connecting"
         is HomeUiState.Live -> "live · " + AgeText.span(state.ageMillis).replace(" ago", "")
@@ -83,7 +90,9 @@ fun HerdHome(
         model?.sections?.forEach { (section, rows) ->
             item(key = "h-${section.name}") { Kicker(section.heading, Modifier.padding(top = 6.dp)) }
             items(rows, key = { it.key.target.terminalId }) { row ->
-                AgentRow(row, nowMillis, enabled = enabled, onClick = { onOpenAgent(row.paneId) })
+                if (enabled && preview != null && row.state == StateWord.Blocked && row.key.target.terminalId == preview.terminalId && row.key.target.terminalId == firstBlockedId) {
+                    ExpandedAgentRow(row, nowMillis, preview.state, onOpen = { onOpenAgent(row.paneId) }, onReview = { onReview(row.paneId) })
+                } else AgentRow(row, nowMillis, enabled = enabled, onClick = { onOpenAgent(row.paneId) })
             }
         }
         item(key = "end") { Spacer(Modifier.height(24.dp)) }

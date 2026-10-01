@@ -1,6 +1,7 @@
 package io.github.tuthan.paddock.host
 
 import io.github.tuthan.paddock.attention.HomeModel
+import io.github.tuthan.paddock.live.BlockedPreview
 import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.ports.DownReason
 import io.github.tuthan.paddock.reconcile.Freshness
@@ -13,6 +14,7 @@ data class HostView(
     val freshness: Freshness? = null,
     val lastHome: HomeModel? = null,
     val lastReadAtMillis: Long? = null,
+    val blockedPreview: BlockedPreview? = null,
 )
 
 /** What tapping the degraded banner's action does. */

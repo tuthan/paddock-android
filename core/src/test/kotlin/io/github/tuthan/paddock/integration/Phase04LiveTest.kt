@@ -176,4 +176,29 @@ class Phase04LiveTest {
         assertTrue(ledger.observations().all { o -> o.detail.length <= 40 && "paddock" !in o.detail }, "details are state words only")
         h.stop()
     }
+
+    // ---- the captured prompt of the first blocked agent ---------------------------------------------------------
+
+    @Test fun theFirstBlockedAgentGetsItsCapturedPromptReadOnceAndNothingElseDoes() = runBlocking<Unit> {
+        val h = host()
+        val marker = "paddock-prompt-${System.nanoTime()}"
+        env.runInPane(base, "echo $marker")
+        env.reportAgent(base, "working")
+        until("base is an agent") { h.home.value?.rows?.any { it.paneId == base } == true }
+        assertEquals(null, h.blockedPreview.value, "a working agent has no preview")
+
+        env.reportAgent(base, "blocked")
+        until("a captured prompt", 12_000) { (h.blockedPreview.value?.state as? io.github.tuthan.paddock.live.PreviewState.Showing) != null }
+        val p = h.blockedPreview.value!!
+        val shown = (p.state as io.github.tuthan.paddock.live.PreviewState.Showing).lines
+        assertEquals(h.home.value!!.rows.first { it.paneId == base }.key.target.terminalId, p.terminalId)
+        assertTrue(shown.size <= io.github.tuthan.paddock.live.PreviewText.MAX_LINES, "bounded to the last lines")
+        assertTrue(shown.any { marker in it.text }, "carries the pane's own detection text: ${shown.map { it.text }}")
+        assertTrue(shown.all { l -> l.text.none { it < ' ' } }, "no control characters reach the row")
+
+        // Back to working: the preview goes away rather than lingering under a state that no longer asks anything.
+        env.reportAgent(base, "working")
+        until("the preview to clear") { h.blockedPreview.value == null }
+        h.stop()
+    }
 }
