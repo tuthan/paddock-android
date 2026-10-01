@@ -1,0 +1,7 @@
+{
+  "relay": "paddock-relay.py",
+  "version": 1,
+  "files": {
+    "host/paddock-relay.py": "sha256:8effb4b5aa733fccf72b5ca31545bc24f05046d000d463d6939b3486b3339695"
+  }
+}

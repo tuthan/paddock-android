@@ -24,6 +24,7 @@ tasks.test {
     systemProperty("paddock.repoRoot", rootProject.projectDir.absolutePath)
     inputs.dir(rootProject.file("protocol"))
     inputs.dir(rootProject.file("fixtures"))
+    inputs.dir(rootProject.file("host"))
 }
 
 // :core is the JVM decision layer. It must not see Android APIs or depend on another project.
