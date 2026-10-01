@@ -26,7 +26,7 @@ $ADB pull "/sdcard/Android/data/$PKG/files/transport.pub" "$OUT/transport.pub" >
 
 FP="$("$HERE/test-sshd.sh" fingerprint | awk '{print $2}')"
 LINES=$(wc -l < "$RUN/sshd.log"); $ADB logcat -c
-$ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" -e class "$FILTER" "$RUNNER" >"$OUT/instrument.txt" 2>&1
+$ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" ${INSTR_ARGS:-} -e class "$FILTER" "$RUNNER" >"$OUT/instrument.txt" 2>&1
 $ADB logcat -d -s TRANSPORT:I >"$OUT/transport-log.txt"
 tail -n +"$((LINES+1))" "$RUN/sshd.log" >"$OUT/sshd-during.log"
 sed 's/^[0-9-]* [0-9:.]* *[0-9]* *[0-9]* I //' "$OUT/transport-log.txt" | grep -v "T0 exported"
