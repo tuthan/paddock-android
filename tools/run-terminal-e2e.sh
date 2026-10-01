@@ -160,12 +160,12 @@ HELPER_BEFORE=$(helper_pids)
 ROT0=$($ADB shell settings get system accelerometer_rotation | tr -d '\r')
 $ADB shell settings put system accelerometer_rotation 0; $ADB shell settings put system user_rotation 1; sleep 4
 HELPER_LAND=$(helper_pids)
-ROT_LAND=$($ADB shell dumpsys window displays | grep -m1 -o 'mCurrentRotation=[A-Z_0-9]*' | tr -d '\r')
+ROT_LAND=$($ADB shell dumpsys window | grep -m1 -o 'mCurrentRotation=[A-Z_0-9]*' | tr -d '\r')  # API 26 prints 0..3, later releases ROTATION_0..270
 $ADB shell settings put system user_rotation 0; sleep 4
 HELPER_PORT=$(helper_pids)
 $ADB shell settings put system accelerometer_rotation "${ROT0:-1}"
 say "rotation under control: device in landscape was $ROT_LAND; helper pid before: $HELPER_BEFORE; in landscape the same: $([ "$HELPER_BEFORE" = "$HELPER_LAND" ] && echo yes || echo NO); back in portrait the same: $([ "$HELPER_BEFORE" = "$HELPER_PORT" ] && echo yes || echo NO)"
-check "the device really rotated" '[ "$ROT_LAND" = mCurrentRotation=ROTATION_90 ] || [ "$ROT_LAND" = mCurrentRotation=ROTATION_270 ]'
+check "the device really rotated" 'case "$ROT_LAND" in mCurrentRotation=1|mCurrentRotation=3|mCurrentRotation=ROTATION_90|mCurrentRotation=ROTATION_270) true ;; *) false ;; esac'
 check "a rotation keeps the same control helper process (control was not released)" '[ -n "$HELPER_BEFORE" ] && [ "$HELPER_BEFORE" = "$HELPER_LAND" ] && [ "$HELPER_BEFORE" = "$HELPER_PORT" ]'
 go rotate
 
@@ -195,11 +195,8 @@ check "AC-05.4 and types again" 'pane_has desktop-after-release'
 desk_ask quit 1 >/dev/null; exec 8>&-; exec 7>&-; sleep 1
 go released
 
-reach control-before-link-loss
-check "the phone controls again without a conflict" '[ -n "$(helpers)" ]'
-COLS=$(pty_size | awk '{print $2}'); ROWSN=$(pty_size | awk '{print $1}')
 accepted() { # a desktop-style control without --takeover; success means it was accepted (then it is released at once)
-  python3 - "$P" "$COLS" "$ROWSN" <<'EOF'
+  python3 - "$P" "$(pty_size | awk '{print $2}')" "$(pty_size | awk '{print $1}')" <<'EOF'
 import json, subprocess, sys, os, time
 pane, cols, rows = sys.argv[1:4]
 env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
@@ -214,6 +211,26 @@ finally:
 sys.exit(0 if ok else 1)
 EOF
 }
+
+# --- leaving while in control: the app in the background and the Back button both release at once ---
+reach background-ready
+check "the helper is running before the app is backgrounded" '[ -n "$(helpers)" ]'
+$ADB shell input keyevent KEYCODE_HOME; sleep 3
+check "AC-05.6 backgrounding the app released control (no helper left on the host)" '[ -z "$(helpers)" ]'
+check "AC-05.6 and a desktop-style control is accepted straight away" 'accepted'
+# the launcher's own intent: it matches the task's base intent, so the existing activity is brought forward, not a second one created
+$ADB shell am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n "$PKG/.MainActivity" >/dev/null 2>&1; sleep 1
+go background-ready
+
+reach back-ready
+check "the helper is running before Back is pressed" '[ -n "$(helpers)" ]'
+$ADB shell input keyevent KEYCODE_BACK; sleep 3
+check "AC-05.6 Back released control (no helper left on the host)" '[ -z "$(helpers)" ]'
+check "AC-05.6 and a desktop-style control is accepted straight away after Back" 'accepted'
+go back-ready
+
+reach control-before-link-loss
+check "the phone controls again without a conflict" '[ -n "$(helpers)" ]'
 check "before the link is cut a desktop-style control is refused" '! accepted'
 T0=$(date +%s.%N)
 if [ "$LINK_CUT" = airplane ]; then say "cutting the link at $T0: airplane mode on: $($ADB shell cmd connectivity airplane-mode enable 2>&1 | tr -d '\r')"

@@ -24,6 +24,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.github.tuthan.paddock.MainActivity
 import io.github.tuthan.paddock.ui.components.TerminalTiming
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -31,7 +32,8 @@ import org.junit.Test
 /**
  * Phase 05 on a device, through the whole app: Add machine over SSH, the Terminal tab observing a real herdr pane, an owner
  * conflict with a desktop client, the helper install consent, take over, typing with the hardware keyboard, a 200-line scroll
- * timed five times, Resize to fit, release, then control again and the link dying under it. `tools/run-terminal-e2e.sh`
+ * timed five times, Resize to fit, release, control again, the app sent to the background and Back pressed while in control
+ * (both must release at once), then control once more and the link dying under it. `tools/run-terminal-e2e.sh`
  * prepares the host, runs the checks that need the host (`pane get`, the desktop client, the proxy) at each checkpoint and
  * releases the test with a file; the test never waits for the script for more than two minutes.
  */
@@ -213,6 +215,25 @@ class TerminalFlowTest {
         checkpoint("released")
         rule.onNodeWithText("Request control").performClick()
         waitFor("in control again, no conflict this time") { pill() == "in control" }
+
+        // --- leaving while in control: the script sends the app to the background and checks the host, then brings it back;
+        // the terminal must come back as an observer and never as the controller ---
+        checkpoint("background-ready")
+        waitFor("the terminal observing again after the app came back") { pill() == "read-only" }
+        assertFalse("coming back from the background does not take control again", hasNode(desc("Terminal: in control")))
+        shoot("after-background")
+        rule.onNodeWithText("Request control").performClick()
+        waitFor("in control after the background trip") { pill() == "in control" }
+
+        // --- Back while in control: the script presses Back and checks the host; the test then opens the terminal again ---
+        checkpoint("back-ready", pump = true)   // pumped: Back is only acted on while the harness lets the UI compose
+        waitFor("Home after Back") { hasNode(desc("Blocked")) }
+        rule.onNode(desc("Blocked")).performClick()
+        waitFor("the Output tab again") { hasNode(desc("Terminal output")) }
+        rule.onNodeWithText("Terminal").performClick()
+        waitFor("a fresh read-only terminal after Back") { pill() == "read-only" }
+        rule.onNodeWithText("Request control").performClick()
+        waitFor("in control again after Back") { pill() == "in control" }
         checkpoint("control-before-link-loss")
 
         // --- AC-05.6: the script freezes the link now; the test only watches what the app says ---
