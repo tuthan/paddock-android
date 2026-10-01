@@ -2,7 +2,7 @@
 
 A phone companion for [herdr](https://herdr.dev): answer the herd, do not operate it. Native Kotlin, SSH only, no server of its own. Plan and phase notes live in the docs vault under `herdr-android/`.
 
-Status: Phase 01 scaffold. `:core` (JVM, no Android imports) and `:app` (an empty themed activity). No network code yet.
+Status: Phase 04 implemented (monitor UI): connection ownership, host-key trust, relay install with consent, a live attention home, Output, Activity, Add machine, Settings. `:core` is JVM only (enforced); `:app` is the Android shell. Device-only acceptance (AC-04.8 recents thumbnail, AC-04.9 cold start, TalkBack) is open; see the vault's Phase 04 evidence report.
 
 ## Requirements
 
@@ -24,7 +24,7 @@ Status: Phase 01 scaffold. `:core` (JVM, no Android imports) and `:app` (an empt
 | --- | --- |
 | JVM unit | `./gradlew :core:test` (fixtures only; no herdr needed) |
 | JVM integration | Phase 03 onward: start the disposable session (below), set `PADDOCK_TEST_SOCKET` to its socket |
-| Emulator | build both APKs, install, `adb shell am instrument -w io.github.tuthan.paddock.test/androidx.test.runner.AndroidJUnitRunner` |
+| Emulator | `tools/run-ui-tests.sh <serial>` (Compose tests plus screenshots); `tools/run-live-e2e.sh <serial>` (the whole app against a throwaway sshd and `paddock-test`); `tools/check-permission-flow.py` (Android 17, adb-driven); `tools/check-add-machine-ime.py` (keyboard and rotation) |
 | Physical | Phase 02 onward |
 
 ## The disposable session
