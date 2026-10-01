@@ -26,6 +26,11 @@ android {
         }
     }
 
+    packaging {
+        // sshlib's runtime dependencies carry duplicate licence text.
+        resources.pickFirsts += listOf("META-INF/LICENSE.md", "META-INF/LICENSE", "META-INF/NOTICE.md", "META-INF/INDEX.LIST", "META-INF/DEPENDENCIES")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -38,6 +43,7 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    implementation(libs.sshlib)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)

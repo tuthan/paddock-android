@@ -35,12 +35,16 @@ class PhoneKey(private val alias: String = DEFAULT_ALIAS) {
     }
 
     fun info(): PhoneKeyInfo {
-        val entry = keyStore.getEntry(alias, null) as KeyStore.PrivateKeyEntry
+        val entry = keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry ?: error("phone key does not exist; create it first")
         return PhoneKeyInfo(entry.certificate.publicKey as ECPublicKey, backingOf(entry.privateKey))
     }
 
     /** The signing handle for the SSH library. Calls `Signature.getInstance("SHA256withECDSA")` without a provider name. */
-    fun privateKey(): PrivateKey = (keyStore.getEntry(alias, null) as KeyStore.PrivateKeyEntry).privateKey
+    fun privateKey(): PrivateKey {
+        // Never generate here: a silent new identity would orphan every authorization on the hosts.
+        val entry = keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry ?: error("phone key does not exist; create it first")
+        return entry.privateKey
+    }
 
     fun publicLine(comment: String): String = OpenSshKeys.publicLine(getOrCreate().publicKey, comment)
 

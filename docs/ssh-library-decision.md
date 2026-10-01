@@ -45,5 +45,5 @@ The smaller graph belongs to sshj (8 components against 14); that is the cost ac
 ## Not settled by the spike
 
 - Keystore backing on a physical phone (S1, AC-02.2) and real airplane-mode detection (S6, AC-02.6): no device.
-- sshlib's transitives go into the production catalog only after their own review row: `kyber` is a single-maintainer post-quantum library, and the question is whether the build can drop it, and `tink`, without losing a needed key exchange. The spike approval covered the spike only.
+- (Resolved 2026-10-01: Hung Vo approved sshlib with its transitives for production, conditional on trying the `kyber` exclusion in the adapter slice; see `dependency-reviews.md`.) Originally: sshlib's transitives were to enter the production catalog only after their own review row: `kyber` is a single-maintainer post-quantum library, and the question is whether the build can drop it, and `tink`, without losing a needed key exchange. The spike approval covered the spike only.
 - sshlib was last published 2026-06-01; the update cadence is unknown.
