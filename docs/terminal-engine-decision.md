@@ -2,7 +2,7 @@
 
 **Phase 05, AC-05.1.** Candidates, licences, Socket reviews and fixture results. **Owner of dependency dispositions:** Hung Vo. Reviews are in [dependency-reviews.md](dependency-reviews.md).
 
-**Status: slice 1 (candidates, licences, reviews).** The decision and the fixture results are filled in by slice 3, after the engine renders the five Phase 00 fixtures against the expected grids in `core/src/test/resources/terminal/expected/`.
+**Status: decided 2026-10-02 (slice 3).** An own engine in `:core`, no dependency. Candidates and reviews were recorded first (slice 1); the decision follows the fixture rendering below.
 
 ## What the engine has to render
 
@@ -46,4 +46,41 @@ Performance was not measured. The three failures above are enough to rule it out
 
 ## Decision
 
-Filled in by slice 3.
+**An own engine, `terminal/VtEngine` in `:core`, behind the `TerminalEngine` port. No dependency is added; no candidate is in the build** (AC-05.1: the other candidates are absent from `libs.versions.toml`, the lockfiles and the APK).
+
+### Fixture results (AC-05.2)
+
+`FixtureGridsTest` feeds each fixture to the engine one record at a time, the way the bridge does (a full frame sizes and clears the engine; every frame is fed), and compares the engine's cells, styles, wide-character columns, cursor and screen with the grid written by hand before the engine existed.
+
+| Fixture | Frames checked | Grids | Result | Unhandled sequences |
+| --- | --- | --- | --- | --- |
+| colours (16, 256, bold, dim) | seq 1 to 4 | `colours.seq2` to `seq4`, `initial` | pass | 0 |
+| wide (CJK, fullwidth) | seq 1, 3, 4 | `wide.seq3`, `seq4`, `initial` | pass | 0 |
+| cursor and erase | seq 1, 3, 4 | `cursor.seq3`, `seq4`, `initial` | pass | 0 |
+| scroll (a repaint, row by row) | seq 1 to 4 | `scroll.seq2` to `seq4`, `initial` | pass | 0 |
+| alternate screen | seq 1 to 5 | `altscreen.seq2` to `seq5`, `initial` | pass | 0 |
+
+A perturbed expected file fails the same test (checked by hand while writing it), so the comparison is not vacuous.
+
+**An independent engine agrees with the expected grids.** xterm.js's engine, run headless in Node (`@xterm/headless` 6.0.0, Socket overall 79 / quality 79, low `minifiedFile`: allow_with_warning; fetched with `npm pack --ignore-scripts` into a scratch directory outside the repository, no dependencies, no scripts, deleted afterwards), renders all 19 frame states to the same text, cursor, bold, dim, 256-colour palette indexes and double-width columns as the hand-written files. That settles the engine half of the xterm.js candidate (it renders the fixtures correctly) and shows the expected grids are not an artefact of how this engine reads them; the WebView half is what fails (see above). The script is kept with the evidence, not in the build. Beyond the fixtures, `VtEngineTest` (49 tests) covers the rest of what the engine accepts: every SGR form (`;` and `:`, indexed, 24-bit, with and without a colour-space id, underline colour skipped with its arguments), cursor movement and clamping, erase, insert and delete, scroll regions, wide and combining characters, UTF-8 errors, the alternate-screen switch, resize, and 2,000 random chunks that must never throw, leave the cursor outside the grid, split a wide character, or put a control character in a cell.
+
+### Why this one
+
+| Test from the note | Result |
+| --- | --- |
+| Licence | None needed. Nothing is copied or linked. |
+| Isolation | Runs on the JVM in `:core`, which cannot import Android. The engine only reads: it parses and drops every OSC (clipboard write, title, hyperlink), DCS, APC, PM and SOS string, and every query (`CSI 6 n`, `CSI c`, `CSI ? Ps $ p`) without answering. `VtEngineTest` asserts each of those leaves the grid and cursor unchanged. An unknown sequence is counted (`unhandled`) and never shown as text, as the note requires. |
+| Grid match | All five fixture categories, above. |
+| Cost | About 640 lines of Kotlin (the engine, the width table, the grid model), with 88 tests, against a native library (termlib), a licence and repository change (Termux), or a WebView (xterm.js). |
+| Verification | Covered by the Gradle build and `:core:test`; no vendored binary. |
+
+### What it does not do
+
+- It keeps no scrollback. herdr owns the scrollback and repaints the viewport, so a scrolled view is another frame, not phone-side state.
+- It does not track application cursor-key mode: herdr does not forward `?1h`, so the key strip sends the normal-mode arrow sequences.
+- Wide-character widths come from a Unicode 15 table. herdr places every run by explicit column, so a width the two tables disagree on (a few ambiguous emoji) shifts only the rest of that run.
+- It does not draw images (sixel, kitty graphics, `ServerMessage::Graphics`). The CLI drops them before they reach the phone.
+
+### When to reopen this
+
+A herdr that sends raw PTY bytes instead of repaints; a fixture where `unhandled` is not zero (the note's rule: the fixture set grows by that case); or a measurement on a physical phone that the Compose renderer misses the 300 ms scroll target (AC-05.8), where the engine is not the likely cause but would be the first thing checked. The port keeps the swap local to one adapter.
