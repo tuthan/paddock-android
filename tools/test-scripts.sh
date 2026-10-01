@@ -33,7 +33,8 @@ case "$cmd" in
   "--version "*) echo "herdr ${FAKE_VERSION:-0.9.1}" ;;
   "session list") printf '{"sessions":[{"name":"paddock-test","running":%s,"socket_path":"%s"}]}\n' "${FAKE_RUNNING:-true}" "$FAKE_SOCK" ;;
   "status ") printf 'client:\n  version: %s\n  protocol: %s\n' "${FAKE_VERSION:-0.9.1}" "${FAKE_PROTO:-22}" ;;
-  "api schema") printf '{"protocol":%s,"title":"Herdr API"}\n' "${FAKE_PROTO:-22}" ;;
+  "api schema")
+    if [ -n "${FAKE_SCHEMA_FILE:-}" ]; then cat "$FAKE_SCHEMA_FILE"; else printf '{"protocol":%s,"title":"Herdr API"}\n' "${FAKE_PROTO:-22}"; fi ;;
   "api snapshot") echo '{"id":"cli:api:snapshot","result":{"type":"session_snapshot","snapshot":{"panes":[],"agents":[]}}}' ;;
   "workspace list") echo '{"id":"cli:workspace:list","result":{"workspaces":[]}}' ;;
   "tab list") echo '{"id":"cli:tab:list","result":{"tabs":[]}}' ;;
@@ -159,5 +160,52 @@ FAKE_VERSION=0.9.2 FAKE_PROTO=23 capture paddock-test; rc=$?
 expect "capture-fixtures after a herdr upgrade" 0 "$rc"
 [ -f "$R/fixtures/herdr-0.9.2/status.txt" ] && [ -f "$R/protocol/herdr-schema-23.json" ] && sentinels_intact \
   && ok "an upgraded herdr writes fixtures/herdr-0.9.2 and herdr-schema-23.json, leaving the 0.9.1 pin alone" || bad "upgrade capture wrote over the old pin"
+
+# --- check-pins.sh and pin-source.sh on a copy of the real pins -------------------------------------------------------
+pins_repo() {
+  local r="$T/pins"
+  rm -rf -- "$r"; mkdir -p "$r/tools"
+  cp "$REPO/tools/"*.sh "$r/tools/"
+  cp -r "$REPO/protocol" "$REPO/fixtures" "$r/"
+  echo "$r"
+}
+P="$(pins_repo)"
+pins() { "$P/tools/check-pins.sh" "$@" >"$T/pins.out" 2>&1; }
+pins --pins-only; expect "check-pins --pins-only on the committed pins" 0 $?
+FAKE_SCHEMA_FILE="$P/protocol/herdr-schema-22.json" pins; expect "check-pins with a herdr that matches the pin" 0 $?
+FAKE_SCHEMA_FILE="$P/protocol/herdr-schema-22.json" FAKE_VERSION=0.9.2 pins; expect "check-pins with a newer installed herdr" 1 $?
+pins; expect "check-pins when the installed schema differs" 1 $?
+grep -q "differs from protocol/herdr-schema-22.json" "$T/pins.out" && ok "schema difference names the pinned file" || bad "schema difference message: $(cat "$T/pins.out")"
+echo '{"protocol":23}' > "$P/protocol/herdr-schema-23.json"
+pins --pins-only; expect "check-pins --pins-only with an unlisted protocol/herdr-schema-23.json" 1 $?
+grep -q "protocol/herdr-schema-23.json" "$T/pins.out" && ok "the unlisted schema is named" || bad "unlisted schema not named: $(cat "$T/pins.out")"
+rm "$P/protocol/herdr-schema-23.json"; echo x > "$P/protocol/notes.txt"
+pins --pins-only; expect "check-pins --pins-only with any stray file under protocol/" 1 $?
+rm "$P/protocol/notes.txt"; printf 'x' >> "$P/fixtures/herdr-0.9.1/status.txt"
+pins --pins-only; expect "check-pins --pins-only with a tampered fixture" 1 $?
+
+P="$(pins_repo)"
+"$P/tools/pin-source.sh" 2026-10-01 devbox >"$T/pin.out" 2>&1; expect "pin-source on the committed corpus" 0 $?
+cmp -s "$P/protocol/SOURCE.json" "$REPO/protocol/SOURCE.json" && ok "pin-source reproduces the committed SOURCE.json byte for byte" || bad "pin-source output differs from the committed SOURCE.json"
+# A herdr bump half done: a new corpus and schema beside the old ones.
+mkdir -p "$P/fixtures/herdr-0.9.2"
+printf 'client:\n  version: 0.9.2\n  channel: stable\n  protocol: 23\n\nserver:\n  version: 0.9.2\n' > "$P/fixtures/herdr-0.9.2/status.txt"
+echo '{}' > "$P/fixtures/herdr-0.9.2/snapshot.json"
+echo '{"protocol":23}' > "$P/protocol/herdr-schema-23.json"
+cp "$P/protocol/SOURCE.json" "$T/source.before"
+"$P/tools/pin-source.sh" 2026-10-02 devbox >"$T/pin.out" 2>&1; expect "pin-source refuses two corpora without a name" 1 $?
+"$P/tools/pin-source.sh" 2026-10-02 devbox fixtures/herdr-0.9.2 >"$T/pin.out" 2>&1; expect "pin-source refuses while the 0.9.1 corpus and schema 22 remain" 1 $?
+grep -q "fixtures/herdr-0.9.1/status.txt" "$T/pin.out" && grep -q "protocol/herdr-schema-22.json" "$T/pin.out" \
+  && ok "the stale files are named" || bad "stale files not named: $(cat "$T/pin.out")"
+cmp -s "$P/protocol/SOURCE.json" "$T/source.before" && ok "a refused pin leaves SOURCE.json unchanged" || bad "a refused pin rewrote SOURCE.json"
+cp "$P/fixtures/herdr-0.9.2/status.txt" "$T/status-0.9.2"
+cp "$P/fixtures/herdr-0.9.1/status.txt" "$P/fixtures/herdr-0.9.2/status.txt"
+rm -r "$P/fixtures/herdr-0.9.1" "$P/protocol/herdr-schema-22.json"
+"$P/tools/pin-source.sh" 2026-10-02 devbox >"$T/pin.out" 2>&1; expect "pin-source refuses a 0.9.1 corpus filed as fixtures/herdr-0.9.2" 1 $?
+cp "$T/status-0.9.2" "$P/fixtures/herdr-0.9.2/status.txt"
+"$P/tools/pin-source.sh" 2026-10-02 devbox >"$T/pin.out" 2>&1; expect "pin-source once only the 0.9.2 corpus and schema 23 remain" 0 $?
+[ "$(jq -c '[.herdr,.protocol,(.files|keys)]' "$P/protocol/SOURCE.json")" = '["0.9.2",23,["fixtures/herdr-0.9.2/snapshot.json","fixtures/herdr-0.9.2/status.txt","protocol/herdr-schema-23.json"]]' ] \
+  && ok "SOURCE.json records herdr 0.9.2, protocol 23 and only the new files" || bad "SOURCE.json after the bump: $(jq -c . "$P/protocol/SOURCE.json")"
+pins --pins-only; expect "check-pins --pins-only after the bump" 0 $?
 
 exit $fail

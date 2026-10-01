@@ -14,9 +14,11 @@ Status: Phase 04 implemented (monitor UI): connection ownership, host-key trust,
 ```sh
 ./gradlew :core:test :app:assembleDebug      # JVM tests and the debug APK
 ./tools/check-pins.sh                        # installed herdr and the pinned schema and fixtures still agree
+./tools/check-pins.sh --pins-only            # the same hash and coverage rule without herdr (what CI runs)
+./tools/test-scripts.sh                      # self-tests of the fixture and pin scripts against a fake herdr
 ```
 
-`FixturePinTest` fails if any file under `protocol/` or `fixtures/` differs from `protocol/SOURCE.json`. A fixture change is a deliberate pin update: recapture, run `tools/pin-source.sh <date> <host>`, review the diff, commit schema, fixtures and manifest together.
+`FixturePinTest` and `tools/check-pins.sh` fail if a file pinned in `protocol/SOURCE.json` is missing or differs, or if any file under `protocol/` (except `SOURCE.json` itself) or `fixtures/` is not pinned there. A fixture change is a deliberate pin update: recapture, `git rm` the previous version's corpus and schema if herdr moved, run `tools/pin-source.sh <date> <host>` (it reads the herdr version and protocol from the corpus and refuses stale files), review the diff, commit schema, fixtures and manifest together.
 
 ## Test tiers
 

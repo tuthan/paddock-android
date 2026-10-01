@@ -7,12 +7,16 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** Checks `protocol/SOURCE.json` against the files on disk, the same rule as tools/check-pins.sh. */
+/**
+ * Checks `protocol/SOURCE.json` against the files on disk, the same rule as tools/check-pins.sh: every file under
+ * `protocol/` (except the manifest itself) and under `fixtures/` must be pinned, and every pin must match its file.
+ */
 object PinVerifier {
-    private val tracked = listOf("protocol/herdr-schema-22.json", "fixtures")
+    const val MANIFEST = "protocol/SOURCE.json"
+    private val tracked = listOf("protocol", "fixtures")
 
     fun manifest(root: File): JsonObject =
-        Json.parseToJsonElement(File(root, "protocol/SOURCE.json").readText()).jsonObject
+        Json.parseToJsonElement(File(root, MANIFEST).readText()).jsonObject
 
     fun hashes(root: File): Map<String, String> =
         manifest(root).getValue("files").jsonObject.mapValues { it.value.jsonPrimitive.content }
@@ -31,8 +35,8 @@ object PinVerifier {
                 sha256(file) != want -> problems += "hash mismatch: $path"
             }
         }
-        val onDisk = tracked.flatMap { File(root, it).walkTopDown().filter(File::isFile).toList() }
-            .map { it.relativeTo(root).invariantSeparatorsPath }
+        val onDisk = tracked.flatMap { File(root, it).walkTopDown().filter { f -> !f.isDirectory }.toList() }
+            .map { it.relativeTo(root).invariantSeparatorsPath } - MANIFEST
         (onDisk - pinned.keys).forEach { problems += "not in SOURCE.json: $it" }
         return problems
     }

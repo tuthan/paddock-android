@@ -20,8 +20,11 @@ class FixturePinTest {
     fun manifestNamesTheTestedHerdrAndTheSchemaProtocol() {
         val manifest = PinVerifier.manifest(root)
         assertEquals("0.9.1", manifest.getValue("herdr").jsonPrimitive.content)
-        val schema = kotlinx.serialization.json.Json.parseToJsonElement(File(root, "protocol/herdr-schema-22.json").readText())
-        assertEquals(manifest.getValue("protocol").jsonPrimitive.int, schema.jsonObject.getValue("protocol").jsonPrimitive.int)
+        val protocol = manifest.getValue("protocol").jsonPrimitive.int
+        val schemaPath = "protocol/herdr-schema-$protocol.json"
+        assertTrue(schemaPath in PinVerifier.hashes(root), "expected $schemaPath to be pinned")
+        val schema = kotlinx.serialization.json.Json.parseToJsonElement(File(root, schemaPath).readText())
+        assertEquals(protocol, schema.jsonObject.getValue("protocol").jsonPrimitive.int)
     }
 
     @Test
@@ -49,6 +52,23 @@ class FixturePinTest {
             setOf("not in SOURCE.json: fixtures/herdr-0.9.1/stray.json", "missing: fixtures/herdr-0.9.1/pane-get.json"),
             PinVerifier.verify(copy).toSet(),
         )
+    }
+
+    @Test
+    fun anUnlistedFileAnywhereUnderProtocolFails() {
+        val copy = copyOfRepoPins()
+        // A new schema beside the pinned one (a herdr bump half done) and any other stray file both fail.
+        File(copy, "protocol/herdr-schema-23.json").writeText("{\"protocol\":23}")
+        File(copy, "protocol/notes/extra.txt").apply { parentFile.mkdirs() }.writeText("x")
+        assertEquals(
+            setOf("not in SOURCE.json: protocol/herdr-schema-23.json", "not in SOURCE.json: protocol/notes/extra.txt"),
+            PinVerifier.verify(copy).toSet(),
+        )
+    }
+
+    @Test
+    fun theManifestItselfIsNotReportedAsUnlisted() {
+        assertTrue(PinVerifier.verify(copyOfRepoPins()).none { PinVerifier.MANIFEST in it })
     }
 
     private fun copyOfRepoPins(): File {
