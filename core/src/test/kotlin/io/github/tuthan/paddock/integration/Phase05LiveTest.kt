@@ -35,6 +35,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -270,6 +271,34 @@ class Phase05LiveTest {
         assertTrue(p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS), "release ends the process")
         assertTrue("\"detached\"" in synchronized(frames) { frames.toString() })
         println("encoder shapes vs herdr 0.9.1: input, scroll (wheel and page_key), resize, release accepted; mouse rejected: ${synchronized(err) { err.toString().trim().take(200) }}")
+    }
+
+    /** A desktop-style control request without takeover: accepted when herdr answers with a frame (and then released at once). */
+    private suspend fun desktopControlAccepted(pane: String): Boolean = withContext(Dispatchers.IO) {
+        val size = PtyProbe.probe(env.session, env.cli, pane)!!
+        val p = ProcessBuilder(scoped("terminal", "session", "control", pane, "--cols", size.cols.toString(), "--rows", size.rows.toString())).start()
+        try {
+            val first = p.inputStream.bufferedReader().readLine()
+            val ok = first != null && "terminal.frame" in first
+            if (ok) { p.outputStream.write(ControlEncoder.release()); p.outputStream.flush(); delay(200) }
+            ok
+        } finally { p.destroyForcibly() }
+    }
+
+    @Test fun openingAnotherTerminalOnTheHostClosesTheFirstAndReleasesItsControl() = runBlocking<Unit> {
+        val a = newPane(); val b = newPane()
+        val h = host()
+        val ta = session(h, a)
+        ta.open(40, 12); ta.waitMode(TerminalMode.Observing)
+        ta.requestControl(); ta.waitMode(TerminalMode.Controlling)
+        assertFalse(desktopControlAccepted(a), "while the phone controls, a desktop-style request is refused")
+        val tb = session(h, b)   // one terminal channel per host: this closes the first, releasing its control
+        until("the first session to be closed and cleared") { ta.view.value.grid == null && ta.view.value.mode == TerminalMode.Idle }
+        assertFalse(ta.send("echo late\r".toByteArray()))
+        until("the pane to be free for the desktop again") { desktopControlAccepted(a) }
+        assertTrue(!paneText(a).contains("late"))
+        tb.close(); h.stop()
+        println("one terminal channel per host: opening a second session closed the first and its control was released")
     }
 
     @Test fun aPaneThatClosesWhileObservedEndsTheSessionAsGone() = runBlocking<Unit> {
