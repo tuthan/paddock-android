@@ -393,8 +393,22 @@ private fun ImportKeyRoute(graph: AppGraph, onDone: () -> Unit, onBack: () -> Un
 /** Reads at most [MAX_KEY_FILE_BYTES]; a larger file is refused rather than truncated. */
 private fun readKeyFile(ctx: Context, uri: android.net.Uri): PickedKeyFile? = runCatching {
     val name = ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null } ?: "key file"
-    val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readNBytes(MAX_KEY_FILE_BYTES + 1) } ?: return null
-    if (bytes.size > MAX_KEY_FILE_BYTES) null else PickedKeyFile(name, String(bytes, Charsets.UTF_8))
+    // InputStream.readNBytes is API 33 and minSdk is 26: a bounded loop, reading one byte past the limit to detect a larger file.
+    val buf = ByteArray(MAX_KEY_FILE_BYTES + 1)
+    try {
+        val n = ctx.contentResolver.openInputStream(uri)?.use { input ->
+            var total = 0
+            while (total < buf.size) {
+                val r = input.read(buf, total, buf.size - total)
+                if (r < 0) break
+                total += r
+            }
+            total
+        } ?: return null
+        if (n > MAX_KEY_FILE_BYTES) null else PickedKeyFile(name, String(buf, 0, n, Charsets.UTF_8))
+    } finally {
+        buf.fill(0)
+    }
 }.getOrNull()
 
 /** Clears the clipboard when it holds a private key (the one just pasted). Anything else on it is left alone. */
