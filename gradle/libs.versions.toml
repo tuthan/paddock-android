@@ -9,9 +9,6 @@ androidx-test-runner = "1.7.0"
 androidx-test-ext-junit = "1.3.0"
 compose-bom = "2026.09.00"
 activity-compose = "1.13.0"
-sshj = "0.41.1"
-sshlib = "2.2.48"
-bouncycastle = "1.86"
 
 [libraries]
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
@@ -29,12 +26,6 @@ compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
 activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
 
-# Phase 02 spike candidates; the loser is deleted in the decision commit.
-sshj = { module = "com.hierynomus:sshj", version.ref = "sshj" }
-sshlib = { module = "org.connectbot:sshlib", version.ref = "sshlib" }
-bouncycastle-prov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
-bouncycastle-pkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
-bouncycastle-util = { module = "org.bouncycastle:bcutil-jdk18on", version.ref = "bouncycastle" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

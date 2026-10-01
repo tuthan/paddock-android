@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Throwaway sshd for the Phase 02 spike: loopback only, publickey only, test keys only, runs as the current user.
+# Throwaway sshd for the Phase 02 transport tests (born in the SSH spike): loopback only, publickey only, test keys only, runs as the current user.
 # The system sshd and ~/.ssh/authorized_keys are never touched. The emulator reaches it at 10.0.2.2:2222.
-#   spike/sshd.sh start | stop | status | authorize <pubkey-file> | log
+#   tools/test-sshd.sh start | stop | status | authorize <pubkey-file> | log
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN="${SPIKE_RUN:-$HERE/run}"; mkdir -p "$RUN"
-PORT="${SPIKE_PORT:-2222}"
+RUN="${TEST_SSHD_RUN:-$HERE/../build/test-sshd}"; mkdir -p "$RUN"
+PORT="${TEST_SSHD_PORT:-2222}"
 case "${1:-}" in
   start)
-    [ -f "$RUN/host_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C paddock-spike-host -f "$RUN/host_ed25519"
+    [ -f "$RUN/host_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C paddock-test-sshd-host -f "$RUN/host_ed25519"
     touch "$RUN/authorized_keys"; : > "$RUN/sshd.log"
     cat > "$RUN/sshd_config" <<CFG
 Port $PORT

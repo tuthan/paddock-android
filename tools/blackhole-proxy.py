@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """TCP proxy that can silently drop traffic, to simulate a dead link without a RST (stands in for airplane mode).
 
-  blackhole_proxy.py [LISTEN_PORT=2223] [TARGET_PORT=2222] [CONTROL_PORT=2224]
+  blackhole-proxy.py [LISTEN_PORT=2223] [TARGET_PORT=2222] [CONTROL_PORT=2224]
 
 Connect to CONTROL_PORT and send `freeze` or `thaw` (newline-terminated). While frozen, bytes in both
 directions are read and discarded and sockets stay open, so the client sees a stalled link, not a reset.
