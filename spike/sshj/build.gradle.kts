@@ -16,7 +16,16 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Run the suite against the minified build: `-PspikeTest=r8test`. Debug-signed so it installs.
+    testBuildType = (project.findProperty("spikeTest") as String?) ?: "debug"
+
     buildTypes {
+        create("r8test") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            signingConfig = signingConfigs.getByName("debug")
+            proguardFiles("proguard-r8test.pro")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true

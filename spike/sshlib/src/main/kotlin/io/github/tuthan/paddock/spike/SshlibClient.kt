@@ -25,6 +25,10 @@ class SshlibClient : SpikeClient {
         onHostKey: (String, String) -> Boolean, keepaliveSeconds: Int, connectTimeoutMs: Int,
     ) {
         val c = Connection(host, port)
+        // API 26 to 27 have no ChaCha20 provider, and sshlib offers chacha20-poly1305 whenever the server does.
+        val ciphers = arrayOf("aes256-gcm@openssh.com", "aes128-gcm@openssh.com", "aes256-ctr", "aes128-ctr")
+        c.setClient2ServerCiphers(ciphers)
+        c.setServer2ClientCiphers(ciphers)
         var rejected: HostKeyRejected? = null
         c.addConnectionMonitor(ConnectionMonitor { dead.countDown() })
         try {
@@ -46,7 +50,7 @@ class SshlibClient : SpikeClient {
             is SpikeAuth.Keystore -> c.authenticateWithPublicKey(user, object : SignatureProxy(auth.publicKey) {
                 override fun sign(message: ByteArray, hashAlgorithm: String): ByteArray {
                     require(hashAlgorithm == SHA256) { "unexpected digest $hashAlgorithm" }
-                    val s = java.security.Signature.getInstance("SHA256withECDSA", "AndroidKeyStore")
+                    val s = java.security.Signature.getInstance("SHA256withECDSA")
                     s.initSign(auth.privateKey); s.update(message)
                     return SpikeKeys.sshEcdsaSignature(s.sign())
                 }
@@ -57,7 +61,7 @@ class SshlibClient : SpikeClient {
         pinger.scheduleWithFixedDelay({
             val probe = pingWorker.submit { c.ping() }
             try { probe.get(10, TimeUnit.SECONDS) }
-            catch (e: Exception) { if (e is TimeoutException || e.cause != null) { dead.countDown(); runCatching { c.close() } } }
+            catch (e: Exception) { if (e is TimeoutException || e.cause != null) dead.countDown() }
         }, keepaliveSeconds.toLong(), keepaliveSeconds.toLong(), TimeUnit.SECONDS)
     }
 
@@ -68,7 +72,7 @@ class SshlibClient : SpikeClient {
             val err = ByteArrayOutputStream()
             val errThread = Thread { session.stderr.copyTo(err) }.apply { start() }
             val out = session.stdout.readBytes()
-            session.waitForCondition(ChannelCondition.EXIT_STATUS or ChannelCondition.EOF, 30_000)
+            session.waitForCondition(ChannelCondition.EXIT_STATUS or ChannelCondition.CLOSED, 30_000)
             errThread.join(5_000)
             return ExecOutcome(session.exitStatus ?: -1, out, err.toByteArray())
         } finally {
@@ -81,5 +85,12 @@ class SshlibClient : SpikeClient {
         return if (dead.await(timeoutMs, TimeUnit.MILLISECONDS)) (System.nanoTime() - t0) / 1_000_000 else -1
     }
 
-    override fun close() { pinger.shutdownNow(); pingWorker.shutdownNow(); runCatching { conn?.close() } }
+    /**
+     * Connection.ping() holds the connection monitor while it waits for a reply, and close() needs the same
+     * monitor, so on a stalled link close() blocks. Close from a daemon thread and do not wait for it.
+     */
+    override fun close() {
+        pinger.shutdownNow(); pingWorker.shutdownNow()
+        conn?.let { c -> Thread({ runCatching { c.close() } }, "spike-close").apply { isDaemon = true; start() } }
+    }
 }

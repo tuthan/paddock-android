@@ -9,6 +9,7 @@ import java.security.PublicKey
 import java.security.Security
 import java.util.concurrent.TimeUnit
 import net.schmizz.keepalive.KeepAliveProvider
+import net.schmizz.keepalive.KeepAliveRunner
 import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.Buffer
@@ -48,6 +49,10 @@ class SshjClient : SpikeClient {
         }
         val client = SSHClient(config)
         client.connectTimeout = connectTimeoutMs
+        // The keepalive thread starts inside connect() and exits at once if the interval is still 0.
+        client.connection.keepAlive.keepAliveInterval = keepaliveSeconds
+        // Default maxAliveCount (5) takes over 75 s to give up; one outstanding probe is enough for a phone.
+        (client.connection.keepAlive as KeepAliveRunner).maxAliveCount = 1
         var rejected: HostKeyRejected? = null
         client.addHostKeyVerifier(object : HostKeyVerifier {
             override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
@@ -67,7 +72,6 @@ class SshjClient : SpikeClient {
             client.close()
             throw rejected ?: e
         }
-        client.connection.keepAlive.keepAliveInterval = keepaliveSeconds
         ssh = client
         when (auth) {
             is SpikeAuth.Keystore -> client.authPublickey(user, object : KeyProvider {
@@ -99,8 +103,13 @@ class SshjClient : SpikeClient {
         val client = checkNotNull(ssh)
         val t0 = System.nanoTime()
         while ((System.nanoTime() - t0) / 1_000_000 < timeoutMs) {
-            if (!client.isConnected) return (System.nanoTime() - t0) / 1_000_000
+            if (!client.transport.isRunning || !client.isConnected) return (System.nanoTime() - t0) / 1_000_000
             Thread.sleep(200)
+            val el = (System.nanoTime() - t0) / 1_000_000
+            if (el % 5_000 < 200) {
+                val ka = client.connection.keepAlive
+                android.util.Log.i("SPIKE", "sshj state t=${el}ms running=${client.transport.isRunning} connected=${client.isConnected} kaAlive=${ka.isAlive} kaEnabled=${ka.isEnabled} interval=${ka.keepAliveInterval}")
+            }
         }
         return -1
     }
@@ -113,7 +122,7 @@ private class KeystoreEcdsaSignature : Signature {
     private var sig: java.security.Signature? = null
     override fun getSignatureName() = SpikeKeys.SSH_NAME
     override fun initSign(prvkey: PrivateKey) {
-        sig = java.security.Signature.getInstance("SHA256withECDSA", "AndroidKeyStore").apply { initSign(prvkey) }
+        sig = java.security.Signature.getInstance("SHA256withECDSA").apply { initSign(prvkey) }
     }
     override fun initVerify(pubkey: PublicKey) = throw UnsupportedOperationException("spike signs only")
     override fun update(H: ByteArray) { sig!!.update(H) }
