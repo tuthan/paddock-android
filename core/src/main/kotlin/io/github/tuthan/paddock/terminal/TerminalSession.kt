@@ -78,6 +78,8 @@ data class TerminalView(
     /** Frames applied since the session started. A counter, so a test or a screen can wait for progress. */
     val frames: Long = 0,
     val lastFrameAtMillis: Long? = null,
+    /** `System.nanoTime()` when the last applied frame's line arrived from the channel; for measuring how long drawing takes after it. */
+    val lastFrameArrivedNanos: Long = 0,
 ) {
     /** True when requesting control would set the terminal to the phone's size, because the real size is unknown. */
     val controlWouldResizeDesktop: Boolean get() = pty == null
@@ -162,7 +164,7 @@ class TerminalSession(
         data object Suspend : Cmd
         data object DismissNotice : Cmd
         data object Resume : Cmd
-        data class Line(val gen: Int, val text: String) : Cmd
+        data class Line(val gen: Int, val text: String, val arrivedNanos: Long = System.nanoTime()) : Cmd
         data class StreamEnded(val gen: Int, val error: Throwable?) : Cmd
         data class Ping(val gen: Int) : Cmd
         data class ReleaseTimeout(val gen: Int) : Cmd
@@ -192,6 +194,7 @@ class TerminalSession(
     private var viewport = Pair(80, 24)
     private var paused = false
     private var protocolErrors = 0
+    private var arrivedNanos = 0L
     private var settleToken = 0
     private var lastProbeAtMillis = Long.MIN_VALUE
 
@@ -270,7 +273,7 @@ class TerminalSession(
                 Cmd.Suspend -> suspend0()
                 Cmd.DismissNotice -> notice(null)
                 Cmd.Resume -> if (paused) { paused = false; connect(Kind.Observe, probe = true) }
-                is Cmd.Line -> if (cmd.gen == gen) line(cmd.text)
+                is Cmd.Line -> if (cmd.gen == gen) { arrivedNanos = cmd.arrivedNanos; line(cmd.text) }
                 is Cmd.StreamEnded -> if (cmd.gen == gen) streamEnded(cmd.error)
                 is Cmd.Ping -> if (cmd.gen == gen && kind == Kind.Control) write(PING)
                 is Cmd.ReleaseTimeout -> if (cmd.gen == gen && releasing) { releasing = false; backToObserving(null) }
@@ -307,6 +310,7 @@ class TerminalSession(
             notice(TerminalNotice.HelperNeeded(h.destination(), h.expectedSha256, h.isReplacing()))
             return
         }
+        notice(null)   // a new request replaces the answer to the last one
         connect(Kind.Control, probe = true, takeover = takeover)
     }
 
@@ -464,9 +468,10 @@ class TerminalSession(
         _view.update {
             it.copy(
                 mode = mode, grid = engine.grid(), cursor = engine.cursor, cols = engine.cols, rows = engine.rows,
-                frames = it.frames + 1, lastFrameAtMillis = clock.nowMillis(),
-                // A granted request clears the question that led to it; a repaired gap says so until the next change.
-                notice = if (first) null else it.notice,
+                frames = it.frames + 1, lastFrameAtMillis = clock.nowMillis(), lastFrameArrivedNanos = arrivedNanos,
+                // Only a granted request clears the notice that led to it. The observer that is opened after a refusal also
+                // sends a first frame, and must not wipe the refusal the user has not read yet.
+                notice = if (first && kind == Kind.Control) null else it.notice,
             )
         }
     }

@@ -263,7 +263,8 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit
  */
 @Composable
 private fun TerminalRoute(graph: AppGraph, host: io.github.tuthan.paddock.live.MonitoredHost, terminalId: String) {
-    val session = remember(host, terminalId) { graph.terminals.acquire(host to terminalId) { host.terminalSession(terminalId) } }
+    var attempt by rememberSaveable { mutableIntStateOf(0) }
+    val session = remember(host, terminalId, attempt) { graph.terminals.acquire(Triple(host, terminalId, attempt)) { host.terminalSession(terminalId) } }
     val view by session.view.collectAsState()
     val ctx = LocalContext.current
     val activity = remember(ctx) { generateSequence(ctx) { (it as? android.content.ContextWrapper)?.baseContext }.firstOrNull { it is android.app.Activity } as? android.app.Activity }
@@ -289,6 +290,7 @@ private fun TerminalRoute(graph: AppGraph, host: io.github.tuthan.paddock.live.M
             onRequestControl = session::requestControl, onTakeOver = session::takeOver, onInstallHelper = session::installHelper,
             onDismissNotice = session::dismissNotice, onRelease = session::release,
             onResizeToFit = { cols, rows -> session.resizeToFit(cols, rows) }, onKey = { session.send(it) },
+            onRetry = { attempt++ },
         )
     }
     TerminalTab(view, actions)

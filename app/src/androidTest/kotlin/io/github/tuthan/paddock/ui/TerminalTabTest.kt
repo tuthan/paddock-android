@@ -69,12 +69,12 @@ class TerminalTabTest {
 
     private class Calls {
         val keys = CopyOnWriteArrayList<ByteArray>()
-        var request = 0; var takeOver = 0; var install = 0; var dismiss = 0; var release = 0
+        var request = 0; var takeOver = 0; var install = 0; var dismiss = 0; var release = 0; var retry = 0
         val resizes = CopyOnWriteArrayList<Pair<Int, Int>>()
         val viewports = CopyOnWriteArrayList<Pair<Int, Int>>()
         fun actions() = TerminalActions(
             onViewport = { c, r -> viewports += c to r }, onRequestControl = { request++ }, onTakeOver = { takeOver++ }, onInstallHelper = { install++ },
-            onDismissNotice = { dismiss++ }, onRelease = { release++ }, onResizeToFit = { c, r -> resizes += c to r }, onKey = { keys += it },
+            onDismissNotice = { dismiss++ }, onRelease = { release++ }, onResizeToFit = { c, r -> resizes += c to r }, onKey = { keys += it }, onRetry = { retry++ },
         )
     }
 
@@ -280,7 +280,7 @@ class TerminalTabTest {
     @Test fun aLostLinkSaysSoKeepsTheLastScreenAndOffersNoControl() {
         show(viewOf(TerminalMode.Ended(EndReason.LinkLost)))
         rule.onNodeWithText("The connection to the machine dropped.").assertIsDisplayed()
-        rule.onNodeWithText("Request control").assertDoesNotExist(); rule.onNodeWithText("Release").assertDoesNotExist()
+        rule.onNodeWithText("Request control").assertDoesNotExist(); rule.onNodeWithText("Release").assertDoesNotExist(); rule.onNodeWithText("Try again").assertDoesNotExist()
         screenNode().assertIsDisplayed()
         shoot("terminal-linklost-dark")
     }
@@ -288,6 +288,13 @@ class TerminalTabTest {
     @Test fun aClosedTerminalAndOtherEndings() {
         show(viewOf(TerminalMode.Ended(EndReason.PaneGone), grid = false))
         rule.onNodeWithText("This terminal is no longer in the session.").assertIsDisplayed()
+    }
+
+    @Test fun aStreamThatFailedOffersTryAgainAndALostLinkDoesNot() {
+        val calls = show(viewOf(TerminalMode.Ended(EndReason.Failed("herdr ended the terminal stream (exit 1): herdr: failed to connect to server")), grid = false))
+        rule.onNodeWithText("The terminal stream failed.").assertIsDisplayed()
+        rule.onNodeWithText("Try again").assertHasClickAction().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.retry)
     }
 
     @Test fun herdrsOwnClosingWordsAreShownAsData() {

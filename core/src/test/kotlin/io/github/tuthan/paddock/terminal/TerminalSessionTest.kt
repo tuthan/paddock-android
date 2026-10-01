@@ -206,6 +206,7 @@ class TerminalSessionTest {
         assertEquals("terminal attach failed: terminal term_1 already has an attached client; retry with --takeover", (s.view.value.notice as TerminalNotice.Conflict).herdrSays)
         waitUntil("observer reopened") { host.observers.size == 2 }
         host.observers.last().feed(full()); s.waitMode(TerminalMode.Observing)
+        assertIs<TerminalNotice.Conflict>(s.view.value.notice, "the new observer's first frame must not wipe the refusal")
         assertTrue(o1.closed); assertTrue(host.controllers.single().closed)
         assertEquals("hello", s.row0(), "the screen stayed readable through the refusal")
         assertTrue(host.controllers.none { "takeover" in it.argv }, "a refusal never retries with takeover by itself")
@@ -221,6 +222,20 @@ class TerminalSessionTest {
         s.dismissNotice()
         waitUntil("cleared") { s.view.value.notice == null }
         assertEquals(1, host.controllers.size); assertFalse(s.send("x".toByteArray()))
+    }
+
+    @Test fun aNewRequestReplacesTheLastAnswerAndAGrantedOneLeavesNoNotice() {
+        val host = TestHost(); val s = session(host); observing(host, s)
+        s.requestControl(); waitUntil("controller") { host.controllers.size == 1 }
+        host.controllers.last().feed(closed("terminal attach failed: terminal term_1 already has an attached client; retry with --takeover"))
+        waitUntil("conflict") { s.view.value.notice is TerminalNotice.Conflict }
+        waitUntil("observer reopened") { host.observers.size == 2 }
+        host.observers.last().feed(full()); Thread.sleep(100)
+        assertIs<TerminalNotice.Conflict>(s.view.value.notice)
+        s.takeOver(); waitUntil("second controller") { host.controllers.size == 2 }
+        waitUntil("the old answer is gone while the new request is open") { s.view.value.notice == null }
+        host.controllers.last().feed(full()); s.waitMode(TerminalMode.Controlling)
+        assertNull(s.view.value.notice)
     }
 
     @Test fun takeOverIsASeparateCommandThatAddsTheFlag() {

@@ -61,6 +61,19 @@ object TerminalText {
         (viewWidthPx / (max(1, cols) * widthPerSize) / pxPerSp).coerceIn(FIT_FLOOR_SP, FIT_CEILING_SP)
 }
 
+/**
+ * How long drawing took after each frame arrived: numbers only, the last few hundred, in memory. The time is taken at the end
+ * of the UI thread's draw pass, so the picture is on screen at most one display frame later. Phase 05 reads it to check that
+ * a 200-line scroll is drawn within 300 ms of its last frame (AC-05.8).
+ */
+object TerminalTiming {
+    class Sample(val frame: Long, val arrivedNanos: Long, val drawnNanos: Long) { val millis: Double get() = (drawnNanos - arrivedNanos) / 1e6 }
+    private val ring = ArrayDeque<Sample>()
+    @Synchronized fun record(frame: Long, arrived: Long, drawn: Long) { if (ring.size >= 512) ring.removeFirst(); ring.addLast(Sample(frame, arrived, drawn)) }
+    @Synchronized fun samples(): List<Sample> = ring.toList()
+    @Synchronized fun clear() = ring.clear()
+}
+
 /** What a pinch or pan in progress builds on. */
 private class Gesture(var sp: Float) {
     var offset = Offset.Zero
@@ -107,6 +120,9 @@ fun TerminalCanvas(
     description: String,
     modifier: Modifier = Modifier,
     dimmed: Boolean = false,
+    /** Which frame [grid] is and when its line arrived (`System.nanoTime()`), for [TerminalTiming]. */
+    frame: Long = 0,
+    arrivedNanos: Long = 0,
 ) {
     val colors = PaddockTokens.colors
     val density = LocalDensity.current
@@ -180,6 +196,7 @@ fun TerminalCanvas(
             n.translate(shown.x, shown.y)
             drawGrid(n, grid, cursor, pens, colors, size.width - shown.x, size.height - shown.y, -shown.x, -shown.y, dimmed)
             n.restore()
+            if (arrivedNanos != 0L) TerminalTiming.record(frame, arrivedNanos, System.nanoTime())
         }
     }
 }

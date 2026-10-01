@@ -72,6 +72,8 @@ class TerminalActions(
     val onResizeToFit: (cols: Int, rows: Int) -> Unit = { _, _ -> },
     /** Bytes for the terminal. Called only while this phone controls it. */
     val onKey: (ByteArray) -> Unit = {},
+    /** Opens a fresh session after one that ended with an error. */
+    val onRetry: () -> Unit = {},
 )
 
 /** What the pill says, and whether the phone may type. */
@@ -144,6 +146,7 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(what, style = PaddockTokens.type.rowTitle, color = c.title)
                 Text(why, style = PaddockTokens.type.secondary, color = c.dim)
+                if (ended.reason is EndReason.Failed || ended.reason is EndReason.Closed) PaddockButton("Try again", actions.onRetry, kind = ButtonKind.Ghost, small = true, fillWidth = false)
             }
         }
         val shape = RoundedCornerShape(PaddockTokens.radii.slab)
@@ -163,7 +166,7 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
                 onViewportCells = { cols, rows -> fitCells = cols to rows; actions.onViewport(cols, rows) },
                 onViewSize = { viewWidth = it },
                 description = terminalDescription(view.grid, pillText(view).replace(" · ", ", ")),
-                dimmed = ended != null,
+                dimmed = ended != null, frame = view.frames, arrivedNanos = view.lastFrameArrivedNanos,
                 // Focus and keys sit on the node that TalkBack reads, so the terminal is one stop with one description.
                 modifier = Modifier.focusRequester(focus).onFocusChanged { focused = it.isFocused }.focusable()
                     .onPreviewKeyEvent { e ->

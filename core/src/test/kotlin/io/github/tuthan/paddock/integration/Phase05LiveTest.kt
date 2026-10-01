@@ -180,6 +180,9 @@ class Phase05LiveTest {
         val said = (t.view.value.notice as TerminalNotice.Conflict).herdrSays
         assertTrue("already has an attached client" in said && "--takeover" in said, said)
         t.waitMode(TerminalMode.Observing)
+        until("the observer after the refusal to draw its first frame") { t.view.value.frames > 0 && t.view.value.mode == TerminalMode.Observing }
+        delay(300)
+        assertIs<TerminalNotice.Conflict>(t.view.value.notice, "the refusal is still on the screen once the observer is back")
         assertFalse(t.send("echo must-not-arrive\r".toByteArray()), "keys stay inert after a refusal")
         assertTrue(desktop.alive(), "the desktop client was not disturbed")
         desktop.type("echo desktop-second")
