@@ -33,11 +33,11 @@ Integration tests and fixture capture use one herdr session and nothing else:
 
 ```sh
 tools/setup-session.sh                       # starts `herdr --session paddock-test server`, one workspace at /tmp/paddock-test-ws
-tools/capture-fixtures.sh paddock-test       # recapture the corpus (a pin update)
+tools/capture-fixtures.sh paddock-test       # recapture the corpus (a pin update); refuses before writing, swaps in only on success
 tools/validate-fixtures.sh                   # corpus completeness, no leaks, `default` refused
 ```
 
-**No test ever touches the default session or a real agent.** Only sessions named `paddock-test` or `paddock-test-<suffix>` may be mutated; the scripts and the integration harness refuse any other name or socket path.
+**No test ever touches the default session or a real agent.** Only sessions whose name matches `^paddock-test(-[a-z0-9]+)?$` (`paddock-test`, or `paddock-test-` plus lowercase letters and digits) may be mutated; the scripts and the integration harness refuse any other name or socket path.
 
 ## Dependencies
 

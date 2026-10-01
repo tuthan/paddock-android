@@ -6,3 +6,4 @@ local.properties
 .kotlin/
 *.apk
 .claude/worktrees/
+__pycache__/

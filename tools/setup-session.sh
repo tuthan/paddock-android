@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Bring up the disposable herdr session headlessly and leave exactly one
-# workspace at /tmp/paddock-test-ws. Only paddock-test[-suffix] is ever touched.
+# workspace at /tmp/paddock-test-ws. Only paddock-test or paddock-test-<[a-z0-9]+> is ever touched.
 set -euo pipefail
 SESSION="${1:-paddock-test}"
-[[ "$SESSION" =~ ^paddock-test(-[A-Za-z0-9._-]+)?$ ]] || { echo "refusing session '$SESSION'" >&2; exit 2; }
+[[ "$SESSION" =~ ^paddock-test(-[a-z0-9]+)?$ ]] || { echo "refusing session '$SESSION'" >&2; exit 2; }
 WS=/tmp/paddock-test-ws
 H=(herdr --session "$SESSION")
 mkdir -p "$WS"
