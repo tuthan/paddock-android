@@ -67,6 +67,15 @@ class AddMachineFormTest {
         assertEquals("box", p.importedKeyId)
     }
 
+    @Test fun theSessionNameIsOptionalAndCheckedWhenGiven() {
+        assertNull(AddMachineForm.errors(input()).session)
+        assertNull(AddMachineForm.profile(input(), emptySet())!!.session)
+        assertNull(AddMachineForm.errors(AddMachineInput("box", "22", "jdoe", session = "paddock-test")).session)
+        assertEquals("paddock-test", AddMachineForm.profile(AddMachineInput("box", "22", "jdoe", session = " paddock-test "), emptySet())!!.session)
+        for (bad in listOf("a b", "-x", "a/b", "x;y")) assertNotNull(AddMachineForm.errors(AddMachineInput("box", "22", "jdoe", session = bad)).session, bad)
+        assertNull(AddMachineForm.profile(AddMachineInput("box", "22", "jdoe", session = "a b"), emptySet()))
+    }
+
     @Test fun aProfileIsNullWhileAnythingIsWrong() = assertNull(AddMachineForm.profile(input(user = ""), emptySet()))
 
     @Test fun theRouteNoteDependsOnTheAddressAndTheGrant() {

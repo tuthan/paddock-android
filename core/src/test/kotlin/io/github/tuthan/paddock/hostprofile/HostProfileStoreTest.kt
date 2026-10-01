@@ -82,4 +82,14 @@ class HostProfileStoreTest {
         s.put(profile("b", "B")); s.put(profile("a", "A")); s.remove("b")
         assertEquals(listOf("a"), s.list().map { it.id })
     }
+
+    @Test fun aSessionNameSurvivesTheFileAndABadOneNeverConstructs() = runBlocking<Unit> {
+        val f = java.nio.file.Files.createTempDirectory("hp").toFile().resolve("p.json")
+        FileHostProfileStore(f).put(HostProfile("a", "A", "h", user = "u", session = "paddock-test"))
+        assertEquals("paddock-test", FileHostProfileStore(f).get("a")?.session)
+        assertFailsWith<IllegalArgumentException> { HostProfile("a", "A", "h", user = "u", session = "x y") }
+        // A file written before sessions existed has no field and loads as the default.
+        f.writeText("""{"version":1,"profiles":[{"id":"a","name":"A","host":"h","user":"u"}]}""")
+        assertEquals(null, FileHostProfileStore(f).get("a")?.session)
+    }
 }

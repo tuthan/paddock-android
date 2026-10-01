@@ -87,10 +87,11 @@ fun AddMachine(
     var host by rememberSaveable { mutableStateOf(initial.host) }
     var port by rememberSaveable { mutableStateOf(initial.port) }
     var user by rememberSaveable { mutableStateOf(initial.user) }
+    var session by rememberSaveable { mutableStateOf(initial.session) }
     var key by rememberSaveable { mutableStateOf(initial.key) }
     var showErrors by rememberSaveable { mutableStateOf(false) }
     var showQr by rememberSaveable { mutableStateOf(false) }
-    val input = AddMachineInput(host, port, user, key, if (key == KeyKind.Imported) state.importedKeyId else null)
+    val input = AddMachineInput(host, port, user, key, if (key == KeyKind.Imported) state.importedKeyId else null, session)
     val errors = AddMachineForm.errors(input)
     val route = state.route(host)
 
@@ -117,8 +118,13 @@ fun AddMachine(
             RouteHint(route, state.permissionDenied, onOpenSettings)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Field("User", user, { user = it }, Modifier.weight(2f), error = if (showErrors) errors.user else null)
-                Field("Port", port, { port = it }, Modifier.weight(1f), error = if (showErrors) errors.port else null, keyboardType = KeyboardType.Number, imeAction = ImeAction.Done, onDone = ::connect)
+                Field("Port", port, { port = it }, Modifier.weight(1f), error = if (showErrors) errors.port else null, keyboardType = KeyboardType.Number)
             }
+
+            Field(
+                "herdr session (optional)", session, { session = it }, error = if (showErrors) errors.session else null,
+                placeholder = "default", imeAction = ImeAction.Done, onDone = ::connect,
+            )
 
             Kicker("Sign in with")
             ChoiceCard("This phone's key", "A key made on this phone that never leaves it. You authorize it on the machine once.", key == KeyKind.Phone, { key = KeyKind.Phone })
@@ -129,6 +135,7 @@ fun AddMachine(
             )
             if (key == KeyKind.Phone) PhoneKeySection(state, showQr, { showQr = it }, onGenerateKey, onCopyPublicKey)
             if (key == KeyKind.Imported && state.importedKeyId == null && showErrors) Banner("Import a key before connecting, or use this phone's key.")
+            if (key == KeyKind.Phone && state.publicKeyLine == null && showErrors) Banner("Create this phone's key first, then authorize it on the machine and press Connect.")
 
             Text(
                 "The first connection shows the machine's fingerprint before anything is trusted. Nothing signs in until you accept it.",

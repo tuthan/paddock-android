@@ -104,6 +104,7 @@ class AddMachineTest {
         fill()
         rule.onNodeWithText("Connect").performClick()
         assertNull(calls.connect)
+        rule.onNodeWithText("Create this phone's key first", substring = true).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Create this phone's key").performScrollTo().performClick()
         assertEquals(1, calls.generate)
     }

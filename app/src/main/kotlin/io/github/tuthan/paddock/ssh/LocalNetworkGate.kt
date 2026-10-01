@@ -29,6 +29,14 @@ class LocalNetworkGate(
     fun decide(host: String): GateDecision =
         LocalNetworkPolicy.decide(targetSdk, deviceSdk, classifyEndpoint(host), isGranted())
 
+    /** Whether this device and build enforce the grant for LAN endpoints at all, and it is missing. For the Settings row. */
+    fun lanAccessMissing(): Boolean =
+        LocalNetworkPolicy.decide(targetSdk, deviceSdk, io.github.tuthan.paddock.net.EndpointClass.Local, isGranted()) == GateDecision.NeedsGrant
+
+    /** Whether the grant applies here whatever its state. */
+    fun lanAccessApplies(): Boolean =
+        LocalNetworkPolicy.decide(targetSdk, deviceSdk, io.github.tuthan.paddock.net.EndpointClass.Local, granted = true) != GateDecision.NotRequired
+
     /** True when the UI should ask for the grant in context before connecting to [host]. */
     fun needsRequest(host: String): Boolean = decide(host) == GateDecision.NeedsGrant
 

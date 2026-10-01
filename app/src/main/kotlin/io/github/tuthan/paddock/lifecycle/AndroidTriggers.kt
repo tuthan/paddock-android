@@ -6,6 +6,9 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Bundle
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Maps two platform signals onto [ConnectionOwner]: the app becoming visible (any activity started after none were)
@@ -16,9 +19,13 @@ class AndroidTriggers(private val app: Application, private val owner: Connectio
     private var current: Network? = null
     private var seen = false
 
+    private val _foreground = MutableStateFlow(false)
+    /** True while any activity of this app is started. The monitor's heartbeat and the connection leases follow it. */
+    val foreground: StateFlow<Boolean> = _foreground.asStateFlow()
+
     private val activities = object : Application.ActivityLifecycleCallbacks {
-        override fun onActivityStarted(activity: Activity) { if (started++ == 0) owner.refreshAll() }
-        override fun onActivityStopped(activity: Activity) { started = maxOf(0, started - 1) }
+        override fun onActivityStarted(activity: Activity) { if (started++ == 0) { _foreground.value = true; owner.refreshAll() } }
+        override fun onActivityStopped(activity: Activity) { started = maxOf(0, started - 1); if (started == 0) _foreground.value = false }
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
         override fun onActivityResumed(activity: Activity) = Unit
         override fun onActivityPaused(activity: Activity) = Unit

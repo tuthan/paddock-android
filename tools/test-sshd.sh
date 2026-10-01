@@ -30,6 +30,9 @@ X11Forwarding no
 PermitTTY no
 PrintMotd no
 CFG
+    # An isolated HOME for sessions (SetEnv is applied after sshd sets the default environment), so tests that install files
+    # on the "host" write under a throwaway directory, not the real home.
+    [ -z "${TEST_SSHD_HOME:-}" ] || echo "SetEnv HOME=$TEST_SSHD_HOME" >> "$RUN/sshd_config"
     /usr/bin/sshd -f "$RUN/sshd_config" -E "$RUN/sshd.log"
     sleep 0.5; echo "sshd on 127.0.0.1:$PORT pid $(cat "$RUN/sshd.pid")";;
   stop)  [ -f "$RUN/sshd.pid" ] && kill "$(cat "$RUN/sshd.pid")" 2>/dev/null || true; rm -f "$RUN/sshd.pid"; echo stopped;;

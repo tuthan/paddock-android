@@ -11,11 +11,13 @@ data class AddMachineInput(
     val user: String = "",
     val key: KeyKind = KeyKind.Phone,
     val importedKeyId: String? = null,
+    /** Optional herdr session name; blank means the running default. */
+    val session: String = "",
 )
 
 /** One message per field, null when the field is fine. */
-data class FieldErrors(val host: String? = null, val port: String? = null, val user: String? = null) {
-    val any: Boolean get() = host != null || port != null || user != null
+data class FieldErrors(val host: String? = null, val port: String? = null, val user: String? = null, val session: String? = null) {
+    val any: Boolean get() = host != null || port != null || user != null || session != null
 }
 
 /** What the route note under the host field says. Local addresses are the only ones the Android 17 grant concerns. */
@@ -54,7 +56,9 @@ object AddMachineForm {
                 "Use letters, digits, dots, dashes or underscores."
             }
         }
-        return FieldErrors(hostError, portError, userError)
+        val name = input.session.trim()
+        val sessionError = if (name.isNotEmpty() && !HostProfile.SESSION.matches(name)) "Use letters, digits, dots, dashes or underscores, as `herdr session list` shows it." else null
+        return FieldErrors(hostError, portError, userError, sessionError)
     }
 
     /** A profile for valid input; null otherwise. The id is derived from the host and made unique against [existingIds]. */
@@ -65,6 +69,7 @@ object AddMachineForm {
             HostProfile(
                 id = idFor(host, existingIds), name = host.take(60), host = host, port = input.port.trim().toInt(), user = input.user.trim(),
                 key = input.key, importedKeyId = if (input.key == KeyKind.Imported) input.importedKeyId else null,
+                session = input.session.trim().ifEmpty { null },
             )
         } catch (_: IllegalArgumentException) { null }
     }

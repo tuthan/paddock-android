@@ -29,6 +29,8 @@ data class HostProfile(
     val user: String,
     val key: KeyKind = KeyKind.Phone,
     val importedKeyId: String? = null,
+    /** The herdr session to watch on this machine, or null for the running default. Names come from `herdr session list`. */
+    val session: String? = null,
 ) {
     init {
         require(ID.matches(id)) { "invalid profile id" }
@@ -36,6 +38,7 @@ data class HostProfile(
         require(host.length in 1..253 && HOST.matches(host)) { "invalid host" }
         require(port in 1..65535) { "invalid port" }
         require(USER.matches(user)) { "invalid user" }
+        require(session == null || SESSION.matches(session)) { "invalid session name" }
         when (key) {
             KeyKind.Phone -> require(importedKeyId == null) { "a phone-key profile has no imported key" }
             KeyKind.Imported -> require(importedKeyId != null && ID.matches(importedKeyId)) { "an imported-key profile needs a key id" }
@@ -50,6 +53,7 @@ data class HostProfile(
         /** Also the imported-key id rule, so a profile id can name its key. */
         val ID = Regex("[a-z0-9][a-z0-9-]{0,40}")
         private val HOST = Regex("[A-Za-z0-9._:\\[][A-Za-z0-9._:%\\[\\]-]*")
+        val SESSION = Regex("[A-Za-z0-9._][A-Za-z0-9._-]{0,63}")
         private val USER = Regex("[A-Za-z0-9._][A-Za-z0-9._-]{0,63}")
     }
 }
