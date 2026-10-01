@@ -129,7 +129,11 @@ class SshlibConnector(
             closeOffThread(connection); tracker.down(DownReason.Closed); throw e
         } catch (e: Throwable) {
             closeOffThread(connection)
-            val f = verdict.failure ?: if (e is IOException) classify(e) else ConnectFailure.Unreachable(e)
+            val f = verdict.failure ?: when (val c = if (e is IOException) classify(e) else ConnectFailure.Unreachable(e)) {
+                // The server never answered: on Android 17 without the grant the OS may have dropped the connect silently.
+                is ConnectFailure.TimedOut -> gate.timeoutHint(target)?.let { ConnectFailure.TimedOut(e, it) } ?: c
+                else -> c
+            }
             tracker.down(f.reason)
             throw if (e is Error) e else f
         } finally {

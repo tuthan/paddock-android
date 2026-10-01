@@ -30,7 +30,8 @@ sealed class ConnectFailure(message: String, val reason: DownReason, cause: Thro
     /** The pin store cannot be read; no host key was trusted and nothing was authenticated. */
     class HostKeysUnreadable(cause: Throwable?) : ConnectFailure("saved host keys cannot be read", DownReason.HostKeysUnreadable, cause)
     class Unreachable(cause: Throwable) : ConnectFailure("cannot reach host: ${cause.message}", DownReason.Network(cause.message ?: cause.javaClass.simpleName), cause)
-    class TimedOut(cause: Throwable? = null) : ConnectFailure("connection timed out", DownReason.Timeout, cause)
+    /** [reason] is [DownReason.Timeout], or [DownReason.LocalNetworkTimeout] when the gate says the OS may have dropped the connect. */
+    class TimedOut(cause: Throwable? = null, reason: DownReason = DownReason.Timeout) : ConnectFailure("connection timed out", reason, cause)
 }
 
 /** The link is not Up (never connected, lost, or closed); nothing was sent. */
@@ -45,6 +46,9 @@ class ChannelsBusy(slots: Int, val waitedMillis: Long) : java.io.IOException("al
 /** Asked before any socket opens. Returns null to allow, or the reason to refuse. */
 fun interface ConnectGate {
     suspend fun check(target: SshTarget): DownReason?
+
+    /** Asked when a connect to [target] timed out before the server answered; a non-null reason replaces [DownReason.Timeout]. */
+    suspend fun timeoutHint(target: SshTarget): DownReason? = null
 
     companion object {
         val Open = ConnectGate { null }

@@ -393,6 +393,29 @@ class SshSessionTest {
         assertNull(store.find("profile-1"))
     }
 
+    /** The server never answers (stalled proxy) and the gate reports the grant missing: the timeout carries the local-network hint. */
+    @Test
+    fun aConnectTimeoutWhereTheGateHintsCarriesTheLocalNetworkReason() = runBlocking<Unit> {
+        // A pin makes the short timer apply (first contact would wait for a person).
+        policy.acceptUnknown("profile-1", "$host:$proxyPort", io.github.tuthan.paddock.hostkey.PresentedHostKey("ssh-ed25519", ByteArray(51) { 7 }))
+        val hinting = object : ConnectGate {
+            override suspend fun check(target: SshTarget): DownReason? = null
+            override suspend fun timeoutHint(target: SshTarget): DownReason? = DownReason.LocalNetworkTimeout
+        }
+        control("freeze")
+        try {
+            val t0 = System.nanoTime()
+            try { SshlibConnector(policy, clock, hinting, connectTimeout = 2.seconds).connect(target(proxyPort), phoneAuth()) { true }; fail("connected") }
+            catch (e: ConnectFailure.TimedOut) { assertEquals(DownReason.LocalNetworkTimeout, e.reason); note("T stalled connect -> ${e.reason} after ${msSince(t0)} ms") }
+        } finally { control("thaw") }
+        // Without a hint the same timeout stays a plain Timeout.
+        control("freeze")
+        try {
+            try { SshlibConnector(policy, clock, connectTimeout = 2.seconds).connect(target(proxyPort), phoneAuth()) { true }; fail("connected") }
+            catch (e: ConnectFailure.TimedOut) { assertEquals(DownReason.Timeout, e.reason) }
+        } finally { control("thaw") }
+    }
+
     // ---- dead link -----------------------------------------------------------------------------------------
 
     private fun control(cmd: String) = Socket(host, controlPort).use { it.getOutputStream().write("$cmd\n".toByteArray()); it.getInputStream().read(ByteArray(64)) }

@@ -85,6 +85,10 @@ object HomeUiMapper {
                 "Open settings", Recovery.OpenSettings, null,
             )
             DownReason.Timeout -> degraded("The host did not answer in time.$retry", if (retry.isEmpty()) "Try again" else null, if (retry.isEmpty()) Recovery.Retry else null, null)
+            DownReason.LocalNetworkTimeout -> degraded(
+                "The host did not answer in time. If it is on your local network, check that Paddock has local-network access.$retry",
+                "Open settings", Recovery.OpenSettings, null,
+            )
             is DownReason.Network -> degraded("Cannot reach the host: ${reason.message}.$retry".replace("..", "."), if (retry.isEmpty()) "Try again" else null, if (retry.isEmpty()) Recovery.Retry else null, null)
             DownReason.Closed -> degraded("Disconnected.$retry", if (retry.isEmpty()) "Try again" else null, if (retry.isEmpty()) Recovery.Retry else null, null)
         }

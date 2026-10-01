@@ -5,10 +5,12 @@ import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.tuthan.paddock.hostkey.FileHostKeyStore
 import io.github.tuthan.paddock.hostkey.HostKeyPolicy
+import io.github.tuthan.paddock.net.HostResolver
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.DownReason
 import java.io.File
 import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -83,6 +85,21 @@ class LocalNetworkGateTest {
         assertEquals(DownReason.PermissionDenied, gate.check(real))
         try { connector().connect(real, phoneAuth()) { true }; fail("connected without the grant") }
         catch (e: ConnectFailure.Refused) { assertEquals(DownReason.PermissionDenied, e.reason) }
+
+        // A LAN hostname: the text is a name, the address is the LAN host (mapped here by a resolver so no DNS is needed).
+        val named = LocalNetworkGate(ctx, resolver = { name ->
+            if (name == "nas.lan") listOf(InetAddress.getByAddress(name, InetAddress.getByName(host).address)) else HostResolver.System.resolve(name)
+        })
+        assertTrue("a name resolving to a LAN address needs the grant", named.needsRequest("nas.lan"))
+        assertFalse("localhost resolves to loopback, which the grant does not cover", named.needsRequest("localhost"))
+        // Refused before any socket: the step's sshd connection count stays 0.
+        try { SshlibConnector(policy, clock, named).connect(SshTarget("profile-gate", "nas.lan", port, user), phoneAuth()) { true }; fail("connected without the grant") }
+        catch (e: ConnectFailure.Refused) { assertEquals(DownReason.PermissionDenied, e.reason) }
+        note("T name: nas.lan -> $host refused in the gate; localhost not local")
+
+        // An endpoint the gate let through that then times out carries the hint, because the OS drops it silently.
+        assertEquals(DownReason.LocalNetworkTimeout, gate.timeoutHint(SshTarget("profile-gate", "100.101.102.103", 22, user)))
+        note("T hint: a timeout without the grant is reported as LocalNetworkTimeout")
     }
 
     @Test
@@ -90,6 +107,7 @@ class LocalNetworkGateTest {
         assertTrue("run with the grant given", gate.isGranted())
         val target = SshTarget("profile-gate", host, port, user)
         assertNull(gate.check(target))
+        assertNull("no hint once the grant is given", gate.timeoutHint(target))
         val s = connector().connect(target, phoneAuth()) { true }
         try { assertEquals("ok\n", String(s.exec(listOf("echo", "ok")).stdout)) } finally { s.close() }
         note("T granted: connected to $host:$port")

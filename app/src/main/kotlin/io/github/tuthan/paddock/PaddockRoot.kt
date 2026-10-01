@@ -335,7 +335,8 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, onBack: () -> U
         AddMachine(
             state,
             onConnect = { input ->
-                if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input)
+                // Decided from where the name resolves (a LAN hostname needs the grant too); the lookup is bounded and off the main thread.
+                scope.launch { if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input) }
             },
             onGenerateKey = { scope.launch { withContext(Dispatchers.Default) { runCatching { graph.phoneKey.getOrCreate() } }; keyTick++ } },
             onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },

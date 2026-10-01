@@ -20,9 +20,19 @@ object LocalNetworkPolicy {
      * OS still blocks them is recorded by the device test, not assumed here.
      */
     fun decide(targetSdk: Int, deviceSdk: Int, endpoint: EndpointClass, granted: Boolean): GateDecision = when {
-        targetSdk < ENFORCED_FROM_SDK || deviceSdk < ENFORCED_FROM_SDK -> GateDecision.NotRequired
+        !enforced(targetSdk, deviceSdk) -> GateDecision.NotRequired
         endpoint != EndpointClass.Local -> GateDecision.NotRequired
         granted -> GateDecision.Granted
         else -> GateDecision.NeedsGrant
     }
+
+    /** Whether this build on this device enforces the grant at all. Where it does not, nothing needs resolving. */
+    fun enforced(targetSdk: Int, deviceSdk: Int): Boolean = targetSdk >= ENFORCED_FROM_SDK && deviceSdk >= ENFORCED_FROM_SDK
+
+    /**
+     * Whether a connect timeout should carry the "check local-network access" hint: the grant is enforced and missing, and the
+     * OS drops LAN traffic without the grant silently, so an endpoint the gate let through (a name that did not resolve, a
+     * stale DNS answer, a route the classification does not know) can still end as a bare timeout.
+     */
+    fun timeoutHint(targetSdk: Int, deviceSdk: Int, granted: Boolean): Boolean = enforced(targetSdk, deviceSdk) && !granted
 }

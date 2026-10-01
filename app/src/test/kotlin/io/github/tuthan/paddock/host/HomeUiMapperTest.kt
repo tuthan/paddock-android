@@ -59,6 +59,15 @@ class HomeUiMapperTest {
         assertEquals(Recovery.Retry, r.recovery)
     }
 
+    @Test fun aTimeoutWithoutTheGrantSuggestsLocalNetworkAccessAndOffersSettingsWhileItRetries() {
+        val r = map(HostView(phase = HostPhase.Failed(DownReason.LocalNetworkTimeout, now + 1_500)))
+        val s = r.state as HomeUiState.Degraded
+        assertTrue(s.reason, s.reason.contains("check that Paddock has local-network access"))
+        assertTrue(s.reason, s.reason.contains("Trying again in 2 s."))
+        assertEquals(Recovery.OpenSettings, r.recovery)
+        assertEquals("Open settings", s.recoveryLabel)
+    }
+
     @Test fun anUnreadableKeySaysSoInPlainWordsAndNeverMentionsTheNetwork() {
         val r = map(HostView(phase = HostPhase.Failed(DownReason.KeyUnavailable, null)))
         val s = r.state as HomeUiState.Degraded

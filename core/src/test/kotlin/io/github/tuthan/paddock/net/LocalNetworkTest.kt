@@ -1,7 +1,14 @@
 package io.github.tuthan.paddock.net
 
+import java.net.InetAddress
+import java.net.UnknownHostException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.fail
+import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.runBlocking
 
 class LocalNetworkTest {
     private fun assertClass(expected: EndpointClass, vararg hosts: String) =
@@ -51,6 +58,62 @@ class LocalNetworkTest {
     fun malformedInputIsNotLocalAndNeverResolves() = assertClass(
         EndpointClass.NotLocal, "", " ", "10.0.0", "10.0.0.256", "10.0.0.1.2", "999.1.1.1", "1:2:3", "fe80:::1", "not an address",
     )
+
+    private fun resolver(vararg map: Pair<String, String>) = HostResolver { name ->
+        map.filter { it.first == name }.map { InetAddress.getByName(it.second) }.ifEmpty { throw UnknownHostException(name) }
+    }
+
+    @Test
+    fun aNameThatResolvesToALanAddressIsLocal() = runBlocking<Unit> {
+        val r = resolver("nas.lan" to "192.168.1.20", "devbox" to "10.0.0.5", "x.home.arpa" to "fd00::1", "router" to "169.254.3.4")
+        for (name in listOf("nas.lan", "devbox", "x.home.arpa", "router", "NAS.lan")) assertEquals(EndpointClass.Local, classifyResolved(name, r), name)
+    }
+
+    @Test
+    fun aNameIsLocalWhenAnyOfItsAddressesIsLocal() = runBlocking<Unit> {
+        val r = resolver("both" to "100.64.0.7", "both" to "192.168.0.2", "vpn-only" to "100.64.0.7", "public" to "93.184.216.34")
+        assertEquals(EndpointClass.Local, classifyResolved("both", r))
+        assertEquals(EndpointClass.NotLocal, classifyResolved("vpn-only", r))
+        assertEquals(EndpointClass.NotLocal, classifyResolved("public", r))
+    }
+
+    @Test
+    fun loopbackNamesAndUnresolvableNamesAreNotLocal() = runBlocking<Unit> {
+        val r = resolver("localhost" to "127.0.0.1", "ip6-localhost" to "::1")
+        assertEquals(EndpointClass.NotLocal, classifyResolved("localhost", r))
+        assertEquals(EndpointClass.NotLocal, classifyResolved("ip6-localhost", r))
+        assertEquals(EndpointClass.NotLocal, classifyResolved("nowhere.invalid", r), "a failed lookup")
+        assertEquals(EndpointClass.NotLocal, classifyResolved("", r))
+    }
+
+    @Test
+    fun literalsAndDotLocalNamesNeverTouchTheResolver() = runBlocking<Unit> {
+        val refuses = HostResolver { fail("resolved $it") }
+        assertEquals(EndpointClass.Local, classifyResolved("10.0.0.1", refuses))
+        assertEquals(EndpointClass.Local, classifyResolved("printer.local", refuses))
+        assertEquals(EndpointClass.Local, classifyResolved("[fe80::1]", refuses))
+        assertEquals(EndpointClass.NotLocal, classifyResolved("8.8.8.8", refuses))
+        assertEquals(EndpointClass.NotLocal, classifyResolved("100.64.0.1", refuses))
+        assertEquals(EndpointClass.NotLocal, classifyResolved("2001:db8::1", refuses))
+    }
+
+    @Test
+    fun aSlowLookupIsBoundedAndCountsAsNotLocal() = runBlocking<Unit> {
+        val stuck = HostResolver { Thread.sleep(5_000); listOf(InetAddress.getByName("192.168.1.1")) }
+        val t0 = System.nanoTime()
+        assertEquals(EndpointClass.NotLocal, classifyResolved("slow.lan", stuck, timeout = 200.milliseconds))
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        assertTrue(ms < 1_500, "took $ms ms")
+    }
+
+    @Test
+    fun theTimeoutHintAppliesOnlyWhereTheGrantIsEnforcedAndMissing() {
+        assertTrue(LocalNetworkPolicy.timeoutHint(37, 37, granted = false))
+        assertFalse(LocalNetworkPolicy.timeoutHint(37, 37, granted = true))
+        assertFalse(LocalNetworkPolicy.timeoutHint(36, 37, granted = false))
+        assertFalse(LocalNetworkPolicy.timeoutHint(37, 36, granted = false))
+        assertTrue(LocalNetworkPolicy.enforced(38, 37)); assertFalse(LocalNetworkPolicy.enforced(37, 26))
+    }
 
     @Test
     fun policyRequiresTheGrantOnlyForLocalOnAndroid17WithTargetSdk37() {

@@ -3,25 +3,57 @@ package io.github.tuthan.paddock.net
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
+import kotlin.concurrent.thread
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class EndpointClass { Local, NotLocal }
 
 /**
- * Whether an endpoint counts as "local network" for Android 17's ACCESS_LOCAL_NETWORK grant.
- * Literals and `.local` names only; no DNS lookup ever happens here. A plain DNS name is NotLocal
- * because the phone cannot know where it resolves, and a name that resolves to a LAN address is
- * re-classified by the caller from the resolved address.
+ * Whether an endpoint counts as "local network" for Android 17's ACCESS_LOCAL_NETWORK grant, from the text alone.
+ * Literals and `.local` names only; no DNS lookup ever happens here. A plain DNS name is NotLocal here because the
+ * text does not say where it goes; [classifyResolved] adds the resolved addresses, and the gate uses that.
  *
  * Local: RFC 1918, 169.254.0.0/16, fe80::/10, fc00::/7, `*.local`, and IPv4-mapped forms of those.
  * NotLocal: everything else, including loopback, tailnet and other VPN ranges (100.64.0.0/10).
  */
 fun classifyEndpoint(host: String): EndpointClass {
-    val h = host.trim().removeSurrounding("[", "]").substringBefore('%').lowercase()
+    val h = normalized(host)
     if (h.isEmpty()) return EndpointClass.NotLocal
     if (h.endsWith(".local") && h.length > ".local".length) return EndpointClass.Local
     val address = parseLiteral(h) ?: return EndpointClass.NotLocal
     return if (isLocal(address)) EndpointClass.Local else EndpointClass.NotLocal
 }
+
+/** Resolves a host name to its addresses. Blocking; injected so tests never touch DNS. */
+fun interface HostResolver {
+    fun resolve(host: String): List<InetAddress>
+
+    companion object {
+        val System = HostResolver { InetAddress.getAllByName(it).toList() }
+    }
+}
+
+/**
+ * [classifyEndpoint], plus where a plain name resolves. Android 17 enforces the grant on the address a socket connects to,
+ * so a LAN name (`nas.lan`, `x.home.arpa`, a bare hostname such as `devbox`) that resolves to 192.168.x.x is Local
+ * even though its text is not. Literals and `.local` names are decided without DNS. The lookup runs on its own thread and
+ * is bounded by [timeout] (a blocking lookup cannot be cancelled); a name that does not resolve, or not in time, is NotLocal,
+ * and the connect then fails on its own.
+ */
+suspend fun classifyResolved(host: String, resolver: HostResolver, timeout: Duration = 3.seconds): EndpointClass {
+    if (classifyEndpoint(host) == EndpointClass.Local) return EndpointClass.Local
+    val h = normalized(host)
+    if (h.isEmpty() || parseLiteral(h) != null) return EndpointClass.NotLocal
+    val result = CompletableDeferred<List<InetAddress>>()
+    thread(isDaemon = true, name = "paddock-resolve") { result.complete(runCatching { resolver.resolve(h) }.getOrDefault(emptyList())) }
+    val addresses = withTimeoutOrNull(timeout) { result.await() } ?: return EndpointClass.NotLocal
+    return if (addresses.any(::isLocal)) EndpointClass.Local else EndpointClass.NotLocal
+}
+
+private fun normalized(host: String) = host.trim().removeSurrounding("[", "]").substringBefore('%').lowercase()
 
 private val IPV4 = Regex("""^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$""")
 

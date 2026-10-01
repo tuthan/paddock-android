@@ -42,6 +42,11 @@ sealed interface DownReason {
     data object Closed : DownReason
     /** Keepalive or connect deadline passed without an answer. */
     data object Timeout : DownReason
+    /**
+     * A connect timed out on Android 17 while the local-network grant is missing. The OS drops LAN traffic without the grant
+     * silently, so the grant may be the cause even though the endpoint was not recognised as local.
+     */
+    data object LocalNetworkTimeout : DownReason
     data object Refused : DownReason
     data object AuthFailed : DownReason
     /** The pinned host key no longer matches; no authentication was attempted. */
