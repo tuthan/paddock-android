@@ -47,3 +47,17 @@ The smaller graph belongs to sshj (8 components against 14); that is the cost ac
 - Keystore backing on a physical phone (S1, AC-02.2) and real airplane-mode detection (S6, AC-02.6): no device.
 - (Resolved 2026-10-01: Hung Vo approved sshlib with its transitives for production, conditional on trying the `kyber` exclusion in the adapter slice; see `dependency-reviews.md`.) Originally: sshlib's transitives were to enter the production catalog only after their own review row: `kyber` is a single-maintainer post-quantum library, and the question is whether the build can drop it, and `tink`, without losing a needed key exchange. The spike approval covered the spike only.
 - sshlib was last published 2026-06-01; the update cadence is unknown.
+
+## Kyber exclusion (2026-10-01)
+
+Condition from the production approval: try excluding `asia.hombre:kyber`, `keccak` and `org.kotlincrypto` under R8, then `tink`, against the transport suite. Run with `-PminifiedTest=true` (the debug variant through R8 with the production rules plus `proguard-test.pro`), API 26 and API 36, against the throwaway loopback OpenSSH 10.5.
+
+| Configuration | Result |
+| --- | --- |
+| kyber present | 19 of 19; negotiated `mlkem768x25519-sha256`, `aes256-gcm@openssh.com`, host key `ssh-ed25519` |
+| kyber, keccak, kotlincrypto excluded | 20 of 20 (with the new negotiation test); negotiated `curve25519-sha256`, same cipher and host key. sshlib falls back by itself when the ML-KEM classes are absent; no KEX list needs to be set |
+| also `tink` excluded | Fails: `NoClassDefFoundError com.google.crypto.tink.subtle.X25519`. `tink` stays |
+
+**Shipped: the exclusion.** Three libraries (`kyber`, `keccak`, and the two `kotlincrypto` artifacts, each with its `-jvm` variant) leave the release runtime graph; sshlib's subtree is then `tink`, `jbcrypt` and `simplesocks`. **What it costs:** the post-quantum hybrid `mlkem768x25519-sha256`, which OpenSSH 10 prefers by default, is no longer negotiated; sessions use `curve25519-sha256`. Traffic captured today could be decrypted later by an attacker with a quantum computer. For this app that traffic is herdr control data and agent prompts over a LAN or VPN, so the exposure is accepted, but it is a real downgrade rather than a free simplification. To revert, delete the three `exclude` lines in `app/build.gradle.kts`, drop the `-dontwarn asia.hombre.kyber.**` rule, regenerate the locks, and the negotiation test must then be relaxed to accept `mlkem768x25519-sha256`.
+
+**R8 (production rules, `app/proguard-rules.pro`).** sshlib loads ciphers, digests, key exchanges and signature classes by name, so `com.trilead.ssh2.crypto.{cipher,digest,dh}` and `signature` are kept; without that the minified build fails at key exchange (`ClassNotFoundException AesGcm$AES256`). The rest of the library shrinks normally. `-dontwarn` covers the deliberately absent kyber classes and annotation-only classes.

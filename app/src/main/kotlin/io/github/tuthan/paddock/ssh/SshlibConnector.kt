@@ -157,6 +157,11 @@ internal class SshlibSession(
 ) : SshSession {
     override val link: StateFlow<LinkState> get() = tracker.link
 
+    /** Negotiated key exchange, cipher and host-key algorithm, for the debug screen and tests. */
+    fun negotiated(): String = connection.connectionInfo.let {
+        "kex=${it.keyExchangeAlgorithm} cipher=${it.clientToServerCryptoAlgorithm}/${it.serverToClientCryptoAlgorithm} hostkey=${it.serverHostKeyAlgorithm}"
+    }
+
     // OpenSSH accepts ten sessions by default; stay under it and queue the rest.
     private val slots = Semaphore(MAX_CHANNELS)
     private val pinger = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "paddock-keepalive").apply { isDaemon = true } }

@@ -16,7 +16,7 @@ pgrep -f blackhole-proxy.py >/dev/null || { setsid nohup python3 "$HERE/blackhol
 $ADB push "$RUN/imported_ed25519" /data/local/tmp/spike_imported >/dev/null; $ADB shell chmod 644 /data/local/tmp/spike_imported
 
 export JAVA_HOME=$HOME/.local/share/mise/installs/java/temurin-17.0.20+8; export PATH=$JAVA_HOME/bin:$PATH ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
-(cd "$ROOT" && ./gradlew --no-daemon --console=plain :app:assembleDebug :app:assembleDebugAndroidTest >"$OUT/build.log" 2>&1) || { echo "build failed: $OUT/build.log"; exit 1; }
+(cd "$ROOT" && ./gradlew --no-daemon --console=plain ${GRADLE_EXTRA:-} :app:assembleDebug :app:assembleDebugAndroidTest >"$OUT/build.log" 2>&1) || { echo "build failed: $OUT/build.log"; exit 1; }
 $ADB install -r "$ROOT/app/build/outputs/apk/debug/app-debug.apk" >/dev/null
 $ADB install -r "$ROOT/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk" >/dev/null
 

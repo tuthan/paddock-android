@@ -19,6 +19,14 @@ android {
     }
 
     buildTypes {
+        // -PminifiedTest=true runs the debug variant through R8 so instrumentation exercises the shrunk graph.
+        if (providers.gradleProperty("minifiedTest").isPresent) {
+            debug {
+                isMinifyEnabled = true
+                proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro", "proguard-test.pro")
+                testProguardFiles("proguard-test.pro")
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -59,6 +67,14 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
+}
+
+// sshlib's ML-KEM implementation (kyber, keccak, kotlincrypto) is excluded; the cost is recorded in docs/ssh-library-decision.md.
+// tink stays: sshlib needs it for X25519 and Ed25519.
+configurations.configureEach {
+    exclude(group = "asia.hombre")
+    exclude(group = "org.kotlincrypto")
+    exclude(group = "org.kotlincrypto.random")
 }
 
 dependencyLocking {

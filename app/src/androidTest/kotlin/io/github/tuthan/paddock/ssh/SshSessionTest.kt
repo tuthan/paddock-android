@@ -68,6 +68,14 @@ class SshSessionTest {
     }
 
     @Test
+    fun negotiatesAClassicKeyExchangeAndAnAeadOrCtrCipher() = runBlocking<Unit> {
+        val info = (session() as SshlibSession).negotiated()
+        note("T negotiated $info")
+        assertTrue(info, Regex("kex=(curve25519|ecdh-sha2|diffie-hellman)").containsMatchIn(info))
+        assertTrue(info, Regex("cipher=(aes\\d+-gcm@openssh.com|aes\\d+-ctr)/").containsMatchIn(info))
+    }
+
+    @Test
     fun execKeepsExitStdoutAndStderrApart() = runBlocking<Unit> {
         val r = session().exec(listOf("sh", "-c", "echo out; echo err 1>&2; exit 3"))
         assertEquals(3, r.exit)
