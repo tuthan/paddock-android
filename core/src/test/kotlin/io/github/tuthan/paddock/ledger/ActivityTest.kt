@@ -14,7 +14,7 @@ class ActivityTest {
 
     @Test fun aGapRunsFromDisconnectedToTheNextConnected() {
         val gaps = Activity.gaps(listOf(obs(ObservationKind.Disconnected, 10), obs(ObservationKind.Connected, 25)))
-        assertEquals(listOf(ActivityItem.Gap(10, 25)), gaps)
+        assertEquals(listOf(10L to 25L), gaps.map { it.from to it.to })
     }
 
     @Test fun anOpenDisconnectIsAnOngoingGap() {
@@ -31,14 +31,14 @@ class ActivityTest {
                 obs(ObservationKind.Connected, 30, "a"),
             ),
         )
-        assertEquals(listOf(ActivityItem.Gap(10, 30)), gaps)
+        assertEquals(listOf(10L to 30L), gaps.map { it.from to it.to })
     }
 
     @Test fun aRepeatedDisconnectDoesNotRestartTheGap() {
         val gaps = Activity.gaps(
             listOf(obs(ObservationKind.Disconnected, 10), obs(ObservationKind.Disconnected, 15), obs(ObservationKind.Connected, 30)),
         )
-        assertEquals(listOf(ActivityItem.Gap(10, 30)), gaps)
+        assertEquals(listOf(10L to 30L), gaps.map { it.from to it.to })
     }
 
     @Test fun allShowsEverythingNewestFirst() {

@@ -9,7 +9,7 @@ sealed interface ActivityItem {
     data class Acted(val action: PhoneAction) : ActivityItem { override val at get() = action.at }
 
     /** Time the phone had no link to the host. [to] is null while the host is still disconnected. */
-    data class Gap(val from: Long, val to: Long?) : ActivityItem { override val at get() = from }
+    data class Gap(val from: Long, val to: Long?, val host: String = "", val session: String = "") : ActivityItem { override val at get() = from }
 }
 
 /** The Activity screen's list, newest first. Only observations and phone actions appear, plus gaps for disconnected time. */
@@ -39,11 +39,11 @@ object Activity {
             val k = o.host to o.session
             when (o.kind) {
                 ObservationKind.Disconnected -> open.putIfAbsent(k, o.at)
-                ObservationKind.Connected -> open.remove(k)?.let { out += ActivityItem.Gap(it, o.at) }
+                ObservationKind.Connected -> open.remove(k)?.let { out += ActivityItem.Gap(it, o.at, o.host, o.session) }
                 else -> Unit
             }
         }
-        open.values.mapTo(out) { ActivityItem.Gap(it, null) }
+        open.forEach { (k, from) -> out += ActivityItem.Gap(from, null, k.first, k.second) }
         return out
     }
 }
