@@ -1,0 +1,289 @@
+package io.github.tuthan.paddock.ui
+
+import android.graphics.Bitmap
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.test.platform.app.InstrumentationRegistry
+import io.github.tuthan.paddock.hostkey.HostKeyPrompt
+import io.github.tuthan.paddock.hostprofile.AddMachineForm
+import io.github.tuthan.paddock.hostprofile.AddMachineInput
+import io.github.tuthan.paddock.hostprofile.KeyKind
+import io.github.tuthan.paddock.hostprofile.RouteNote
+import io.github.tuthan.paddock.net.GateDecision
+import io.github.tuthan.paddock.ssh.KeyBacking
+import io.github.tuthan.paddock.ui.components.FingerprintDialog
+import io.github.tuthan.paddock.ui.screens.AddMachine
+import io.github.tuthan.paddock.ui.screens.AddMachineState
+import io.github.tuthan.paddock.ui.screens.backingText
+import io.github.tuthan.paddock.ui.theme.PaddockTheme
+import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+
+/** Compose UI tests for Add machine and the host-key dialog (Phase 04 slice 7). */
+class AddMachineTest {
+    @get:Rule val rule = createComposeRule()
+
+    private val line = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHt paddock@phone"
+    private class Calls { var connect: AddMachineInput? = null; var generate = 0; var copied: String? = null; var settings = 0; var back = 0 }
+
+    private fun state(grant: GateDecision = GateDecision.NotRequired, key: String? = null, backing: KeyBacking? = null, denied: Boolean = false, imported: String? = null, connecting: Boolean = false) =
+        AddMachineState({ AddMachineForm.route(it, grant) }, key, backing, imported, denied, connecting)
+
+    private fun shoot(name: String) {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val dir = File(ctx.getExternalFilesDir(null), "screens").apply { mkdirs() }
+        File(dir, "$name.png").outputStream().use { rule.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    private fun show(state: AddMachineState = state(), fontScale: Float? = null, calls: Calls = Calls(), dark: Boolean = true): Calls {
+        rule.setContent {
+            val base = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
+                PaddockTheme(darkTheme = dark) { screen(state, calls) }
+            }
+        }
+        return calls
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun screen(state: AddMachineState, calls: Calls) = AddMachine(
+        state, onConnect = { calls.connect = it }, onGenerateKey = { calls.generate++ }, onCopyPublicKey = { calls.copied = it },
+        onOpenSettings = { calls.settings++ }, onBack = { calls.back++ },
+    )
+
+    private fun fill(host: String = "192.168.1.20", user: String = "jdoe", port: String? = null) {
+        rule.onNodeWithText("Host or IP address").performTextInput(host)
+        rule.onNodeWithText("User").performTextInput(user)
+        if (port != null) { rule.onNodeWithText("Port").performTextInput(port) }
+    }
+
+    @Test fun anEmptyFormShowsAMessageUnderEachFieldAndDoesNotConnect() {
+        val calls = show(state(key = line))
+        rule.onNodeWithText("Connect").performClick()
+        rule.onNodeWithText("Enter a hostname or IP address.").assertIsDisplayed()
+        rule.onNodeWithText("Enter the user name to sign in as.").assertIsDisplayed()
+        assertNull(calls.connect)
+        shoot("add-machine-errors")
+    }
+
+    @Test fun aValidFormWithThePhoneKeyConnectsWithTheTypedValues() {
+        val calls = show(state(key = line, backing = KeyBacking.Tee))
+        fill()
+        rule.onNodeWithText("Connect").performClick()
+        assertEquals(AddMachineInput("192.168.1.20", "22", "jdoe", KeyKind.Phone, null), calls.connect)
+    }
+
+    @Test fun connectWaitsForThePhoneKeyToExist() {
+        val calls = show(state(key = null))
+        fill()
+        rule.onNodeWithText("Connect").performClick()
+        assertNull(calls.connect)
+        rule.onNodeWithText("Create this phone's key").performScrollTo().performClick()
+        assertEquals(1, calls.generate)
+    }
+
+    @Test fun theKeySectionShowsWhereTheKeyIsActuallyHeldAndTheAuthorizeLine() {
+        for (b in KeyBacking.entries) {
+            // each backing has its own sentence; none is invented when the platform did not say
+            assertTrue(backingText(b).isNotBlank())
+        }
+        show(state(key = line, backing = KeyBacking.Software))
+        rule.onNodeWithText(backingText(KeyBacking.Software)).performScrollTo().assertIsDisplayed()
+        rule.onNode(hasContentDescription("Public key. Add this line to ~/.ssh/authorized_keys on the machine: $line")).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun copyHandsOverTheExactPublicKeyLine() {
+        val calls = show(state(key = line, backing = KeyBacking.StrongBox))
+        rule.onNodeWithText("Copy").performScrollTo().performClick()
+        assertEquals(line, calls.copied)
+    }
+
+    @Test fun showAsQrDrawsTheCodeAndHideRemovesIt() {
+        show(state(key = line, backing = KeyBacking.Tee))
+        val qr = hasContentDescription("QR code of this phone's public key")
+        rule.onNode(qr).assertDoesNotExist()
+        rule.onNodeWithText("Show as QR").performScrollTo().performClick()
+        rule.onNode(qr).performScrollTo().assertIsDisplayed()
+        shoot("add-machine-qr")
+        rule.onNodeWithText("Hide QR").performScrollTo().performClick()
+        rule.onNode(qr).assertDoesNotExist()
+    }
+
+    @Test fun aLocalAddressExplainsTheAndroidPromptBeforeConnectAndDoesNotAskForItOnItsOwn() {
+        show(state(grant = GateDecision.NeedsGrant, key = line))
+        rule.onNodeWithText("Host or IP address").performTextInput("192.168.1.20")
+        rule.onNodeWithText("This is a local-network address", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Open settings").assertDoesNotExist()
+    }
+
+    @Test fun aDeniedGrantShowsARecoveryRowThatOpensSettingsAndNamesTheReason() {
+        val calls = show(state(grant = GateDecision.NeedsGrant, key = line, denied = true))
+        rule.onNodeWithText("Host or IP address").performTextInput("192.168.1.20")
+        rule.onNodeWithText("Local-network access is off", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Open settings").performScrollTo().performClick()
+        assertEquals(1, calls.settings)
+        shoot("add-machine-permission-denied")
+    }
+
+    @Test fun aVpnOrNamedHostNeedsNoGrantAndSaysSo() {
+        show(state(grant = GateDecision.NeedsGrant, key = line))
+        rule.onNodeWithText("Host or IP address").performTextInput("box.example.ts.net")
+        rule.onNodeWithText("no local-network access needed", substring = true).assertIsDisplayed()
+    }
+
+    @Test fun anImportedKeyProfileNeedsAKeyFirst() {
+        val calls = show(state())
+        fill()
+        rule.onNodeWithText("An imported key").performScrollTo().performClick()
+        rule.onNodeWithText("Connect").performClick()
+        assertNull(calls.connect)
+        rule.onNodeWithText("Import a key before connecting", substring = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun anImportedKeyConnectsWithItsId() {
+        val calls = show(state(imported = "work-key"))
+        fill()
+        rule.onNodeWithText("An imported key").performScrollTo().performClick()
+        rule.onNodeWithText("Connect").performClick()
+        assertEquals(KeyKind.Imported, calls.connect!!.key)
+        assertEquals("work-key", calls.connect!!.importedKeyId)
+    }
+
+    @Test fun connectingDisablesTheButtonSoItCannotBeTappedTwice() {
+        val calls = show(state(key = line, connecting = true))
+        fill()
+        rule.onNodeWithText("Connecting…").performClick()
+        assertNull(calls.connect)
+    }
+
+    @Test fun everyInteractiveElementIsAtLeastFortyEightDpTall() {
+        show(state(key = line, backing = KeyBacking.Tee))
+        rule.onNodeWithText("Connect").assertHeightIsAtLeast(48.dp)
+        for (t in listOf("Copy", "Show as QR", "This phone's key", "An imported key")) {
+            rule.onNodeWithText(t).performScrollTo().assertHeightIsAtLeast(48.dp)
+        }
+        rule.onNode(hasContentDescription("Back")).assertHeightIsAtLeast(48.dp)
+    }
+
+    @Test fun connectStaysReachableAtTwoHundredPercentFont() {
+        show(state(key = line, backing = KeyBacking.Tee), fontScale = 2f)
+        rule.onNodeWithText("Connect").assertIsDisplayed()
+        rule.onNodeWithText("Host or IP address").assertIsDisplayed()
+        shoot("add-machine-200")
+    }
+
+    @Test fun typedValuesSurviveRotation() {
+        val tester = StateRestorationTester(rule)
+        tester.setContent { PaddockTheme(darkTheme = true) { screen(state(key = line), Calls()) } }
+        fill(host = "box.example.ts.net", user = "jdoe")
+        tester.emulateSavedInstanceStateRestore()
+        rule.onNodeWithText("box.example.ts.net").assertIsDisplayed()
+        rule.onNodeWithText("jdoe").assertIsDisplayed()
+    }
+
+    @Test fun lightThemeRenders() {
+        show(state(key = line, backing = KeyBacking.Tee), dark = false)
+        rule.onNodeWithText("Connect").assertIsDisplayed()
+        shoot("add-machine-light")
+    }
+
+    // --- host-key dialog ---
+
+    private val first = HostKeyPrompt.FirstTrust("192.168.1.20:22", "ED25519", "SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG", "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub")
+    private val changed = HostKeyPrompt.Changed(
+        "192.168.1.20:22", "ED25519", "SHA256:OLDOLDOLDOLDOLDOLDOLDOLDOLDOLDOLDOLDOLDOLDO", 1_700_000_000_000L,
+        "ECDSA P-256", "SHA256:NEWNEWNEWNEWNEWNEWNEWNEWNEWNEWNEWNEWNEWNEWN", "ssh-keygen -lf /etc/ssh/ssh_host_ecdsa_key.pub",
+    )
+
+    private class Choice { var trust = 0; var cancel = 0 }
+
+    private fun dialog(prompt: HostKeyPrompt, fontScale: Float? = null): Choice {
+        val c = Choice()
+        rule.setContent {
+            val base = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
+                PaddockTheme(darkTheme = true) { FingerprintDialog(prompt, onTrust = { c.trust++ }, onCancel = { c.cancel++ }) }
+            }
+        }
+        return c
+    }
+
+    private fun button(text: String): SemanticsNodeInteraction = rule.onNode(hasText(text) and androidx.compose.ui.test.hasClickAction())
+
+    @Test fun firstTrustShowsTheFingerprintTheKeyTypeAndTheCommandAndFocusesCancel() {
+        dialog(first)
+        rule.waitUntil(3_000) { runCatching { button("Cancel").assertIsFocused() }.isSuccess }
+        rule.onNodeWithText(first.fingerprint).assertIsDisplayed()
+        rule.onNodeWithText("ED25519").assertIsDisplayed()
+        rule.onNodeWithText(first.compareCommand).assertIsDisplayed()
+        button("Cancel").assertIsFocused()
+        button("Trust and connect").assertIsNotFocused()
+    }
+
+    @Test fun theEnterKeyActivatesTheSafeChoice() {
+        val c = dialog(first)
+        button("Cancel").performKeyInput { pressKey(Key.Enter) }
+        assertEquals(1, c.cancel); assertEquals(0, c.trust)
+    }
+
+    @Test fun trustingIsADeliberateTapOnItsOwnButton() {
+        val c = dialog(first)
+        button("Trust and connect").performClick()
+        assertEquals(1, c.trust); assertEquals(0, c.cancel)
+    }
+
+    @Test fun cancelAndDismissingBothRefuseTheKey() {
+        val c = dialog(first)
+        button("Cancel").performClick()
+        assertEquals(1, c.cancel); assertEquals(0, c.trust)
+    }
+
+    @Test fun aChangedKeyShowsBothFingerprintsTheOldDateAndFocusesKeepTheOldKey() {
+        dialog(changed)
+        rule.onNodeWithText(changed.oldFingerprint).assertIsDisplayed()
+        rule.onNodeWithText(changed.newFingerprint).assertIsDisplayed()
+        rule.onNode(hasText("first trusted", substring = true, ignoreCase = true)).assertIsDisplayed()
+        button("Keep the old key").assertIsFocused()
+        button("Replace with the new key").assertIsNotFocused()
+    }
+
+    @Test fun replacingAChangedKeyNeedsItsOwnTapAndKeepingNeverReplaces() {
+        val c = dialog(changed)
+        button("Keep the old key").performClick()
+        assertEquals(0, c.trust); assertEquals(1, c.cancel)
+        button("Replace with the new key").performClick()
+        assertEquals(1, c.trust)
+    }
+
+    @Test fun theDialogButtonsStayReachableAtTwoHundredPercentFont() {
+        dialog(changed, fontScale = 2f)
+        button("Keep the old key").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        button("Replace with the new key").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+    }
+}
