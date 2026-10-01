@@ -111,20 +111,24 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
      * Writes a [OperationOutcome.Requested] row unless the terminal is busy. [payload] is hashed; the text is kept
      * only when [keepText] is true.
      */
-    fun begin(key: TerminalKey, kind: OperationKind, payload: String? = null, keepText: Boolean = false, seqAtSend: Long? = null): Begin = synchronized(lock) {
+    fun begin(key: TerminalKey, kind: OperationKind, payload: String? = null, keepText: Boolean = false): Begin = synchronized(lock) {
         data.records.firstOrNull { it.sameTerminal(key) && it.inFlight }?.let { return Begin.InFlight(it) }
         data.records.firstOrNull { it.sameTerminal(key) && it.awaitsReread }?.let { return Begin.NeedsReread(it) }
         val row = OperationRecord(
             id = data.nextId, host = key.target.host.value, session = key.target.session, terminalId = key.target.terminalId, epoch = key.epoch,
             kind = kind, requestedAt = clock.nowMillis(),
-            payloadSha256 = payload?.let(::sha256Hex), promptText = payload?.takeIf { keepText }, seqAtSend = seqAtSend,
+            payloadSha256 = payload?.let(::sha256Hex), promptText = payload?.takeIf { keepText },
         )
         commit(data.copy(nextId = data.nextId + 1, records = data.records + row), mustPersist = true)
         Begin.Started(row)
     }
 
-    /** The write is about to start: the row says so first. Throws [JournalWriteFailed] when it cannot, and then nothing is written. */
-    fun markSent(id: Long, paneId: String): OperationRecord = move(id, OperationOutcome.Sent, mustPersist = true) { it.copy(paneIdAtSend = paneId, sentAt = clock.nowMillis()) }
+    /**
+     * The write is about to start: the row says so first. [seqAtSend] is the agent's `state_change_seq` in the read that
+     * allowed the send. Throws [JournalWriteFailed] when it cannot, and then nothing is written.
+     */
+    fun markSent(id: Long, paneId: String, seqAtSend: Long? = null): OperationRecord =
+        move(id, OperationOutcome.Sent, mustPersist = true) { it.copy(paneIdAtSend = paneId, seqAtSend = seqAtSend, sentAt = clock.nowMillis()) }
 
     /** Refused before the write (not ready, stale pane, host unreachable). Certain: nothing reached the host. */
     fun notSent(id: Long, code: String, note: String = ""): OperationRecord = move(id, OperationOutcome.NotSent, mustPersist = false) { it.copy(code = code, note = note.take(MAX_NOTE)) }

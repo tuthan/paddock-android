@@ -89,14 +89,19 @@ class RelayClient(
 ) {
     private val argv get() = listOf(python, relayPath, socketPath)
 
-    /** One request on a fresh stream, as observed in 0.9.1: one request per connection, then EOF. */
-    suspend fun call(method: String, params: JsonObject = JsonObject(emptyMap()), budget: Int = Budgets.LINE, timeout: Duration = 10.seconds): Message.Success {
+    /**
+     * One request on a fresh stream, as observed in 0.9.1: one request per connection, then EOF. [beforeWrite] runs
+     * once the stream is open and immediately before the request's first byte is written: a failure before it means
+     * nothing was sent, one after it means the request may have reached herdr. The operation journal marks Sent here.
+     */
+    suspend fun call(method: String, params: JsonObject = JsonObject(emptyMap()), budget: Int = Budgets.LINE, timeout: Duration = 10.seconds, beforeWrite: suspend () -> Unit = {}): Message.Success {
         val id = ids()
         var channel: io.github.tuthan.paddock.ports.StreamChannel? = null
         try {
             return try { withTimeout(timeout) {
                 // Opening counts against the timeout too: the adapter may queue for a free channel.
                 val channel = session.openStream(argv).also { channel = it }
+                beforeWrite()
                 channel.write(request(id, method, params))
                 val line = try { channel.stdout.lines(budget).first() } catch (_: NoSuchElementException) { throw RelayUnavailable(runCatching { channel.awaitExit() }.getOrNull()) }
                 when (val m = Envelope.parse(line, budget)) {
