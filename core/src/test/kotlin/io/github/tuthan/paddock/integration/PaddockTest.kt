@@ -54,6 +54,8 @@ class PaddockTest private constructor(val socket: String) {
         val out = run(scoped("pane", "split", pane, "--direction", "right", "--no-focus"))
         return (Envelope.parse(out.trim()) as Message.Success).result["pane"]!!.jsonObject["pane_id"]!!.jsonPrimitive.content
     }
+    /** Runs a shell command in the pane (text and Enter). Only ever against the disposable session this class guards. */
+    suspend fun runInPane(pane: String, command: String) { run(scoped("pane", "run", pane, command)) }
     suspend fun close(pane: String) { run(scoped("pane", "close", pane)) }
     suspend fun moveToNewTab(pane: String) { run(scoped("pane", "move", pane, "--new-tab")) }
 

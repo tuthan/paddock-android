@@ -54,6 +54,7 @@ class SessionMonitor(
         currentPanes = { agentPanes(reconciler.installed.value?.snapshot) },
         onOutcome = { reconciler.invalidate("status") },
         onEnded = { lost.complete(it) },
+        onCovered = { reconciler.invalidate("status-covered") },
     )
 
     fun start() {

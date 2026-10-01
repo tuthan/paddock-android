@@ -55,6 +55,19 @@ class StreamsTest {
     }
     private val session0 = CopyOnWriteArrayList<FakeStream>()
 
+    @Test fun aNewlyCoveredSetAsksTheOwnerToReadAgainBecauseTheWindowBeforeTheAckWasUnsubscribed() = runBlocking<Unit> {
+        val covered = java.util.concurrent.atomic.AtomicInteger()
+        val session = FakeSession(onStream = { st -> st.feed(ack.acked("id-${session0.size + 1}") + "\n"); session0 += st })
+        val streams = StatusStreams(client(session), scope, { emptySet() }, { }, { }, onCovered = { covered.incrementAndGet() })
+        streams.update(setOf("w1:p1"))
+        assertEquals(1, covered.get())
+        streams.update(setOf("w1:p1"))                           // unchanged: nothing new to cover, no extra read
+        assertEquals(1, covered.get())
+        streams.update(setOf("w1:p1", "w1:p2"))
+        assertEquals(2, covered.get())
+        streams.stop()
+    }
+
     @Test fun aRefusedSetIsRetriedOnceWithAFreshPaneSet() = runBlocking<Unit> {
         var call = 0
         val session = FakeSession(onStream = { st -> call++; st.feed((if (call == 1) refusal else ack.acked("id-$call")) + "\n") })

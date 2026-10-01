@@ -74,6 +74,12 @@ class StatusStreams(
     private val currentPanes: suspend () -> Set<String>,
     private val onOutcome: (EventOutcome) -> Unit,
     private val onEnded: (Throwable) -> Unit,
+    /**
+     * Called after a stream covering a changed pane set is acknowledged. A pane that was added had no subscription
+     * between the read that showed it and this acknowledgement, so a status change in that window was never delivered;
+     * the owner reads again (subscribe, then read) to close it.
+     */
+    private val onCovered: () -> Unit = {},
 ) {
     private val lock = Mutex()
     private var active: StreamHandle? = null
@@ -95,6 +101,7 @@ class StatusStreams(
             try {
                 next.acknowledged.await()
                 active?.cancel(); active = next; covered = set
+                onCovered()
                 return@withLock
             } catch (e: HerdrError) {
                 next.cancel()
