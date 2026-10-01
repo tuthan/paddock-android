@@ -103,7 +103,7 @@ class RelayClient(
      * example a status subscription without `pane_id`), with [SubscribeTimeout] when no acknowledgement arrives, and
      * with [RelayUnavailable] when the host stream drops. Cancelling the collector closes the channel.
      */
-    fun subscribe(subscriptions: List<JsonObject>, ackTimeout: Duration = 10.seconds): Flow<EventOutcome> = flow {
+    fun subscribe(subscriptions: List<JsonObject>, ackTimeout: Duration = 10.seconds, onAcknowledged: () -> Unit = {}): Flow<EventOutcome> = flow {
         val id = ids()
         val channel = session.openStream(argv)
         try {
@@ -116,7 +116,7 @@ class RelayClient(
                     val m = Envelope.parse(line)
                     if (!acknowledged) {
                         when (m) {
-                            is Message.Success -> if (m.type == "subscription_started") { acknowledged = true; watchdog.cancel() } else throw ProtocolError.WrongResultType("subscription_started", m.type)
+                            is Message.Success -> if (m.type == "subscription_started") { acknowledged = true; watchdog.cancel(); onAcknowledged() } else throw ProtocolError.WrongResultType("subscription_started", m.type)
                             is Message.Failure -> throw HerdrError(m.code, m.message)
                             is Message.Event -> throw ProtocolError.UnknownShape(setOf("event"))
                         }
