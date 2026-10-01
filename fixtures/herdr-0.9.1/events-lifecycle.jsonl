@@ -1,0 +1,5 @@
+{"id":"fx-life","result":{"type":"subscription_started"}}
+{"data":{"agent":"fake","pane_id":"w2:p1","type":"pane_agent_detected","workspace_id":"w2"},"event":"pane_agent_detected"}
+{"data":{"pane":{"agent_status":"unknown","cwd":"/tmp/paddock-test-ws","focused":false,"foreground_cwd":"/tmp/paddock-test-ws","pane_id":"w2:p4","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":40},"tab_id":"w2:t1","terminal_id":"term_65cbe445557905","workspace_id":"w2"},"type":"pane_created"},"event":"pane_created"}
+{"data":{"pane":{"agent_status":"unknown","cwd":"/tmp/paddock-test-ws","focused":false,"foreground_cwd":"/tmp/paddock-test-ws","pane_id":"w2:p4","revision":1,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":40},"tab_id":"w2:t1","terminal_id":"term_65cbe445557905","terminal_title":"user@host:/tmp/paddock-test-ws","terminal_title_stripped":"user@host:/tmp/paddock-test-ws","workspace_id":"w2"},"type":"pane_updated"},"event":"pane_updated"}
+{"data":{"pane_id":"w2:p4","type":"pane_closed","workspace_id":"w2"},"event":"pane_closed"}

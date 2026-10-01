@@ -1,0 +1,6 @@
+
+/tmp/paddock-test-ws ❯ /tmp/paddock-test-ws/fx-altscreen.sh
+before-alt
+after-alt
+
+/tmp/paddock-test-ws ❯

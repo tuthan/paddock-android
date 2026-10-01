@@ -1,0 +1,5 @@
+agent-get-blocked.json: absent
+agent-list-blocked.json: absent
+events-status.jsonl: absent
+events-lifecycle.jsonl: absent
+snapshot.json: absent
