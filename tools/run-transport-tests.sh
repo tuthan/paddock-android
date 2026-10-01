@@ -6,11 +6,13 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
 SERIAL="${1:-emulator-5570}"; FILTER="${2:-io.github.tuthan.paddock.ssh.SshSessionTest}"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
-RUN="$ROOT/build/test-sshd"; OUT="$ROOT/build/transport-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$RUN" "$OUT"
+RUN="${TEST_SSHD_RUN:-$ROOT/build/test-sshd}"; OUT="$ROOT/build/transport-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$RUN" "$OUT"
 PKG=io.github.tuthan.paddock; RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
 
 "$HERE/test-sshd.sh" status >/dev/null 2>&1 || "$HERE/test-sshd.sh" start
-pgrep -f blackhole-proxy.py >/dev/null || { setsid nohup python3 "$HERE/blackhole-proxy.py" >"$RUN/proxy.log" 2>&1 & sleep 1; }
+# Ours is the proxy on its control port; another blackhole-proxy.py on other ports must not count as running.
+PROXY_CONTROL="${PROXY_CONTROL_PORT:-2224}"
+[ -n "$(ss -Hltn "sport = :$PROXY_CONTROL")" ] || { setsid nohup python3 "$HERE/blackhole-proxy.py" "${PROXY_LISTEN_PORT:-2223}" "${TEST_SSHD_PORT:-2222}" "$PROXY_CONTROL" >"$RUN/proxy.log" 2>&1 & sleep 1; }
 [ -f "$RUN/imported_ed25519" ] || ssh-keygen -q -t ed25519 -N spikepass -C paddock-test-imported -f "$RUN/imported_ed25519"
 "$HERE/test-sshd.sh" authorize "$RUN/imported_ed25519.pub" >/dev/null
 $ADB push "$RUN/imported_ed25519" /data/local/tmp/spike_imported >/dev/null; $ADB shell chmod 644 /data/local/tmp/spike_imported

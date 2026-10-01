@@ -49,6 +49,11 @@ import io.github.tuthan.paddock.output.Ansi
 class HerdHomeTest {
     @get:Rule val rule = createComposeRule()
 
+    /** The words the mapper really produces for a silent herdr, not a stand-in. */
+    private val notAnswering = io.github.tuthan.paddock.host.HomeUiMapper.staleReason(
+        "laptop", io.github.tuthan.paddock.relay.RelayTimeout("session.snapshot", kotlin.time.Duration.parse("10s")), "14:50",
+    )
+
     private val now = 1_000_000L
     private fun agent(pane: String, status: AgentStatus, seq: Long, title: String?, cwd: String = "/home/u/proj", ready: Boolean? = null) =
         Agent(paneId = pane, terminalId = "term_$pane", workspaceId = "w1", tabId = "w1:t1", agent = "claude", agentStatus = status, stateChangeSeq = seq,
@@ -133,8 +138,8 @@ class HerdHomeTest {
     }
 
     @Test fun aDegradedHostShowsABannerAndDatedRowsWithNoActions() {
-        show(HomeUiState.Degraded("laptop", busy, "herdr is not answering on laptop", 125_000, recoveryLabel = "Retry"))
-        rule.onNodeWithText("herdr is not answering on laptop").assertIsDisplayed()
+        show(HomeUiState.Degraded("laptop", busy, notAnswering, 125_000, recoveryLabel = "Retry"))
+        rule.onNodeWithText(notAnswering).assertIsDisplayed()
         rule.onNodeWithText("Retry").assertHasClickAction().assertHeightIsAtLeast(48.dp)
         val asOf = io.github.tuthan.paddock.ui.screens.clockLabel(now - 125_000)
         byDesc("Last seen blocked, approve edit to build.gradle, api, observed 40 s ago").assertHasNoClickAction()
@@ -273,7 +278,7 @@ class HerdHomeTest {
     }
 
     @Test fun aDegradedHostNeverExpandsAndOffersNoReviewAction() {
-        show(HomeUiState.Degraded("laptop", busy, "herdr is not answering on laptop", 125_000, recoveryLabel = "Retry"), preview = prompt)
+        show(HomeUiState.Degraded("laptop", busy, notAnswering, 125_000, recoveryLabel = "Retry"), preview = prompt)
         assertEquals(0, rule.onAllNodesWithText("Review prompt").fetchSemanticsNodes().size)
     }
 

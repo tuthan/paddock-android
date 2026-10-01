@@ -63,7 +63,7 @@ The build reads nothing outside the repository. The only herdr input is `protoco
 
 | Tier | Where | Run |
 | --- | --- | --- |
-| Gate | any machine with JDK 17 and the SDK packages above; CI | `tools/check.sh` (CI) or `tools/check.sh --offline`: wrapper, SDK revisions, pins, script self-tests, `:core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`, with `PADDOCK_TEST_SOCKET` removed |
+| Gate | any machine with JDK 17 and the SDK packages above; CI | `tools/check.sh` (CI) or `tools/check.sh --offline`: wrapper, SDK revisions, pins, script self-tests, `:core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:compileDebugAndroidTestKotlin` (the instrumentation sources compile; running them needs an emulator), with `PADDOCK_TEST_SOCKET` removed |
 | JVM | any machine with JDK 17, CI | `./gradlew :core:test` |
 | Emulator smoke | AVDs `sc-api26` (API 26 google_apis) and `sc-api36`, started `-read-only` | `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`, then `adb install` both APKs and `adb shell am instrument -w io.github.tuthan.paddock.test/androidx.test.runner.AndroidJUnitRunner` |
 | Physical | one current phone | from Phase 02 |

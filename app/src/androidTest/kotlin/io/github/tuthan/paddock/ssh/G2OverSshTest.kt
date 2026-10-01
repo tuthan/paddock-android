@@ -107,7 +107,11 @@ class G2OverSshTest {
         val relay = RelayClient(ssh, relayPath!!, socket!!)
         assertEquals("pong", relay.call("ping").type)
         val h = ssh.exec(listOf("sha256sum", "--", relayPath))
-        note("T g2 relay sha256 on host: ${h.stdout.toString(Charsets.UTF_8).substringBefore(' ')}")
+        val onHost = h.stdout.toString(Charsets.UTF_8).substringBefore(' ')
+        note("T g2 relay sha256 on host: $onHost")
         assertEquals(0, h.exit)
+        // The copy the relay calls ran through is the one the app pins, byte for byte.
+        val pin = ctx.assets.open("paddock-relay.sha256").use { it.readBytes().toString(Charsets.UTF_8).trim() }
+        assertEquals(pin, onHost)
     }
 }

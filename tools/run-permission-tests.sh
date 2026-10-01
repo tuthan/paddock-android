@@ -12,12 +12,13 @@ OUT="$ROOT/build/permission-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 # Build, install, export and authorize the phone key (also runs the first method once).
 "$HERE/run-transport-tests.sh" "$SERIAL" "$CLS#recordWhatTheOsDoes" >"$OUT/setup.txt" 2>&1 || { echo "setup failed: $OUT/setup.txt"; exit 1; }
 FP="$("$HERE/test-sshd.sh" fingerprint | awk '{print $2}')"
+SSHD_LOG="${TEST_SSHD_RUN:-$ROOT/build/test-sshd}/sshd.log"
 step() { # <label> <method>
   local label="$1" method="$2"
-  $ADB logcat -c; LINES=$(wc -l < "$ROOT/build/test-sshd/sshd.log")
-  $ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" -e class "$CLS#$method" "$RUNNER" >"$OUT/$label.txt" 2>&1
+  $ADB logcat -c; LINES=$(wc -l < "$SSHD_LOG")
+  $ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" ${INSTR_ARGS:-} -e class "$CLS#$method" "$RUNNER" >"$OUT/$label.txt" 2>&1
   $ADB logcat -d -s TRANSPORT:I | sed 's/^[0-9-]* [0-9:.]* *[0-9]* *[0-9]* I //' | grep -v "T0 exported" >>"$OUT/$label.txt"
-  local conns; conns=$(tail -n +"$((LINES+1))" "$ROOT/build/test-sshd/sshd.log" | grep -c '^Connection from')
+  local conns; conns=$(tail -n +"$((LINES+1))" "$SSHD_LOG" | grep -c '^Connection from')
   printf '%-34s %-6s sshd connections: %s\n' "$label" "$(grep -qE '^OK \(' "$OUT/$label.txt" && echo PASS || echo FAIL)" "$conns"
   grep -E "^TRANSPORT|T (denied|granted|os)" "$OUT/$label.txt" | sed 's/^/    /'
 }

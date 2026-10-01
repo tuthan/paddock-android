@@ -111,9 +111,10 @@ check("a VPN name needs no local-network access", find(dump(), "no local-network
 ensure_key()
 tap("Connect", exact=True)
 time.sleep(1.5)
-tap("Trust box.example.ts.net", secs=8) if find(dump(), "Trust box.example.ts.net") else None
+tap("Trust and connect", secs=8) if find(dump(), "Trust and connect") else None
 wait("Settings", secs=15); tap("Settings", exact=True)
-wait("Protect sensitive screens"); 
+# The first section is always there; the recovery row may be below the fold, so scroll for it.
+wait("Reconnect")
 for _ in range(3):
     if find(dump(), "Local-network access is off"): break
     scroll_down()

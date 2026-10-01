@@ -93,7 +93,8 @@ class G2ConvergenceTest {
 
         // One bad pane rejects the whole request, which is why StatusStreams retries with a fresh set.
         val bad = Subscriptions.status(listOf(base, "w99:p99"))
-        println("G2 bad-pane request: " + runCatching { env.relay.subscribe(bad).toList() }.exceptionOrNull()?.message)
+        val whole = assertFailsWith<HerdrError> { env.relay.subscribe(bad).toList() }
+        assertEquals("pane_not_found", whole.code, whole.message)
     }
 
 
