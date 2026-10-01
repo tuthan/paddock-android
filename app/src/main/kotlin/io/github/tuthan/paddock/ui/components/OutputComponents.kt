@@ -55,6 +55,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.output.AnsiLine
+import io.github.tuthan.paddock.terminal.KeyEncoder
+import io.github.tuthan.paddock.terminal.NamedKey
 import io.github.tuthan.paddock.ui.theme.AnsiPalette
 import io.github.tuthan.paddock.ui.theme.PaddockColors
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
@@ -185,23 +187,43 @@ fun SegmentedTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, 
     }
 }
 
+/** One key of the strip: what it says, what TalkBack says, and the bytes it sends. */
+private class StripKey(val label: String, val description: String, val bytes: ByteArray)
+
+private val STRIP_KEYS = listOf(
+    StripKey("Esc", "Escape", KeyEncoder.named(NamedKey.Escape)),
+    StripKey("Enter", "Enter", KeyEncoder.named(NamedKey.Enter)),
+    StripKey("↑", "Up arrow", KeyEncoder.named(NamedKey.Up)),
+    StripKey("↓", "Down arrow", KeyEncoder.named(NamedKey.Down)),
+    StripKey("←", "Left arrow", KeyEncoder.named(NamedKey.Left)),
+    StripKey("→", "Right arrow", KeyEncoder.named(NamedKey.Right)),
+    StripKey("Tab", "Tab", KeyEncoder.named(NamedKey.Tab)),
+    StripKey("Ctrl+C", "Control C", KeyEncoder.interrupt),
+)
+
 /**
- * The manual keys, in the design's order with Esc first and in red. Drawn but not active: Paddock only reads this agent
- * so far, so nothing here sends input, TalkBack says so, and a caption under the strip says why.
+ * The manual keys, in the design's order with Esc first and in red. Without [onKey] (the Output tab, which only reads) the
+ * strip is drawn but inert: nothing here sends input, TalkBack says so, and a caption under the strip says why. With
+ * [onKey] and [enabled] (the Terminal tab while this phone controls the terminal) each key is a 48 dp button that hands
+ * its bytes to [onKey]; when [enabled] is false the same strip is inert, so observing never sends a key.
  */
 @Composable
-fun KeyStrip(modifier: Modifier = Modifier, note: String = KEYS_NOTE) {
+fun KeyStrip(modifier: Modifier = Modifier, note: String = KEYS_NOTE, onKey: ((ByteArray) -> Unit)? = null, enabled: Boolean = onKey != null) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.key)
-    Column(modifier.fillMaxWidth().semantics(mergeDescendants = true) { disabled(); contentDescription = "Keys, unavailable. $note" }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth().alpha(0.5f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            listOf("Esc", "Enter", "↑", "↓", "Tab", "Ctrl+C").forEach { key ->
-                val esc = key == "Esc"
+    val live = onKey != null && enabled
+    val group = if (live) Modifier.semantics { contentDescription = "Keys" } else Modifier.semantics(mergeDescendants = true) { disabled(); contentDescription = "Keys, unavailable. $note" }
+    Column(modifier.fillMaxWidth().then(group), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth().then(if (live) Modifier else Modifier.alpha(0.5f)).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            STRIP_KEYS.forEach { key ->
+                val esc = key.label == "Esc"
                 Box(
                     Modifier.heightIn(min = PaddockTokens.spacing.touchTarget).widthIn(min = PaddockTokens.spacing.touchTarget).clip(shape).background(c.field)
-                        .border(1.dp, if (esc) c.needsYou.copy(alpha = 0.4f) else c.control(), shape).padding(horizontal = 10.dp),
+                        .border(1.dp, if (esc) c.needsYou.copy(alpha = 0.4f) else c.control(), shape)
+                        .then(if (live) Modifier.clickable(role = Role.Button, onClickLabel = key.description) { onKey!!(key.bytes) }.semantics { contentDescription = key.description } else Modifier)
+                        .padding(horizontal = 10.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text(key, style = PaddockTokens.type.monoFact.copy(fontSize = PaddockTokens.type.chip.fontSize), color = if (esc) c.needsYou else c.title) }
+                ) { Text(key.label, style = PaddockTokens.type.monoFact.copy(fontSize = PaddockTokens.type.chip.fontSize), color = if (esc) c.needsYou else c.title) }
             }
         }
         Text(note, style = PaddockTokens.type.note, color = c.dim)

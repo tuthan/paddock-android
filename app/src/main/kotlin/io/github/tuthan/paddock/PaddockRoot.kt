@@ -78,6 +78,8 @@ import io.github.tuthan.paddock.ui.screens.LocalAccess
 import io.github.tuthan.paddock.ui.screens.RelayInstall
 import io.github.tuthan.paddock.ui.screens.Settings
 import io.github.tuthan.paddock.ui.screens.SettingsState
+import io.github.tuthan.paddock.ui.screens.TerminalActions
+import io.github.tuthan.paddock.ui.screens.TerminalTab
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.NavItem
 import io.github.tuthan.paddock.ui.components.PaddockButton
@@ -248,7 +250,48 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit
     // "claude · api › tab 2 · main · laptop": what it is, where, which session, which machine.
     val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
     val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis)
-    AgentOutput(header, output, following, now, tab, { tab = it }, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() })
+    AgentOutput(
+        header, output, following, now, tab, { tab = it }, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() },
+        terminal = { TerminalRoute(graph, host, terminalId) },
+    )
+}
+
+/**
+ * The Terminal tab of one agent. The session lives while the tab is on screen: leaving the tab or the screen closes it
+ * (which releases control), going to the background suspends it (also a release), and a rotation keeps it, because turning the
+ * phone must not hand the terminal back.
+ */
+@Composable
+private fun TerminalRoute(graph: AppGraph, host: io.github.tuthan.paddock.live.MonitoredHost, terminalId: String) {
+    val session = remember(host, terminalId) { graph.terminals.acquire(host to terminalId) { host.terminalSession(terminalId) } }
+    val view by session.view.collectAsState()
+    val ctx = LocalContext.current
+    val activity = remember(ctx) { generateSequence(ctx) { (it as? android.content.ContextWrapper)?.baseContext }.firstOrNull { it is android.app.Activity } as? android.app.Activity }
+    DisposableEffect(session) {
+        val observer = LifecycleEventObserver { _, e ->
+            when (e) {
+                // A rotation stops and restarts the activity too; only a real trip to the background releases the terminal.
+                Lifecycle.Event.ON_STOP -> if (activity?.isChangingConfigurations != true) session.suspend()
+                Lifecycle.Event.ON_START -> session.resume()
+                else -> Unit
+            }
+        }
+        val owner = ctx as? LifecycleOwner
+        owner?.lifecycle?.addObserver(observer)
+        onDispose {
+            owner?.lifecycle?.removeObserver(observer)
+            graph.terminals.release(session, recreating = activity?.isChangingConfigurations == true)
+        }
+    }
+    val actions = remember(session) {
+        TerminalActions(
+            onViewport = { cols, rows -> if (graph.terminals.firstUse(session)) session.open(cols, rows) else session.setViewport(cols, rows) },
+            onRequestControl = session::requestControl, onTakeOver = session::takeOver, onInstallHelper = session::installHelper,
+            onDismissNotice = session::dismissNotice, onRelease = session::release,
+            onResizeToFit = { cols, rows -> session.resizeToFit(cols, rows) }, onKey = { session.send(it) },
+        )
+    }
+    TerminalTab(view, actions)
 }
 
 @Composable

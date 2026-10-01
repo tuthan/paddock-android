@@ -66,6 +66,9 @@ class AppGraph(private val app: Application) {
     private val relayScript: ByteArray = app.assets.open("paddock-relay.py").use { it.readBytes() }
     private val relayPin: String = app.assets.open("paddock-relay.sha256").use { it.readBytes().toString(Charsets.UTF_8).trim() }
     init { check(sha256Hex(relayScript) == relayPin) { "the bundled relay does not match its pin" } }
+    private val controlScript: ByteArray = app.assets.open("paddock-control.py").use { it.readBytes() }
+    private val controlPin: String = app.assets.open("paddock-control.sha256").use { it.readBytes().toString(Charsets.UTF_8).trim() }
+    init { check(sha256Hex(controlScript) == controlPin) { "the bundled control helper does not match its pin" } }
 
     private val _boot = MutableStateFlow(Boot.Loading)
     val boot: StateFlow<Boot> = _boot.asStateFlow()
@@ -74,6 +77,8 @@ class AppGraph(private val app: Application) {
     val profile: StateFlow<HostProfile?> = _profile.asStateFlow()
 
     val hostUi = HostUiModel(scope)
+    /** The open terminal session, kept through a rotation so turning the phone does not release control. */
+    val terminals = io.github.tuthan.paddock.host.Retained<io.github.tuthan.paddock.terminal.TerminalSession>(scope) { it.close() }
     private val lock = Any()
     /** Lives while its machine is watched: paused when the app is hidden, resumed when it returns, replaced only for another machine. */
     @Volatile private var controller: HostSessionController? = null
@@ -132,7 +137,7 @@ class AppGraph(private val app: Application) {
         val c = controller
         if (c != null && c.profile == profile) { c.resume(); return@synchronized }
         c?.stop()
-        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session)
+        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin)
         controller = next
         hostUi.attach(next)
         next.start()

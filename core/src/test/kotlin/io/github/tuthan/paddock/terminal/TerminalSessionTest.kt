@@ -212,6 +212,17 @@ class TerminalSessionTest {
         assertFalse(s.send("x".toByteArray()))
     }
 
+    @Test fun dismissingTheNoticeClearsItAndNothingElse() {
+        val host = TestHost(); val s = session(host); observing(host, s)
+        s.requestControl(); waitUntil("controller") { host.controllers.size == 1 }
+        host.controllers.single().feed(closed("terminal attach failed: terminal term_1 already has an attached client; retry with --takeover"))
+        waitUntil("conflict") { s.view.value.notice is TerminalNotice.Conflict }
+        waitUntil("observer reopened") { host.observers.size == 2 }
+        s.dismissNotice()
+        waitUntil("cleared") { s.view.value.notice == null }
+        assertEquals(1, host.controllers.size); assertFalse(s.send("x".toByteArray()))
+    }
+
     @Test fun takeOverIsASeparateCommandThatAddsTheFlag() {
         val host = TestHost(); val s = session(host); observing(host, s)
         s.takeOver()

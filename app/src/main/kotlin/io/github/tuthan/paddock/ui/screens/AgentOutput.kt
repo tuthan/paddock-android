@@ -38,7 +38,7 @@ data class AgentHeader(val title: String, val context: String, val state: StateW
 
 /**
  * One agent: who it is, then a row of chips with the state the phone last saw (and when) and whether the output is
- * following, then the Output tab (the live tail) or the Terminal tab (not built yet). A terminal or agent that has gone
+ * following, then the Output tab (the live tail) or the Terminal tab (the live screen, read-only until control is requested). A terminal or agent that has gone
  * replaces everything under the header with a plain statement and the way back.
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -54,6 +54,8 @@ fun AgentOutput(
     onUserScrolledUp: () -> Unit,
     onResumeFollowing: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The Terminal tab's content. It owns the keys, so nothing is drawn under it. */
+    terminal: (@Composable () -> Unit)? = null,
 ) {
     val c = PaddockTokens.colors
     val gone = output == OutputState.PaneGone || output == OutputState.AgentGone
@@ -82,14 +84,14 @@ fun AgentOutput(
             SegmentedTabs(AgentTab.entries.map { it.label }, tab.ordinal, { onTab(AgentTab.entries[it]) })
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when (tab) {
-                    AgentTab.Terminal -> Text(
-                        "The terminal view is not built yet. Output shows what the agent is writing.",
+                    AgentTab.Terminal -> terminal?.invoke() ?: Text(
+                        "The terminal is not available here. Output shows what the agent is writing.",
                         style = PaddockTokens.type.body, color = c.dim, modifier = Modifier.padding(top = 4.dp),
                     )
                     AgentTab.Output -> OutputBody(output, nowMillis, following, onUserScrolledUp)
                 }
             }
-            KeyStrip()
+            if (tab == AgentTab.Output) KeyStrip()
         }
     }
 }

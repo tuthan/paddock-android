@@ -58,7 +58,7 @@ class AgentOutputTest {
 
     private fun show(
         output: OutputState, following: Boolean = true, tab: AgentTab = AgentTab.Output, dark: Boolean = true,
-        fontScale: Float? = null, header: AgentHeader = this.header, calls: Calls = Calls(),
+        fontScale: Float? = null, header: AgentHeader = this.header, calls: Calls = Calls(), terminal: (@androidx.compose.runtime.Composable () -> Unit)? = null,
     ): Calls {
         rule.setContent {
             val base = LocalDensity.current
@@ -67,6 +67,7 @@ class AgentOutputTest {
                     AgentOutput(
                         header, output, following, now, tab,
                         onTab = { calls.tab = it }, onBack = { calls.back++ }, onUserScrolledUp = { calls.up++ }, onResumeFollowing = { calls.resume++ },
+                        terminal = terminal,
                     )
                 }
             }
@@ -154,9 +155,15 @@ class AgentOutputTest {
         rule.onNodeWithText("Output is unavailable: no route to host").assertIsDisplayed()
     }
 
-    @Test fun theTerminalTabSaysItIsNotBuiltYet() {
+    @Test fun theTerminalTabShowsWhatTheScreenGivesItAndTheOutputStripIsNotDrawnUnderIt() {
+        show(showing(), tab = AgentTab.Terminal, terminal = { androidx.compose.material3.Text("terminal slot content") })
+        rule.onNodeWithText("terminal slot content").assertIsDisplayed()
+        rule.onNode(hasContentDescription("Keys, unavailable.", substring = true)).assertDoesNotExist()
+    }
+
+    @Test fun withoutATerminalTheTabSaysSo() {
         show(showing(), tab = AgentTab.Terminal)
-        rule.onNodeWithText("The terminal view is not built yet.", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("The terminal is not available here.", substring = true).assertIsDisplayed()
     }
 
     @Test fun switchingTabsReportsTheChoiceAndMarksTheSelectedOne() {

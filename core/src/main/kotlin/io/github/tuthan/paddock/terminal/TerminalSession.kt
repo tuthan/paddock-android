@@ -160,6 +160,7 @@ class TerminalSession(
         class Input(val bytes: ByteArray) : Cmd
         data class Resize(val cols: Int, val rows: Int) : Cmd
         data object Suspend : Cmd
+        data object DismissNotice : Cmd
         data object Resume : Cmd
         data class Line(val gen: Int, val text: String) : Cmd
         data class StreamEnded(val gen: Int, val error: Throwable?) : Cmd
@@ -222,6 +223,9 @@ class TerminalSession(
 
     fun release() { commands.trySend(Cmd.Release) }
 
+    /** The user closed the notice (or it timed out on the screen). Changes nothing else: a refused request stays refused. */
+    fun dismissNotice() { commands.trySend(Cmd.DismissNotice) }
+
     /** Sends [bytes] to the terminal as input. Returns false, sending nothing, unless this phone is controlling. */
     fun send(bytes: ByteArray): Boolean {
         if (!controlling || bytes.isEmpty()) return false
@@ -264,6 +268,7 @@ class TerminalSession(
                 is Cmd.Input -> input(cmd.bytes)
                 is Cmd.Resize -> if (kind == Kind.Control && established) write(ControlEncoder.resize(cmd.cols, cmd.rows))
                 Cmd.Suspend -> suspend0()
+                Cmd.DismissNotice -> notice(null)
                 Cmd.Resume -> if (paused) { paused = false; connect(Kind.Observe, probe = true) }
                 is Cmd.Line -> if (cmd.gen == gen) line(cmd.text)
                 is Cmd.StreamEnded -> if (cmd.gen == gen) streamEnded(cmd.error)
