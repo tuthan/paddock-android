@@ -2,6 +2,10 @@ buildscript {
     configurations.classpath {
         resolutionStrategy.activateDependencyLocking()
     }
+    // STRICT: a locked configuration without lock state fails instead of resolving unlocked.
+    dependencyLocking {
+        lockMode.set(LockMode.STRICT)
+    }
 }
 
 plugins {

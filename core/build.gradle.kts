@@ -17,6 +17,8 @@ dependencies {
 
 dependencyLocking {
     lockAllConfigurations()
+    // STRICT: a configuration resolved without lock state fails instead of resolving unlocked.
+    lockMode.set(LockMode.STRICT)
 }
 
 tasks.test {
