@@ -42,6 +42,43 @@ class PhoneKeyTest {
         assertFalse("privateKey() must not create a new identity", key.exists())
     }
 
+    /** A StrongBox chip that refuses with anything but StrongBoxUnavailableException must not crash the Generate key button. */
+    @Test
+    fun anyStrongBoxFailureFallsBackToTheDefaultBacking() {
+        val attempts = mutableListOf<Boolean>()
+        val k = PhoneKey("paddock-phone-key-test-${java.util.UUID.randomUUID()}", 28) { a, strongBox ->
+            attempts += strongBox
+            if (strongBox) throw java.security.ProviderException("StrongBox refused the spec") else PhoneKey.generateEc(a, false)
+        }
+        try {
+            val info = k.getOrCreate()
+            assertEquals(listOf(true, false), attempts)
+            assertNotEquals(KeyBacking.StrongBox, info.backing)
+            assertNotEquals(KeyBacking.Unknown, info.backing)
+            assertFalse(k.hasStrongBoxMarker())
+        } finally { runCatching { k.delete() } }
+    }
+
+    /**
+     * API 28 to 30 cannot tell StrongBox from TEE in KeyInfo, so a StrongBox request that succeeded is remembered (and
+     * forgotten on delete). Emulators have no StrongBox: the "StrongBox" attempt here generates a default key, and the
+     * platform's own answer still wins when the key is not in secure hardware at all.
+     */
+    @Test
+    fun aStrongBoxRequestThatSucceededIsReportedAsStrongBoxBeforeApi31() {
+        val k = PhoneKey("paddock-phone-key-test-${java.util.UUID.randomUUID()}", 29) { a, _ -> PhoneKey.generateEc(a, false) }
+        try {
+            k.getOrCreate()
+            assertTrue(k.hasStrongBoxMarker())
+            @Suppress("DEPRECATION")
+            val secure = java.security.KeyFactory.getInstance("EC", "AndroidKeyStore").getKeySpec(k.privateKey(), android.security.keystore.KeyInfo::class.java).isInsideSecureHardware
+            assertEquals(if (secure) KeyBacking.StrongBox else KeyBacking.Software, k.info().backing)
+            Log.i("PHONEKEY", "api=${Build.VERSION.SDK_INT} marker path: secure=$secure backing=${k.info().backing}")
+            k.delete()
+            assertFalse(k.hasStrongBoxMarker())
+        } finally { runCatching { k.delete() } }
+    }
+
     @Test
     fun secondCallReturnsTheSameKeyNotANewOne() {
         val a = key.getOrCreate().publicKey

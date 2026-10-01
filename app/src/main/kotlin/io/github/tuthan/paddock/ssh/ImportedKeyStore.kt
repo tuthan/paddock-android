@@ -8,8 +8,10 @@ data class ImportedKeyInfo(val id: String, val keyType: String, val fingerprint:
 
 /**
  * Imported keys at rest: the key text exactly as the user supplied it (still passphrase-encrypted when it was)
- * goes through the [SecretStore], which wraps it with the Keystore key. A passphrase is kept only when the user
- * asks to remember it, and goes through the same wrapping. Nothing is written in clear.
+ * goes through the [SecretStore], which wraps it with the Keystore key. A passphrase is stored when the caller passes
+ * `rememberPassphrase`, and the app always does (`AppGraph.importKey`), because connecting never asks for one. It is
+ * wrapped under the same Keystore key as the key text, so on this phone it adds no protection at rest beyond that
+ * wrapping: whoever can unwrap one can unwrap the other. Nothing is written in clear.
  */
 class ImportedKeyStore(private val secrets: SecretStore) {
     private fun keyName(id: String) = "imported-$id"
