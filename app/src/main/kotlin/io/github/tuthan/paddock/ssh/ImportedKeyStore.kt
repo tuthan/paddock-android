@@ -2,6 +2,9 @@ package io.github.tuthan.paddock.ssh
 
 import io.github.tuthan.paddock.ports.SecretCorrupt
 import io.github.tuthan.paddock.ports.SecretStore
+import java.nio.ByteBuffer
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
 
 /** What the UI may show about a stored imported key. The key material itself is never exposed here. */
 data class ImportedKeyInfo(val id: String, val keyType: String, val fingerprint: String, val encrypted: Boolean, val passphraseRemembered: Boolean)
@@ -26,7 +29,7 @@ class ImportedKeyStore(private val secrets: SecretStore) {
         require(SECRET_ID.matches(id)) { "invalid key id" }
         val check = ImportedKey.check(pem, passphrase)
         if (check !is ImportCheck.Ready) return check
-        val keyBytes = String(pem).toByteArray(Charsets.UTF_8)
+        val keyBytes = utf8(pem)
         try {
             secrets.put(keyName(id), keyBytes)
             val remember = rememberPassphrase && check.encrypted && !passphrase.isNullOrEmpty()
@@ -54,8 +57,22 @@ class ImportedKeyStore(private val secrets: SecretStore) {
         val remembered = try { unwrap(passName(id)) } catch (e: ConnectFailure) { keyBytes.fill(0); throw e }
         try {
             val pass = passphrase ?: remembered?.toString(Charsets.UTF_8)
-            return SshAuth.Imported(String(keyBytes, Charsets.UTF_8).toCharArray(), pass)
+            return SshAuth.Imported(chars(keyBytes), pass)
         } finally { keyBytes.fill(0); remembered?.fill(0) }
+    }
+
+    // The key text never passes through a String (immutable, unwipeable): converted buffer to buffer, intermediates wiped.
+    // Best effort: the codec sizes its buffer from the input, so ASCII PEM text is converted without a regrown copy.
+    private fun utf8(text: CharArray): ByteArray {
+        val buf = Charsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPLACE).onUnmappableCharacter(CodingErrorAction.REPLACE)
+            .encode(CharBuffer.wrap(text))
+        return ByteArray(buf.remaining()).also { buf.get(it); if (buf.hasArray()) buf.array().fill(0) }
+    }
+
+    private fun chars(bytes: ByteArray): CharArray {
+        val buf = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPLACE).onUnmappableCharacter(CodingErrorAction.REPLACE)
+            .decode(ByteBuffer.wrap(bytes))
+        return CharArray(buf.remaining()).also { buf.get(it); if (buf.hasArray()) buf.array().fill('\u0000') }
     }
 
     suspend fun delete(id: String) { secrets.delete(keyName(id)); secrets.delete(passName(id)); secrets.delete(metaName(id)) }
