@@ -78,6 +78,9 @@ class MonitoredHost(
     val freshness: StateFlow<Freshness> get() = monitor.freshness
     /** Why the monitor last went stale (a dropped stream, a failed or unreadable read), for the host's banner. */
     val lastLoss: StateFlow<Throwable?> get() = monitor.lastLoss
+
+    /** The user asked to read the herd again (pull to refresh): one more authoritative read, single-flight as always. */
+    fun refresh() = reconciler.invalidate("user")
     private val cli = HerdrCli(herdr, sessionName)
     private val jobs = ArrayList<Job>()
     private val live = MutableStateFlow(false)

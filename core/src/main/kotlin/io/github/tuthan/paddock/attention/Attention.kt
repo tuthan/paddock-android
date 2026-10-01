@@ -32,13 +32,31 @@ data class AgentRowModel(
     val key: TerminalKey,
     val paneId: String,
     val title: String,
+    /** Where the agent is: "workspace › tab", else the working directory's name, else empty. */
     val context: String,
     val state: StateWord,
     val section: Section,
     /** When the phone observed this state, or the time of the read that first showed it; never "blocked for". */
     val observedAtMillis: Long,
     val stateChangeSeq: Long?,
+    /** herdr's agent kind (`claude`, `codex`, …), for the monogram; null when herdr does not say. */
+    val agentKind: String? = null,
 )
+
+/** Two lowercase letters for an agent kind, as the design's monograms: known kinds by name, others by their first letters. */
+object Monogram {
+    private val known = mapOf(
+        "claude" to "cl", "codex" to "cx", "opencode" to "oc", "gemini" to "gm", "copilot" to "cp",
+        "pi" to "pi", "amp" to "am", "hermes" to "hm", "shell" to "sh",
+    )
+
+    fun of(kind: String?): String {
+        val k = kind?.trim()?.lowercase().orEmpty()
+        known[k]?.let { return it }
+        val letters = k.filter { it in 'a'..'z' || it in '0'..'9' }
+        return if (letters.isEmpty()) "··" else letters.take(2)
+    }
+}
 
 data class HomeModel(
     val sections: List<Pair<Section, List<AgentRowModel>>>,
@@ -90,8 +108,20 @@ object AttentionModel {
     fun title(a: Agent): String =
         (a.title.shown() ?: a.terminalTitleStripped.shown() ?: "${a.displayAgent.shown() ?: a.agent.shown() ?: "agent"} · ${a.paneId}").boundedForUi(120)
 
-    private fun context(a: Agent): String =
-        (a.foregroundCwd ?: a.cwd)?.let { it.trimEnd('/').substringAfterLast('/').ifEmpty { it } }?.let(SafeText::clean) ?: ""
+    /**
+     * "workspace › tab" from the snapshot, as herdr labels them; a tab still carrying its default label (its number)
+     * reads "tab N". Without a known workspace, the working directory's name.
+     */
+    private fun context(a: Agent, s: Snapshot): String {
+        val workspace = s.workspaces.firstOrNull { it.workspaceId == a.workspaceId }
+        if (workspace != null) {
+            val ws = workspace.label.shown() ?: "workspace ${workspace.number}"
+            val tab = s.tabs.firstOrNull { it.tabId == a.tabId }
+            val tabText = tab?.let { t -> t.label.shown()?.takeIf { it != t.number.toString() } ?: "tab ${t.number}" }
+            return if (tabText == null) ws else "$ws › $tabText"
+        }
+        return (a.foregroundCwd ?: a.cwd)?.let { it.trimEnd('/').substringAfterLast('/').ifEmpty { it } }?.let(SafeText::clean) ?: ""
+    }
 
     /** Titles come from terminals and integrations: untrusted text, cleaned of controls and reordering marks before display. */
     private fun String?.shown(): String? = this?.let(SafeText::clean)?.takeIf { it.isNotBlank() }
@@ -99,8 +129,9 @@ object AttentionModel {
     private fun row(a: Agent, s: Snapshot, readAt: Long, host: HostProfileId, session: String, epoch: Long, observedAt: ObservedAt, seen: SeenLookup): AgentRowModel {
         val (word, section) = section(a, seen)
         return AgentRowModel(
-            key = TerminalKey(TargetRef(host, session, a.terminalId), epoch), paneId = a.paneId, title = title(a), context = context(a).boundedForUi(80),
+            key = TerminalKey(TargetRef(host, session, a.terminalId), epoch), paneId = a.paneId, title = title(a), context = context(a, s).boundedForUi(80),
             state = word, section = section, observedAtMillis = observedAt.of(a.terminalId) ?: readAt, stateChangeSeq = a.stateChangeSeq,
+            agentKind = a.agent.shown(),
         )
     }
 

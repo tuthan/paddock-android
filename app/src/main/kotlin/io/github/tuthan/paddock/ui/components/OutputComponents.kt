@@ -5,11 +5,24 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ripple
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -37,6 +50,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -65,7 +79,8 @@ internal fun ansiLineToText(line: AnsiLine, colors: PaddockColors): AnnotatedStr
  * The last lines of a terminal on the slab. The list is reversed (newest line at index 0, laid out from the bottom), so
  * staying at the newest line needs no scroll code: new text arrives at the bottom and the view stays there while
  * [following]. A drag that reveals older lines calls [onUserScrolledUp]; only a user drag does, so following never
- * stops itself. When [following] turns back on the list returns to the newest line.
+ * stops itself. When [following] turns back on the list returns to the newest line. While paused, a pill on the slab
+ * says so.
  */
 @Composable
 fun OutputSlab(lines: List<AnsiLine>, following: Boolean, onUserScrolledUp: () -> Unit, modifier: Modifier = Modifier) {
@@ -83,7 +98,8 @@ fun OutputSlab(lines: List<AnsiLine>, following: Boolean, onUserScrolledUp: () -
         }
     }
     LaunchedEffect(following) { if (following) listState.scrollToItem(0) }
-    Box(modifier.fillMaxSize().background(c.slab, RoundedCornerShape(PaddockTokens.radii.row)).nestedScroll(connection)) {
+    val shape = RoundedCornerShape(PaddockTokens.radii.slab)
+    Box(modifier.fillMaxSize().clip(shape).background(c.slab).border(1.dp, c.line(), shape).nestedScroll(connection)) {
         LazyColumn(
             Modifier.fillMaxSize().semantics { contentDescription = "Terminal output" },
             state = listState,
@@ -93,61 +109,103 @@ fun OutputSlab(lines: List<AnsiLine>, following: Boolean, onUserScrolledUp: () -
             contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
         ) {
             itemsIndexed(newestFirst) { _, line ->
-                Text(ansiLineToText(line, c), style = PaddockTokens.type.monoFact, color = c.text)
+                Text(ansiLineToText(line, c), style = PaddockTokens.type.slab, color = c.text)
+            }
+        }
+        if (!following) {
+            val pill = RoundedCornerShape(50)
+            Row(
+                Modifier.align(Alignment.TopEnd).padding(10.dp).heightIn(min = 28.dp).clip(pill).background(c.surface.copy(alpha = 0.92f))
+                    .border(1.dp, c.line(focused = true), pill).padding(horizontal = 10.dp).semantics { contentDescription = "Paused" },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(PaddockIcons.Pause, contentDescription = null, tint = c.text, modifier = Modifier.size(14.dp))
+                Text("PAUSED", style = PaddockTokens.type.stateWord, color = c.text)
             }
         }
     }
 }
 
-/** A small status chip. With [onClick] it is a real button, at least 48 dp tall. */
+/**
+ * A status chip, 34 dp to the eye. With [onClick] it is a real button with a 48 dp target. [tone] tints it the way the
+ * design tints a state chip (Working in the accent, Blocked in red); null is the plain chip.
+ */
 @Composable
-fun Chip(text: String, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, description: String = text) {
+fun Chip(
+    text: String, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, description: String = text,
+    tone: Color? = null, icon: ImageVector? = null, leading: (@Composable () -> Unit)? = null,
+) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(50)
-    Row(
+    // The 48 dp target is the outer box; the press ripple is drawn on the visible pill only.
+    val press = remember { MutableInteractionSource() }
+    Box(
         modifier
-            .background(c.field, shape)
-            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClickLabel = description, onClick = onClick).minimumInteractiveComponentSize() else Modifier)
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .then(if (onClick != null) Modifier.clickable(interactionSource = press, indication = null, role = Role.Button, onClickLabel = description, onClick = onClick).minimumInteractiveComponentSize() else Modifier)
             .semantics(mergeDescendants = true) { contentDescription = description },
-        verticalAlignment = Alignment.CenterVertically,
-    ) { Text(text, style = PaddockTokens.type.secondary, color = c.title) }
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.heightIn(min = 34.dp).clip(shape).then(if (onClick != null) Modifier.indication(press, ripple()) else Modifier)
+                .background(if (tone != null) tone.copy(alpha = 0.10f) else c.surface)
+                .border(1.dp, if (tone != null) tone.copy(alpha = 0.5f) else c.control(), shape)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            leading?.invoke()
+            if (icon != null) Icon(icon, contentDescription = null, tint = tone ?: c.text, modifier = Modifier.size(14.dp))
+            Text(text, style = PaddockTokens.type.chip, color = tone ?: c.text, maxLines = 1)
+        }
+    }
 }
 
-/** Two or three mutually exclusive tabs, each at least 48 dp tall and announced as selected or not. */
+/** Two or three mutually exclusive tabs, each at least 48 dp tall and announced as selected or not. The selected one is raised onto the field colour. */
 @Composable
 fun SegmentedTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.button)
-    Row(modifier.fillMaxWidth().background(c.field, shape).padding(3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+    val inner = RoundedCornerShape(PaddockTokens.radii.button - 2.dp)
+    Row(
+        modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, c.text.copy(alpha = 0.10f), shape).padding(3.dp).selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
         labels.forEachIndexed { i, label ->
             val on = i == selected
             Box(
                 Modifier
                     .weight(1f)
                     .heightIn(min = PaddockTokens.spacing.touchTarget)
-                    .background(if (on) c.surface else c.field, RoundedCornerShape(PaddockTokens.radii.button - 2.dp))
-                    .then(if (on) Modifier.border(1.dp, c.line(focused = true), RoundedCornerShape(PaddockTokens.radii.button - 2.dp)) else Modifier)
+                    .clip(inner)
+                    .background(if (on) c.field else Color.Transparent)
                     .clickable(role = Role.Tab, onClick = { onSelect(i) })
                     .semantics { this.selected = on },
                 contentAlignment = Alignment.Center,
-            ) { Text(label, style = PaddockTokens.type.rowTitle, color = if (on) c.title else c.dim) }
+            ) { Text(label, style = PaddockTokens.type.chip.copy(fontSize = PaddockTokens.type.summary.fontSize, fontWeight = FontWeight.Medium), color = if (on) c.title else c.dim) }
         }
     }
 }
 
-/** The manual keys. Rendered disabled in Phase 04: nothing here sends input, and TalkBack says so. */
+/**
+ * The manual keys, in the design's order with Esc first and in red. Drawn but not active: Paddock only reads this agent
+ * so far, so nothing here sends input, TalkBack says so, and a caption under the strip says why.
+ */
 @Composable
-fun KeyStrip(modifier: Modifier = Modifier, note: String = "Keys arrive in Phase 06") {
+fun KeyStrip(modifier: Modifier = Modifier, note: String = KEYS_NOTE) {
     val c = PaddockTokens.colors
-    Row(
-        modifier.fillMaxWidth().alpha(0.5f).semantics(mergeDescendants = true) { disabled(); contentDescription = "Keys, unavailable. $note" },
-        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
-    ) {
-        listOf("Esc", "Tab", "↑", "↓", "⏎", "^C").forEach { key ->
-            Box(Modifier.heightIn(min = PaddockTokens.spacing.touchTarget).weight(1f).background(c.field, RoundedCornerShape(PaddockTokens.radii.key)), contentAlignment = Alignment.Center) {
-                Text(key, style = PaddockTokens.type.monoFact, color = c.dim)
+    val shape = RoundedCornerShape(PaddockTokens.radii.key)
+    Column(modifier.fillMaxWidth().semantics(mergeDescendants = true) { disabled(); contentDescription = "Keys, unavailable. $note" }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth().alpha(0.5f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf("Esc", "Enter", "↑", "↓", "Tab", "Ctrl+C").forEach { key ->
+                val esc = key == "Esc"
+                Box(
+                    Modifier.heightIn(min = PaddockTokens.spacing.touchTarget).widthIn(min = PaddockTokens.spacing.touchTarget).clip(shape).background(c.field)
+                        .border(1.dp, if (esc) c.needsYou.copy(alpha = 0.4f) else c.control(), shape).padding(horizontal = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text(key, style = PaddockTokens.type.monoFact.copy(fontSize = PaddockTokens.type.chip.fontSize), color = if (esc) c.needsYou else c.title) }
             }
         }
+        Text(note, style = PaddockTokens.type.note, color = c.dim)
     }
 }
+
+const val KEYS_NOTE = "Read-only for now: Paddock does not send keys or replies to agents yet."

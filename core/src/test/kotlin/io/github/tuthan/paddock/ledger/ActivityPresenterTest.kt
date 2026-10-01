@@ -31,12 +31,22 @@ class ActivityPresenterTest {
         assertEquals(listOf("14:05", "09:00"), sections[0].rows.map { it.timeLabel })
     }
 
-    @Test fun stateChangesNameTheAgentAndShowTheTransitionWithoutClaimingACause() {
+    @Test fun stateChangesAreSentencesAboutWhatWasSeenWithTheTransitionAsDetail() {
         val t = mapOf("term_a" to "approve edit to build.gradle")
-        val row = p(t).present(listOf(obs(ObservationKind.StateChanged, ms(1, 14, 0), "term_a", "blocked -> working")), now).single().rows.single()
-        assertEquals("approve edit to build.gradle: blocked → working", row.text)
-        assertFalse(row.text.contains("answered", ignoreCase = true))
-        assertEquals("14:00, approve edit to build.gradle: blocked → working", row.description)
+        fun change(detail: String) = p(t).present(listOf(obs(ObservationKind.StateChanged, ms(1, 14, 0), "term_a", detail)), now).single().rows.single()
+        val moved = change("blocked -> working")
+        assertEquals("approve edit to build.gradle: blocker no longer observed", moved.text)
+        assertEquals("now working", moved.detail)
+        assertFalse(moved.text.contains("answered", ignoreCase = true))
+        assertEquals("14:00, approve edit to build.gradle: blocker no longer observed, now working", moved.description)
+        assertEquals(ActivityTone.Quiet, moved.tone)
+        val blocked = change("working -> blocked")
+        assertEquals("approve edit to build.gradle needed you" to ActivityTone.NeedsYou, blocked.text to blocked.tone)
+        assertEquals("working → blocked", blocked.detail)
+        assertEquals("approve edit to build.gradle finished" to ActivityTone.Done, change("working -> done").let { it.text to it.tone })
+        assertEquals("approve edit to build.gradle started working" to ActivityTone.Working, change("idle -> working").let { it.text to it.tone })
+        assertEquals("approve edit to build.gradle is ready", change("working -> idle").text)
+        assertEquals("approve edit to build.gradle changed state", change("odd").text)
     }
 
     @Test fun anAgentWithNoKnownTitleFallsBackToAShortIdNeverBlank() {
@@ -65,7 +75,7 @@ class ActivityPresenterTest {
         assertEquals("No connection to Laptop since 14:30", rows[0].text)
         assertEquals("No connection to Laptop for a few seconds", rows[1].text)
         assertEquals("No connection to Laptop for 4 min", rows[2].text)
-        assertTrue(rows.all { it.kind == ActivityRowKind.Gap })
+        assertTrue(rows.all { it.kind == ActivityRowKind.Gap && it.tone == ActivityTone.Host })
     }
 
     @Test fun keysAreStableAndDistinctAcrossKindsAndHosts() {

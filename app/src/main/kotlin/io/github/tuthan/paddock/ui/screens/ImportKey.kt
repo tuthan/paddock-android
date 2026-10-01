@@ -32,11 +32,16 @@ import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.Fact
 import io.github.tuthan.paddock.ui.components.Field
 import io.github.tuthan.paddock.ui.components.Kicker
+import io.github.tuthan.paddock.ui.components.Note
 import io.github.tuthan.paddock.ui.components.PaddockButton
+import io.github.tuthan.paddock.ui.components.ScreenHeader
+import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 
-/** A key file the user chose. The text is held in memory by the caller and never written anywhere by the screen. */
-data class PickedKeyFile(val displayName: String, val text: String)
+/** A key file the user chose. The text is held in memory by the caller and never written anywhere by the screen, nor printed. */
+data class PickedKeyFile(val displayName: String, val text: String) {
+    override fun toString(): String = "PickedKeyFile(displayName=$displayName, text=<${text.length} chars>)"
+}
 
 /** The words for an import that did not complete. `null` for a ready key: the caller leaves the screen. */
 fun importMessage(check: ImportCheck): String? = when (check) {
@@ -71,16 +76,9 @@ fun ImportKey(
     val pem = picked?.text ?: pasted
     val message = result?.let(::importMessage)
 
-    Column(modifier.fillMaxSize().imePadding().padding(horizontal = PaddockTokens.spacing.gutter)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(PaddockTokens.spacing.touchTarget).minimumInteractiveComponentSize()
-                    .clickable(role = Role.Button, onClickLabel = "Back", onClick = onBack).semantics { contentDescription = "Back" },
-                contentAlignment = Alignment.Center,
-            ) { Text("←", style = PaddockTokens.type.screenTitle, color = c.title) }
-            Text("Import a private key", style = PaddockTokens.type.screenTitle, color = c.title, modifier = Modifier.semantics { heading() })
-        }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(modifier.fillMaxSize().imePadding()) {
+        ScreenHeader("Import a private key", onBack = onBack)
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = PaddockTokens.spacing.gutter).padding(top = 8.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
                 "Your key is checked on this phone, then stored encrypted by the phone's Keystore. It is never sent anywhere except to sign in to your machine.",
                 style = PaddockTokens.type.body, color = c.dim,
@@ -88,9 +86,9 @@ fun ImportKey(
             Kicker("The key")
             if (picked != null) {
                 Fact("Chosen file", picked.displayName)
-                PaddockButton("Choose a different file", onClearFile, kind = ButtonKind.Quiet)
+                PaddockButton("Choose a different file", onClearFile, kind = ButtonKind.Secondary, icon = PaddockIcons.File)
             } else {
-                PaddockButton("Choose a key file", onChooseFile, kind = ButtonKind.Quiet)
+                PaddockButton("Choose a key file", onChooseFile, kind = ButtonKind.Secondary, icon = PaddockIcons.File)
                 Field(
                     "Or paste the key", pasted, { pasted = it }, singleLine = false, secret = true, imeAction = ImeAction.Default,
                     placeholder = "-----BEGIN OPENSSH PRIVATE KEY-----",
@@ -98,13 +96,10 @@ fun ImportKey(
             }
             if (pickError != null) Banner(pickError)
             Field("Passphrase, if the key has one", passphrase, { passphrase = it }, secret = true, imeAction = ImeAction.Done, onDone = { if (pem.isNotBlank() && !busy) onImport(pem, passphrase) })
-            Text(
-                "An encrypted key's passphrase is stored encrypted on this phone, because Paddock reconnects without asking for it. Leave it empty for a key that has none.",
-                style = PaddockTokens.type.secondary, color = c.dim,
-            )
+            Note("An encrypted key's passphrase is stored encrypted on this phone, because Paddock reconnects without asking for it. Leave it empty for a key that has none.")
             if (message != null) Banner(message)
         }
-        Column(Modifier.padding(vertical = 10.dp)) {
+        Column(Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 10.dp)) {
             PaddockButton(if (busy) "Checking…" else "Import key", { onImport(pem, passphrase) }, enabled = pem.isNotBlank() && !busy)
         }
     }

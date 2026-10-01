@@ -2,43 +2,64 @@ package io.github.tuthan.paddock.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.ui.components.Banner
+import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.Kicker
+import io.github.tuthan.paddock.ui.components.PaddockButton
+import io.github.tuthan.paddock.ui.components.ScreenHeader
 import io.github.tuthan.paddock.ui.components.Toggle
+import io.github.tuthan.paddock.ui.components.card
+import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 
 /** Whether the Android 17 local-network grant matters on this device and build, and if so whether it is given. */
 enum class LocalAccess { NotRequired, Granted, Denied }
 
-data class SettingsState(val protectSensitiveScreens: Boolean, val localAccess: LocalAccess, val versionName: String)
+/** The watched machine as Settings shows it: its name, `user@host:port`, and the herdr session (null for the default). */
+data class MachineSummary(val name: String, val endpoint: String, val session: String?)
+
+data class SettingsState(
+    val protectSensitiveScreens: Boolean,
+    val localAccess: LocalAccess,
+    val versionName: String,
+    val machine: MachineSummary? = null,
+    /** The herdr version the watched host reported in its last read, when there is one. */
+    val herdrVersion: String? = null,
+    val protocol: Int = 22,
+)
+
+const val RECONNECT_SHORT = "Fast retries, then up to every 2 minutes"
 
 const val RECONNECT_POLICY =
     "If the connection drops, Paddock tries again after 1, 2 and 4 seconds, then waits longer between tries, up to two minutes. " +
         "Problems only you can fix, such as a refused key or a changed host key, wait for you instead of retrying."
 
-/** Settings. Everything not yet built is shown disabled with the phase that delivers it, never hidden. */
+/** Settings, as grouped cards. Everything not yet built is shown disabled and says so, never hidden. */
 @Composable
 fun Settings(
     state: SettingsState,
@@ -46,23 +67,41 @@ fun Settings(
     onOpenSystemSettings: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onAddMachine: () -> Unit = {},
 ) {
     val c = PaddockTokens.colors
-    Column(modifier.fillMaxSize().padding(horizontal = PaddockTokens.spacing.gutter)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(PaddockTokens.spacing.touchTarget).minimumInteractiveComponentSize()
-                    .clickable(role = Role.Button, onClickLabel = "Back", onClick = onBack).semantics { contentDescription = "Back" },
-                contentAlignment = Alignment.Center,
-            ) { Text("←", style = PaddockTokens.type.screenTitle, color = c.title) }
-            Text("Settings", style = PaddockTokens.type.screenTitle, color = c.title, modifier = Modifier.semantics { heading() })
-        }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Section("Monitoring") {
-                Fixed("Monitor while open", "On", "Paddock checks your agents while this app is open and stops a few seconds after you leave it.")
-                Text(RECONNECT_POLICY, style = PaddockTokens.type.secondary, color = c.dim)
+    var reconnectOpen by rememberSaveable { mutableStateOf(false) }
+    Column(modifier.fillMaxSize()) {
+        ScreenHeader("Settings", onBack = onBack)
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(start = PaddockTokens.spacing.gutter, end = PaddockTokens.spacing.gutter, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Section("Machine")
+            if (state.machine != null) {
+                Fixed(state.machine.name, null, listOfNotNull(state.machine.endpoint, state.machine.session?.let { "session $it" } ?: "default session").joinToString(" · "), mono = true)
             }
-            if (state.localAccess != LocalAccess.NotRequired) Section("Local network") {
+            PaddockButton(if (state.machine == null) "Add a machine" else "Add another machine", onAddMachine, kind = ButtonKind.Ghost, icon = PaddockIcons.Plus)
+            if (state.machine != null) Note2("Paddock watches one machine at a time; adding another makes it the watched one.")
+
+            Section("Connection")
+            Fixed("Monitor while the app is open", "On", "Paddock checks your agents while this app is open and stops a few seconds after you leave it.")
+            Row(
+                Modifier.card(c, padded = false)
+                    .clickable(role = Role.Button, onClickLabel = if (reconnectOpen) "Hide the reconnect policy" else "Show the reconnect policy") { reconnectOpen = !reconnectOpen }
+                    .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
+                    .semantics(mergeDescendants = true) { stateDescription = if (reconnectOpen) "Expanded" else "Collapsed" },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Reconnect", style = PaddockTokens.type.rowTitle, color = c.title)
+                    Text(if (reconnectOpen) RECONNECT_POLICY else RECONNECT_SHORT, style = PaddockTokens.type.secondary, color = c.dim)
+                }
+                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp).rotate(if (reconnectOpen) 90f else 0f))
+            }
+
+            if (state.localAccess != LocalAccess.NotRequired) {
+                Section("Local network")
                 when (state.localAccess) {
                     LocalAccess.Granted -> Fixed("Local-network access", "Allowed", "Needed to reach machines by a LAN address.")
                     LocalAccess.Denied -> Banner(
@@ -72,52 +111,55 @@ fun Settings(
                     LocalAccess.NotRequired -> Unit
                 }
             }
-            Section("Notifications") {
-                Fixed("Needs you", "Phase 07", "Alerts when an agent is blocked.", enabled = false)
-                Fixed("Done", "Phase 07", "Alerts when an agent finishes.", enabled = false)
-            }
-            Section("Appearance") {
-                Fixed("Theme", "Paddock palette", "Follows the system light or dark setting. Other themes are not offered.")
-            }
-            Section("Privacy") {
-                Toggle(
-                    "Protect sensitive screens", state.protectSensitiveScreens, onProtectSensitive,
-                    detail = "Blocks screenshots and shows a blank preview in recent apps on screens that can show agent output.",
-                )
-            }
-            Section("About") {
-                Fixed("Version", state.versionName, null)
-                Text(
-                    "Paddock connects to your machine over SSH only. Agent output is shown and not kept: the Activity log holds only state changes the phone saw and what you did here.",
-                    style = PaddockTokens.type.secondary, color = c.dim,
-                )
-            }
+
+            Section("Notifications")
+            Fixed("Needs you", "Not yet", "Alerts when an agent is blocked.", enabled = false)
+            Fixed("Done", "Not yet", "Alerts when an agent finishes.", enabled = false)
+
+            Section("Appearance")
+            Fixed("Theme", "Paddock palette", "Follows the system light or dark setting.")
+
+            Section("Privacy")
+            Toggle(
+                "Protect sensitive screens", state.protectSensitiveScreens, onProtectSensitive, Modifier.card(c, padded = false),
+                inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                detail = "Blocks screenshots and blanks the recent-apps preview on screens that can show agent output.",
+            )
+
+            Section("About")
+            Fixed(
+                "Paddock ${state.versionName}", null,
+                listOfNotNull("herdr protocol ${state.protocol}", state.herdrVersion?.let { "host on $it" }, "no analytics, no crash uploads").joinToString(" · "),
+                description = "Version, ${state.versionName}",
+            )
+            Note2(
+                "Paddock connects to your machine over SSH only. Agent output is shown and not kept: the Activity log holds only state changes the phone saw and what you did here. " +
+                    "An independent project, not affiliated with herdr.",
+            )
         }
     }
 }
 
 @Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Kicker(title, Modifier.padding(top = 8.dp))
-        content()
-    }
-}
+private fun Section(title: String) = Kicker(title, Modifier.padding(top = 12.dp))
 
-/** A row the user cannot change. Read as "label, value, detail"; a disabled one is announced as unavailable. */
 @Composable
-private fun Fixed(label: String, value: String, detail: String?, enabled: Boolean = true) {
+private fun Note2(text: String) = io.github.tuthan.paddock.ui.components.Note(text, Modifier.padding(horizontal = 2.dp, vertical = 2.dp))
+
+/** A card the user cannot change. Read as "label, value, detail"; a disabled one is announced as unavailable. */
+@Composable
+private fun Fixed(label: String, value: String?, detail: String?, enabled: Boolean = true, mono: Boolean = false, description: String? = null) {
     val c = PaddockTokens.colors
-    val description = listOfNotNull(label, value, detail).joinToString(", ") + if (enabled) "" else ", unavailable"
+    val said = description ?: (listOfNotNull(label, value, detail).joinToString(", ") + if (enabled) "" else ", unavailable")
     Row(
-        Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.55f).heightIn(min = PaddockTokens.spacing.touchTarget).padding(vertical = 6.dp)
-            .semantics(mergeDescendants = true) { contentDescription = description; if (!enabled) disabled() },
+        Modifier.card(c).alpha(if (enabled) 1f else 0.55f)
+            .semantics(mergeDescendants = true) { contentDescription = said; if (!enabled) disabled() },
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(label, style = PaddockTokens.type.rowTitle, color = c.title)
-            if (detail != null) Text(detail, style = PaddockTokens.type.secondary, color = c.dim)
+            if (detail != null) Text(detail, style = if (mono) PaddockTokens.type.monoFact else PaddockTokens.type.secondary, color = c.dim)
         }
-        Text(value, style = PaddockTokens.type.secondary, color = c.dim)
+        if (value != null) Text(value, style = PaddockTokens.type.secondary, color = if (enabled) c.text else c.dim)
     }
 }

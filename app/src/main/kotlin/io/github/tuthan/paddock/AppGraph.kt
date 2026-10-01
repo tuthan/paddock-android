@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Where the machine list stands at start-up. */
 enum class Boot { Loading, NoMachines, Ready }
@@ -95,12 +96,13 @@ class AppGraph(private val app: Application) {
     }
 
     /** The one imported-key slot: importing again replaces the key, and profiles that use it keep working. */
-    suspend fun importedKey(): io.github.tuthan.paddock.ssh.ImportedKeyInfo? = importedKeys.info(IMPORTED_KEY_ID)
+    suspend fun importedKey(): io.github.tuthan.paddock.ssh.ImportedKeyInfo? = withContext(Dispatchers.IO) { importedKeys.info(IMPORTED_KEY_ID) }
 
     /** Checks and stores a private key. An encrypted key's passphrase is kept because connecting never asks for one. */
     suspend fun importKey(pem: String, passphrase: String): io.github.tuthan.paddock.ssh.ImportCheck {
         val chars = pem.toCharArray()
-        try { return importedKeys.import(IMPORTED_KEY_ID, chars, passphrase.ifEmpty { null }, rememberPassphrase = true) } finally { chars.fill('\u0000') }
+        // Parsing, decrypting and the Keystore calls are slow on some phones: never on the main thread.
+        try { return withContext(Dispatchers.Default) { importedKeys.import(IMPORTED_KEY_ID, chars, passphrase.ifEmpty { null }, rememberPassphrase = true) } } finally { chars.fill('\u0000') }
     }
 
     /** Saves [profile], makes it the watched machine and connects. */

@@ -80,7 +80,7 @@ class LiveFlowTest {
         rule.onNodeWithText("Connect").performClick()
 
         // --- First trust: the fingerprint on the phone is the one the host's key file has ---
-        waitFor("the first-trust dialog") { hasNode(text("Trust $host:$port?")) }
+        waitFor("the first-trust dialog") { hasNode(text("New host: $host:$port")) }
         rule.onNodeWithText(hostFp).assertIsDisplayed()
         rule.onNodeWithText("ED25519").assertIsDisplayed()
         rule.onNodeWithText("Trust and connect").performClick()
@@ -121,9 +121,9 @@ class LiveFlowTest {
         shoot("activity")
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
 
-        // --- Settings ---
-        waitFor("home again") { hasNode(text("Settings")) }
-        rule.onNodeWithText("Settings").performClick()
+        // --- Settings: the gear on Home ---
+        waitFor("home again") { hasNode(hasContentDescription("Settings")) }
+        rule.onNode(hasContentDescription("Settings")).performClick()
         waitFor("settings") { hasNode(text("Protect sensitive screens")) }
         shoot("settings")
         val notSecureOnSettings = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE == 0
@@ -162,7 +162,7 @@ class LiveFlowTest {
             shoot("import-key-stored")
             rule.onNodeWithText("Connect").performClick()
 
-            waitFor("the first-trust dialog") { hasNode(text("Trust $host:$port?")) }
+            waitFor("the first-trust dialog") { hasNode(text("New host: $host:$port")) }
             rule.onNodeWithText("Trust and connect").performClick()
             waitFor("the relay prompt or the home") { hasNode(text("Install the relay on $host?")) || hasNode(hasContentDescription("live", substring = true)) }
             if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()

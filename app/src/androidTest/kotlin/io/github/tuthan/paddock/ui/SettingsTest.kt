@@ -40,14 +40,19 @@ import org.junit.Test
 class SettingsTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
-    private class Calls { var protect: Boolean? = null; var system = 0; var back = 0 }
+    private class Calls { var protect: Boolean? = null; var system = 0; var back = 0; var add = 0 }
 
-    private fun show(protect: Boolean = true, local: LocalAccess = LocalAccess.NotRequired, fontScale: Float? = null, dark: Boolean = true, calls: Calls = Calls()): Calls {
+    private val machine = io.github.tuthan.paddock.ui.screens.MachineSummary("Laptop", "jdoe@10.0.0.2:22", null)
+
+    private fun show(
+        protect: Boolean = true, local: LocalAccess = LocalAccess.NotRequired, fontScale: Float? = null, dark: Boolean = true, calls: Calls = Calls(),
+        machine: io.github.tuthan.paddock.ui.screens.MachineSummary? = this.machine,
+    ): Calls {
         rule.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
                 PaddockTheme(darkTheme = dark) {
-                    Settings(SettingsState(protect, local, "0.1.0"), { calls.protect = it }, { calls.system++ }, { calls.back++ })
+                    Settings(SettingsState(protect, local, "0.1.0", machine = machine, herdrVersion = "0.9.1"), { calls.protect = it }, { calls.system++ }, { calls.back++ }, onAddMachine = { calls.add++ })
                 }
             }
         }
@@ -62,17 +67,37 @@ class SettingsTest {
 
     private fun secure() = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
 
-    @Test fun monitoringIsOnAndTheReconnectPolicyIsStatedInWords() {
+    @Test fun monitoringIsOnAndTheReconnectPolicyIsShortThenStatedInFullOnATap() {
         show()
-        rule.onNode(hasContentDescription("Monitor while open", substring = true)).assertIsDisplayed()
-        rule.onNodeWithText(RECONNECT_POLICY).assertIsDisplayed()
+        rule.onNode(hasContentDescription("Monitor while the app is open", substring = true)).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText(io.github.tuthan.paddock.ui.screens.RECONNECT_SHORT).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        rule.onNodeWithText(RECONNECT_POLICY).performScrollTo().assertIsDisplayed()
         shoot("settings")
     }
 
-    @Test fun notificationRowsAreDisabledAndSayWhichPhaseDeliversThem() {
+    @Test fun theWatchedMachineIsListedAndAddingAnotherIsHere() {
+        val calls = show()
+        rule.onNode(hasContentDescription("Laptop, jdoe@10.0.0.2:22 · default session", substring = true)).assertIsDisplayed()
+        rule.onNodeWithText("Add another machine").assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.add)
+    }
+
+    @Test fun withNoMachineTheButtonSaysAddAMachine() {
+        show(machine = null)
+        rule.onNodeWithText("Add a machine").assertIsDisplayed()
+    }
+
+    @Test fun aboutNamesTheHerdrVersionAndTheProjectsIndependence() {
+        show()
+        rule.onNode(hasContentDescription("Version, 0.1.0")).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("host on 0.9.1", substring = true).assertExists()
+        rule.onNodeWithText("not affiliated with herdr", substring = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun notificationRowsAreDisabledAndSaySo() {
         show()
         for (label in listOf("Needs you", "Done")) {
-            val node = rule.onNode(hasContentDescription("$label, Phase 07", substring = true)).performScrollTo()
+            val node = rule.onNode(hasContentDescription("$label, Not yet", substring = true)).performScrollTo()
             node.assertIsDisplayed()
             assertTrue(node.fetchSemanticsNode().config.contains(SemanticsProperties.Disabled))
             assertTrue(node.fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription)!!.single().endsWith("unavailable"))
@@ -159,6 +184,30 @@ class SettingsTest {
         rule.waitForIdle()
         assertTrue(secure())
         rule.runOnUiThread { shown = false }
+        rule.waitForIdle()
+        assertFalse(secure())
+    }
+
+    @Test fun twoScreensThatAskForTheFlagKeepItUntilTheLastOneLeavesInEitherOrder() {
+        var a by mutableStateOf(true)
+        var b by mutableStateOf(true)
+        rule.setContent { if (a) SecureWindow(true); if (b) SecureWindow(true) }
+        rule.waitForIdle()
+        assertTrue(secure())
+        rule.runOnUiThread { a = false }
+        rule.waitForIdle()
+        assertTrue("the first to leave must not clear the second's protection", secure())
+        rule.runOnUiThread { b = false }
+        rule.waitForIdle()
+        assertFalse(secure())
+        rule.runOnUiThread { b = true }
+        rule.waitForIdle()
+        rule.runOnUiThread { a = true }
+        rule.waitForIdle()
+        rule.runOnUiThread { b = false }
+        rule.waitForIdle()
+        assertTrue(secure())
+        rule.runOnUiThread { a = false }
         rule.waitForIdle()
         assertFalse(secure())
     }

@@ -79,14 +79,14 @@ class ActivityLogTest {
     @Test fun daysAreHeadingsAndRowsReadTimeThenWhatHappened() {
         show(sections())
         rule.onNodeWithText("TODAY").assertIsDisplayed()
-        byDesc("14:50, approve edit to build.gradle: working → blocked").assertIsDisplayed()
+        byDesc("14:50, approve edit to build.gradle needed you, working → blocked").assertIsDisplayed()
         byDesc("14:20, You marked write release notes as seen").assertIsDisplayed()
         shoot("activity-all-dark-100")
     }
 
     @Test fun disconnectedTimeIsAGapRowThatSaysSo() {
         show(sections())
-        byDesc("14:00, No connection to Laptop for 6 min").assertIsDisplayed()
+        byDesc("14:00, No connection to Laptop for 6 min, nothing was observed in this time").assertIsDisplayed()
     }
 
     @Test fun theClosingNoteSaysWhatTheListIsAndIsNot() {

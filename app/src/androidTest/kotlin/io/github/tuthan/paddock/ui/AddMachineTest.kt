@@ -62,6 +62,13 @@ class AddMachineTest {
         File(dir, "$name.png").outputStream().use { rule.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
+    /** A dialog is its own window: capture that, not the activity's root. */
+    private fun shootDialog(name: String) {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val dir = File(ctx.getExternalFilesDir(null), "screens").apply { mkdirs() }
+        File(dir, "$name.png").outputStream().use { rule.onNode(androidx.compose.ui.test.isDialog()).captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
     private fun show(state: AddMachineState = state(), fontScale: Float? = null, calls: Calls = Calls(), dark: Boolean = true): Calls {
         rule.setContent {
             val base = LocalDensity.current
@@ -117,7 +124,7 @@ class AddMachineTest {
         }
         show(state(key = line, backing = KeyBacking.Software))
         rule.onNodeWithText(backingText(KeyBacking.Software)).performScrollTo().assertIsDisplayed()
-        rule.onNode(hasContentDescription("Public key. Add this line to ~/.ssh/authorized_keys on the machine: $line")).performScrollTo().assertIsDisplayed()
+        rule.onNode(hasContentDescription("Public key to authorize: $line")).performScrollTo().assertIsDisplayed()
     }
 
     @Test fun copyHandsOverTheExactPublicKeyLine() {
@@ -262,6 +269,7 @@ class AddMachineTest {
         rule.onNodeWithText(first.compareCommand).assertIsDisplayed()
         button("Cancel").assertIsFocused()
         button("Trust and connect").assertIsNotFocused()
+        shootDialog("hostkey-first-trust")
     }
 
     @Test fun theEnterKeyActivatesTheSafeChoice() {
@@ -276,7 +284,7 @@ class AddMachineTest {
         assertEquals(1, c.trust); assertEquals(0, c.cancel)
     }
 
-    @Test fun cancelAndDismissingBothRefuseTheKey() {
+    @Test fun cancelRefusesTheKey() {
         val c = dialog(first)
         button("Cancel").performClick()
         assertEquals(1, c.cancel); assertEquals(0, c.trust)
@@ -289,6 +297,7 @@ class AddMachineTest {
         rule.onNode(hasText("first trusted", substring = true, ignoreCase = true)).assertIsDisplayed()
         button("Keep the old key").assertIsFocused()
         button("Replace with the new key").assertIsNotFocused()
+        shootDialog("hostkey-changed")
     }
 
     @Test fun replacingAChangedKeyNeedsItsOwnTapAndKeepingNeverReplaces() {
@@ -302,6 +311,7 @@ class AddMachineTest {
     @Test fun theDialogButtonsStayReachableAtTwoHundredPercentFont() {
         dialog(changed, fontScale = 2f)
         button("Keep the old key").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
-        button("Replace with the new key").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        button("Replace with the new key").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        shootDialog("hostkey-changed-200")
     }
 }

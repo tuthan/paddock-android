@@ -67,9 +67,27 @@ class AttentionTest {
         assertEquals("fix the build", AttentionModel.title(agent("w1:p1", AgentStatus.Idle, title = "fix the build").copy(title = " ")))
     }
 
-    @Test fun contextIsTheWorkingDirectoryBasename() {
+    @Test fun contextIsWorkspaceAndTabElseTheWorkingDirectoryBasename() {
         assertEquals("proj", home(agent("w1:p1", AgentStatus.Idle)).rows.single().context)
         assertEquals("", home(agent("w1:p1", AgentStatus.Idle, cwd = null)).rows.single().context)
+        fun placed(tabLabel: String, wsLabel: String = "blindpass") = AttentionModel.home(
+            Snapshot("0.9.1", 22, workspaces = listOf(io.github.tuthan.paddock.herdr.Workspace("w1", number = 2, label = wsLabel)),
+                tabs = listOf(io.github.tuthan.paddock.herdr.Tab("w1:t1", "w1", number = 8, label = tabLabel)), agents = listOf(agent("w1:p1", AgentStatus.Idle))),
+            5_000, host, "main", 1,
+        ).rows.single().context
+        assertEquals("blindpass › tab 8", placed("8"), "a tab with its default label reads by number")
+        assertEquals("blindpass › Migration", placed("Migration"))
+        assertEquals("blindpass › tab 8", placed(" "))
+        assertEquals("workspace 2 › tab 8", placed("8", wsLabel = ""))
+        assertEquals("blindpass › Mig", placed("Mig\u202E"), "labels are cleaned like titles")
+    }
+
+    @Test fun monogramsFollowTheDesignAndNeverComeOutEmpty() {
+        assertEquals(listOf("cl", "cx", "oc", "gm", "sh"), listOf("claude", "Codex", "opencode", "gemini", "shell").map(Monogram::of))
+        assertEquals("fa", Monogram.of("fake"))
+        assertEquals("··", Monogram.of(null))
+        assertEquals("··", Monogram.of("—"))
+        assertEquals("claude", home(agent("w1:p1", AgentStatus.Idle)).rows.single().agentKind)
     }
 
     @Test fun observedAtPrefersThePhonesObservationAndFallsBackToTheReadTime() {

@@ -3,9 +3,13 @@ package io.github.tuthan.paddock.host
 import io.github.tuthan.paddock.attention.HomeModel
 import io.github.tuthan.paddock.live.BlockedPreview
 import io.github.tuthan.paddock.live.HostPhase
+import io.github.tuthan.paddock.herdr.ProtocolError
 import io.github.tuthan.paddock.ports.DownReason
+import io.github.tuthan.paddock.relay.HerdrError
+import io.github.tuthan.paddock.relay.RelayTimeout
 import io.github.tuthan.paddock.reconcile.Freshness
 import io.github.tuthan.paddock.ui.screens.HomeUiState
+import io.github.tuthan.paddock.ui.screens.clockLabel
 
 /** What one host's screen knows: the controller's phase, the live home, and the last home seen (kept across reconnects, shown dimmed). */
 data class HostView(
@@ -15,6 +19,10 @@ data class HostView(
     val lastHome: HomeModel? = null,
     val lastReadAtMillis: Long? = null,
     val blockedPreview: BlockedPreview? = null,
+    /** Why the monitor last went stale, when it did: a timeout, a herdr error, an unreadable answer, a lost stream. */
+    val lastLoss: Throwable? = null,
+    /** The herdr version of the last read, for Settings' About. */
+    val herdrVersion: String? = null,
 )
 
 /** What tapping the degraded banner's action does. */
@@ -24,7 +32,18 @@ data class HostScreen(val state: HomeUiState, val recovery: Recovery? = null, va
 
 /** Turns a [HostView] into what Home draws. Pure: the same view and clock always give the same screen. */
 object HomeUiMapper {
-    fun map(name: String, v: HostView, nowMillis: Long): HostScreen {
+    /** What went wrong with a live monitor, as a host fact: herdr silent, herdr refusing, an answer Paddock cannot read, or the stream lost. */
+    fun staleReason(name: String, loss: Throwable?, lastRead: String?): String {
+        val since = lastRead?.let { " Last read at $it." } ?: ""
+        return when (loss) {
+            is RelayTimeout -> "herdr on $name is not answering. Paddock is reconnecting.$since"
+            is HerdrError -> "herdr on $name refused a read (${loss.code}). Paddock is reconnecting.$since"
+            is ProtocolError -> "$name sent an answer Paddock can't read. Paddock is reconnecting; if this keeps happening, herdr and Paddock may need updating.$since"
+            else -> "The connection to herdr on $name was lost. Paddock is reconnecting.$since"
+        }
+    }
+
+    fun map(name: String, v: HostView, nowMillis: Long, clock: (Long) -> String = ::clockLabel): HostScreen {
         val age = v.lastReadAtMillis?.let { (nowMillis - it).coerceAtLeast(0) }
         fun degraded(reason: String, label: String? = null, recovery: Recovery? = null, prompt: HostPhase.NeedsRelayInstall? = null) =
             HostScreen(HomeUiState.Degraded(name, v.lastHome, reason, age, label), recovery, prompt)
@@ -40,7 +59,7 @@ object HomeUiMapper {
             is HostPhase.Monitoring -> when {
                 v.freshness == Freshness.Live && v.home != null && v.lastReadAtMillis != null ->
                     HostScreen(HomeUiState.Live(name, v.home, age ?: 0))
-                v.freshness == Freshness.Stale -> degraded("The connection to herdr was lost. Paddock is reconnecting.")
+                v.freshness == Freshness.Stale -> degraded(staleReason(name, v.lastLoss, v.lastReadAtMillis?.let(clock)))
                 else -> waiting()
             }
         }

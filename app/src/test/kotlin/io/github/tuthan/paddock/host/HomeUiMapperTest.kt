@@ -73,6 +73,16 @@ class HomeUiMapperTest {
         assertEquals(Recovery.Retry, r.recovery)
     }
 
+    @Test fun aStaleMonitorSaysWhatWentWrongAsAHostFactWithTheLastReadTime() {
+        fun reason(loss: Throwable?) = HomeUiMapper.staleReason("Laptop", loss, "14:02")
+        assertTrue(reason(io.github.tuthan.paddock.relay.RelayTimeout("session.snapshot", kotlin.time.Duration.parse("10s"))).startsWith("herdr on Laptop is not answering."))
+        assertTrue(reason(io.github.tuthan.paddock.relay.HerdrError("server_busy", "x")).contains("refused a read (server_busy)"))
+        assertTrue(reason(io.github.tuthan.paddock.herdr.ProtocolError.NotJson(RuntimeException())).contains("an answer Paddock can't read"))
+        assertTrue(reason(java.io.EOFException()).startsWith("The connection to herdr on Laptop was lost."))
+        assertTrue(reason(null).endsWith("Last read at 14:02."))
+        assertEquals("The connection to herdr on Laptop was lost. Paddock is reconnecting.", HomeUiMapper.staleReason("Laptop", null, null))
+    }
+
     @Test fun ageNeverGoesNegativeIfTheClockMovesBack() {
         val s = map(HostView(phase = HostPhase.Connecting, lastHome = model, lastReadAtMillis = now + 5_000)).state as HomeUiState.Degraded
         assertEquals(0L, s.ageMillis)

@@ -19,6 +19,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.requiredHeight
@@ -80,8 +81,8 @@ class HerdHomeTest {
         val base = LocalDensity.current
         CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
             PaddockTheme(darkTheme = dark) {
-                if (tall) androidx.compose.foundation.layout.Box(Modifier.requiredHeight3000()) { HerdHome(state, now, onOpenAgent = onOpen, preview = preview, onReview = onReview) }
-                else HerdHome(state, now, onOpenAgent = onOpen, preview = preview, onReview = onReview)
+                if (tall) androidx.compose.foundation.layout.Box(Modifier.requiredHeight3000()) { HerdHome(state, now, onOpenAgent = { onOpen(it.paneId) }, preview = preview, onReview = { onReview(it.paneId) }) }
+                else HerdHome(state, now, onOpenAgent = { onOpen(it.paneId) }, preview = preview, onReview = { onReview(it.paneId) })
             }
         }
     }
@@ -90,16 +91,21 @@ class HerdHomeTest {
 
     private fun live(m: HomeModel) = HomeUiState.Live("laptop", m, 40_000)
 
-    @Test fun busyHomeListsSectionsInAttentionOrder() {
+    private val busySummary = "1 needs you · 1 done · 1 working · 1 ready · 1 unknown"
+
+    @Test fun busyHomeListsSectionsInAttentionOrderEachWithItsCount() {
         show(live(busy), tall = true)
-        val tops = listOf("NEEDS YOU", "DONE", "WORKING", "READY", "UNKNOWN").map { rule.onNodeWithText(it).getUnclippedBoundsInRoot().top.value }
+        val tops = listOf("NEEDS YOU · 1", "DONE · 1", "WORKING · 1", "READY · 1", "UNKNOWN · 1").map { rule.onNodeWithText(it).getUnclippedBoundsInRoot().top.value }
         assertEquals(tops.sorted(), tops)
-        rule.onNodeWithText("1 needs you · 1 done · 1 working · 1 ready · 1 unknown").assertExists()
+        byDesc("Needs you, 1").assertExists()
+        byDesc(busySummary).assertExists()
     }
 
-    @Test fun busyHomeShowsItsSummaryFirst() {
+    @Test fun busyHomeShowsItsTitleAndSummaryFirst() {
         show(live(busy))
-        rule.onNodeWithText("1 needs you · 1 done · 1 working · 1 ready · 1 unknown").assertIsDisplayed()
+        rule.onNodeWithText("Paddock").assertIsDisplayed()
+        byDesc(busySummary).assertIsDisplayed()
+        byDesc("Settings").assertHasClickAction().assertHeightIsAtLeast(48.dp)
         shoot("home-busy-dark-100")
     }
 
@@ -129,20 +135,59 @@ class HerdHomeTest {
     @Test fun aDegradedHostShowsABannerAndDatedRowsWithNoActions() {
         show(HomeUiState.Degraded("laptop", busy, "herdr is not answering on laptop", 125_000, recoveryLabel = "Retry"))
         rule.onNodeWithText("herdr is not answering on laptop").assertIsDisplayed()
-        rule.onNodeWithText("Retry").assertHasClickAction()
-        byDesc("Blocked, approve edit to build.gradle, api, observed 40 s ago").assertHasNoClickAction()
-        rule.onNodeWithText("stale · observed 2 min ago", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Retry").assertHasClickAction().assertHeightIsAtLeast(48.dp)
+        val asOf = io.github.tuthan.paddock.ui.screens.clockLabel(now - 125_000)
+        byDesc("Last seen blocked, approve edit to build.gradle, api, observed 40 s ago").assertHasNoClickAction()
+        rule.onNodeWithText("was blocked", substring = true).assertExists()
+        rule.onNode(hasContentDescription("laptop, not live, as of $asOf")).assertIsDisplayed()
+        rule.onNodeWithText("LAPTOP · AS OF $asOf").assertExists()
         shoot("home-degraded-dark-100")
     }
 
     @Test fun quietHomeSaysNothingNeedsYou() {
         show(live(home(agent("w1:p1", AgentStatus.Working, 1, "indexing"), agent("w1:p2", AgentStatus.Idle, 1, "idle"))))
-        rule.onNodeWithText("Nothing needs you · 1 working · 1 ready").assertIsDisplayed()
+        byDesc("Nothing needs you · 1 working · 1 ready").assertIsDisplayed()
+    }
+
+    @Test fun severalReadyAgentsFoldIntoOneRowWhileSomethingNeedsYouAndATapUnfoldsThem() {
+        val m = home(
+            agent("w1:p1", AgentStatus.Blocked, 9, "approve edit", "/home/u/api"),
+            agent("w1:p2", AgentStatus.Idle, 2, "notes", "/home/u/docs"),
+            agent("w1:p3", AgentStatus.Idle, 1, "cleanup", "/home/u/web"),
+        )
+        show(live(m))
+        byDesc("2 agents ready — docs, web").assertIsDisplayed().assertHasClickAction().performClick()
+        byDesc("Ready, notes, docs, observed 40 s ago").assertIsDisplayed()
+        byDesc("Ready, cleanup, web, observed 40 s ago").assertIsDisplayed()
+    }
+
+    @Test fun whenTheHerdIsQuietReadyAgentsAreListedNotFolded() {
+        show(live(home(agent("w1:p2", AgentStatus.Idle, 2, "notes", "/home/u/docs"), agent("w1:p3", AgentStatus.Idle, 1, "cleanup", "/home/u/web"))))
+        byDesc("Ready, notes, docs, observed 40 s ago").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithContentDescription("agents ready", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test fun theOrderHoldsWhileAFingerIsDownAndCatchesUpWhenItLifts() {
+        // alpha changed last, so it leads the working section.
+        val first = home(agent("w1:p1", AgentStatus.Working, 5, "alpha"), agent("w1:p2", AgentStatus.Working, 2, "beta"))
+        // beta blocks: it would jump above alpha, into Needs you.
+        val next = home(agent("w1:p1", AgentStatus.Working, 5, "alpha"), agent("w1:p2", AgentStatus.Blocked, 6, "beta"))
+        val state = androidx.compose.runtime.mutableStateOf<HomeUiState>(live(first))
+        rule.setContent { PaddockTheme(darkTheme = true) { HerdHome(state.value, now) } }
+        fun top(title: String) = rule.onNode(hasContentDescription(title, substring = true)).getUnclippedBoundsInRoot().top
+        val alpha = rule.onNode(hasContentDescription("alpha", substring = true))
+        alpha.performTouchInput { down(center) }
+        rule.runOnUiThread { state.value = live(next) }
+        rule.waitForIdle()
+        assertTrue("beta moved under the finger", top("beta") > top("alpha"))
+        alpha.performTouchInput { up() }
+        rule.waitForIdle()
+        assertTrue("beta catches up once the finger lifts", top("beta") < top("alpha"))
     }
 
     @Test fun noAgentsShowsTheEmptyHint() {
         show(live(home()))
-        rule.onNodeWithText("No agents running").assertIsDisplayed()
+        byDesc("No agents running").assertIsDisplayed()
         rule.onNodeWithText("Start an agent in herdr and it appears here.").assertIsDisplayed()
     }
 
@@ -163,7 +208,7 @@ class HerdHomeTest {
 
     @Test fun twoHundredPercentFontWrapsAndNothingClips() {
         show(live(busy), fontScale = 2f)
-        rule.onNodeWithText("1 needs you · 1 done · 1 working · 1 ready · 1 unknown").assertIsDisplayed()
+        byDesc(busySummary).assertIsDisplayed()
         val root = rule.onRoot().getUnclippedBoundsInRoot()
         val row = byDesc("Blocked, approve edit to build.gradle, api, observed 40 s ago").getUnclippedBoundsInRoot()
         assertTrue(row.left >= root.left && row.right <= root.right + 0.5.dp)
@@ -172,7 +217,7 @@ class HerdHomeTest {
 
     @Test fun lightThemeRenders() {
         show(live(busy), dark = false)
-        rule.onNodeWithText("NEEDS YOU").assertIsDisplayed()
+        rule.onNodeWithText("NEEDS YOU · 1").assertIsDisplayed()
         shoot("home-busy-light-100")
     }
 
@@ -184,7 +229,6 @@ class HerdHomeTest {
         var reviewed: String? = null
         show(live(busy), preview = prompt, onReview = { reviewed = it })
         byDesc("Captured prompt: Allow edit to build.gradle?. 1. Yes. 2. No").assertIsDisplayed()
-        rule.onNodeWithText("What it is asking".uppercase()).assertIsDisplayed()
         rule.onNodeWithText("Review prompt").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         assertEquals("w1:p2", reviewed)
         shoot("home-expanded-blocked")
@@ -212,7 +256,7 @@ class HerdHomeTest {
         assertEquals(0, rule.onAllNodesWithText("Review prompt").fetchSemanticsNodes().size)
     }
 
-    @Test fun whileReadingAndWhenItFailsTheSlabSaysSoAndReviewStillOpens() {
+    @Test fun whileReadingTheSlabSaysSo() {
         show(live(busy), preview = prompt.copy(state = PreviewState.Loading))
         rule.onNodeWithText("Reading the prompt…").assertIsDisplayed()
     }

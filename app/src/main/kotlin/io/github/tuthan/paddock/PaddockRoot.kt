@@ -22,6 +22,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,45 +76,60 @@ import io.github.tuthan.paddock.ui.screens.LocalAccess
 import io.github.tuthan.paddock.ui.screens.RelayInstall
 import io.github.tuthan.paddock.ui.screens.Settings
 import io.github.tuthan.paddock.ui.screens.SettingsState
+import io.github.tuthan.paddock.ui.components.ButtonKind
+import io.github.tuthan.paddock.ui.components.NavItem
+import io.github.tuthan.paddock.ui.components.PaddockButton
+import io.github.tuthan.paddock.ui.components.PaddockNavBar
+import io.github.tuthan.paddock.ui.components.ScreenHeader
+import io.github.tuthan.paddock.ui.screens.MachineSummary
+import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class Route { Home, Output, Activity, Settings, AddMachine }
 
+private val NAV = listOf(NavItem("Herd", PaddockIcons.Herd), NavItem("Activity", PaddockIcons.Activity))
+
 /**
- * The app's one navigation host. Screens are stateless; this connects them to the graph. The route and the open terminal
- * survive rotation (`rememberSaveable`); everything else is read from the graph.
+ * The app's one navigation host. Screens are stateless; this connects them to the graph. The route, where Add machine
+ * was opened from, and the open terminal survive rotation (`rememberSaveable`); everything else is read from the graph.
+ * Home and Activity share the bottom bar; Settings is the gear on Home, and Add machine lives in Settings.
  */
 @Composable
 fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
     val boot by graph.boot.collectAsState()
     var route by rememberSaveable { mutableStateOf(Route.Home) }
+    var addFrom by rememberSaveable { mutableStateOf(Route.Home) }
     var terminalId by rememberSaveable { mutableStateOf<String?>(null) }
     var relayDismissed by rememberSaveable { mutableStateOf(false) }
     var reviewKey by rememberSaveable { mutableStateOf(false) }
 
     val effective = if (boot == Boot.NoMachines) Route.AddMachine else route
+    val backTo = if (effective == Route.AddMachine) addFrom else Route.Home
+    // Registered before the screens', so a screen's own back handling (the import screen's) is asked first.
+    BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { route = backTo }
     Box(modifier.fillMaxSize().safeDrawingPadding()) {
         when (boot) {
             Boot.Loading -> Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title, modifier = Modifier.padding(PaddockTokens.spacing.gutter))
             else -> when (effective) {
-                Route.Home -> HomeRoute(
-                    graph, relayDismissed, { relayDismissed = it }, { reviewKey = true },
-                    onOpen = { terminalId = it; route = Route.Output }, onNav = { route = it },
-                )
+                Route.Home, Route.Activity -> Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f)) {
+                        if (effective == Route.Home) HomeRoute(
+                            graph, relayDismissed, { relayDismissed = it }, { reviewKey = true },
+                            onOpen = { terminalId = it; route = Route.Output }, onSettings = { route = Route.Settings },
+                        ) else ActivityRoute(graph)
+                    }
+                    PaddockNavBar(NAV, if (effective == Route.Home) 0 else 1, { route = if (it == 0) Route.Home else Route.Activity })
+                }
                 Route.Output -> OutputRoute(graph, terminalId, onBack = { route = Route.Home })
-                Route.Activity -> ActivityRoute(graph, onBack = { route = Route.Home })
-                Route.Settings -> SettingsRoute(graph, onBack = { route = Route.Home })
-                Route.AddMachine -> AddMachineRoute(graph, canGoBack = boot == Boot.Ready, onBack = { route = Route.Home }, onAdded = { route = Route.Home; relayDismissed = false })
+                Route.Settings -> SettingsRoute(graph, onBack = { route = Route.Home }, onAddMachine = { addFrom = Route.Settings; route = Route.AddMachine })
+                Route.AddMachine -> AddMachineRoute(graph, canGoBack = boot == Boot.Ready, onBack = { route = backTo }, onAdded = { route = Route.Home; relayDismissed = false })
             }
         }
         HostKeyDialogs(graph, reviewKey) { reviewKey = false }
     }
-    BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { route = Route.Home }
 }
-
-private fun Route.label() = name
 
 @Composable
 private fun rememberNow(): Long {
@@ -122,10 +138,23 @@ private fun rememberNow(): Long {
     return now
 }
 
+/** Counts the activity's resumes, so a value read from the system (a permission grant) is read again on return. */
+@Composable
+private fun rememberResumes(): Int {
+    val owner = LocalContext.current as? LifecycleOwner
+    var resumes by remember { mutableIntStateOf(0) }
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) resumes++ }
+        owner?.lifecycle?.addObserver(observer)
+        onDispose { owner?.lifecycle?.removeObserver(observer) }
+    }
+    return resumes
+}
+
 @Composable
 private fun HomeRoute(
     graph: AppGraph, relayDismissed: Boolean, setRelayDismissed: (Boolean) -> Unit, onReviewKey: () -> Unit,
-    onOpen: (terminalId: String) -> Unit, onNav: (Route) -> Unit,
+    onOpen: (terminalId: String) -> Unit, onSettings: () -> Unit,
 ) {
     val profile by graph.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
@@ -143,61 +172,49 @@ private fun HomeRoute(
         RelayInstall(name, prompt, installing = false, onInstall = { graph.installRelay() }, onNotNow = { setRelayDismissed(true) })
         return
     }
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = PaddockTokens.spacing.gutter), horizontalArrangement = Arrangement.End) {
-            TopLink("Activity") { onNav(Route.Activity) }
-            TopLink("Add machine") { onNav(Route.AddMachine) }
-            TopLink("Settings") { onNav(Route.Settings) }
-        }
-        Box(Modifier.weight(1f)) {
-            HerdHome(
-                screen.state, now, preview = view.blockedPreview,
-                onReview = { paneId ->
-                    // Review prompt: read the prompt again, then open the output for that agent (the Phase 05 terminal replaces this later).
-                    val rows = (screen.state as? HomeUiState.Live)?.model?.rows.orEmpty()
-                    val row = rows.firstOrNull { it.paneId == paneId } ?: return@HerdHome
-                    (view.phase as? HostPhase.Monitoring)?.host?.refreshPreview()
-                    onOpen(row.key.target.terminalId)
-                },
-                onOpenAgent = { paneId ->
-                    val rows = (screen.state as? HomeUiState.Live)?.model?.rows ?: (screen.state as? HomeUiState.Degraded)?.model?.rows.orEmpty()
-                    val row = rows.firstOrNull { it.paneId == paneId } ?: return@HerdHome
-                    // A Done tap is the user acknowledging it: local only, then the agent's output opens.
-                    (view.phase as? HostPhase.Monitoring)?.host?.let { h -> if (row.state == StateWord.Done) h.markSeen(row) }
-                    onOpen(row.key.target.terminalId)
-                },
-                onRecovery = {
-                    when (screen.recovery) {
-                        Recovery.OpenSettings -> ctx.startActivity(graph.gate.settingsIntent())
-                        Recovery.ReviewKey -> onReviewKey()
-                        Recovery.InstallRelay -> setRelayDismissed(false)
-                        Recovery.Retry -> graph.retry()
-                        null -> Unit
-                    }
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun TopLink(text: String, onClick: () -> Unit) {
-    Box(
-        Modifier.heightIn(min = PaddockTokens.spacing.touchTarget).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) { Text(text, style = PaddockTokens.type.secondary, color = PaddockTokens.colors.accent) }
+    val host = (view.phase as? HostPhase.Monitoring)?.host
+    var refreshing by remember { mutableStateOf(false) }
+    LaunchedEffect(view.lastReadAtMillis) { refreshing = false }
+    LaunchedEffect(refreshing) { if (refreshing) { delay(5_000); refreshing = false } }
+    HerdHome(
+        screen.state, now, preview = view.blockedPreview, onSettings = onSettings,
+        onRefresh = if (host != null) ({ refreshing = true; host.refresh() }) else null, refreshing = refreshing,
+        onReview = { row ->
+            // Review prompt: read the prompt again, then open the output for that agent (the terminal replaces this later).
+            host?.refreshPreview()
+            onOpen(row.key.target.terminalId)
+        },
+        onOpenAgent = { row ->
+            // A Done tap is the user acknowledging it: local only, then the agent's output opens.
+            if (row.state == StateWord.Done) host?.markSeen(row)
+            onOpen(row.key.target.terminalId)
+        },
+        onRecovery = {
+            when (screen.recovery) {
+                Recovery.OpenSettings -> ctx.startActivity(graph.gate.settingsIntent())
+                Recovery.ReviewKey -> onReviewKey()
+                Recovery.InstallRelay -> setRelayDismissed(false)
+                Recovery.Retry -> graph.retry()
+                null -> Unit
+            }
+        },
+    )
 }
 
 @Composable
 private fun OutputRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit) {
     val view by graph.hostUi.view.collectAsState()
     val settings by graph.settings.collectAsState()
+    val profile by graph.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     if (terminalId == null || host == null) {
         // The connection is not up (or the app was restored without one): say so and offer the way back.
-        Column(Modifier.padding(PaddockTokens.spacing.gutter), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("This agent is not available right now.", style = PaddockTokens.type.body, color = PaddockTokens.colors.title)
-            TopLink("Back to the list", onBack)
+        Column(Modifier.fillMaxSize()) {
+            ScreenHeader("Agent", onBack = onBack, compact = true)
+            Column(Modifier.padding(PaddockTokens.spacing.gutter), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("This agent is not available right now. Its machine is not connected.", style = PaddockTokens.type.body, color = PaddockTokens.colors.title)
+                PaddockButton("Back to the herd", onBack, kind = ButtonKind.Ghost, icon = PaddockIcons.Back)
+            }
         }
         return
     }
@@ -219,12 +236,14 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit
     var tab by rememberSaveable { mutableStateOf(AgentTab.Output) }
     val now = rememberNow()
     val row: AgentRowModel? = home?.rows?.firstOrNull { it.key.target.terminalId == terminalId }
-    val header = AgentHeader(row?.title ?: "Agent", row?.context ?: "", row?.state ?: StateWord.Unknown, row?.observedAtMillis)
+    // "claude · api › tab 2 · main · laptop": what it is, where, which session, which machine.
+    val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
+    val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis)
     AgentOutput(header, output, following, now, tab, { tab = it }, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() })
 }
 
 @Composable
-private fun ActivityRoute(graph: AppGraph, onBack: () -> Unit) {
+private fun ActivityRoute(graph: AppGraph) {
     val profile by graph.profile.collectAsState()
     var filter by rememberSaveable { mutableStateOf(ActivityFilter.All) }
     val now = rememberNow()
@@ -233,28 +252,33 @@ private fun ActivityRoute(graph: AppGraph, onBack: () -> Unit) {
         ActivityPresenter(java.time.ZoneId.systemDefault(), java.util.Locale.getDefault(), hostName = { profile?.name ?: it }, titleOf = { _, _, tid -> graph.hostUi.view.value.lastHome?.rows?.firstOrNull { it.key.target.terminalId == tid }?.title })
     }
     val sections = remember(filter, now / 1_000) { presenter.present(Activity.build(graph.ledger.observations(), graph.ledger.actions(), filter), now) }
-    Column(Modifier.fillMaxSize()) {
-        TopLink("← Back", onBack)
-        Box(Modifier.weight(1f)) { ActivityLog(sections, filter, { filter = it }) }
-    }
+    ActivityLog(sections, filter, { filter = it })
 }
 
 @Composable
-private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit) {
+private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () -> Unit) {
     val settings by graph.settings.collectAsState()
+    val profile by graph.profile.collectAsState()
+    val view by graph.hostUi.view.collectAsState()
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
-    val access = when {
-        !graph.gate.lanAccessApplies() -> LocalAccess.NotRequired
-        graph.gate.lanAccessMissing() -> LocalAccess.Denied
-        else -> LocalAccess.Granted
+    // The grant can change in system settings while Paddock is in the background: read it again on every return.
+    val resumes = rememberResumes()
+    val access = remember(resumes) {
+        when {
+            !graph.gate.lanAccessApplies() -> LocalAccess.NotRequired
+            graph.gate.lanAccessMissing() -> LocalAccess.Denied
+            else -> LocalAccess.Granted
+        }
     }
     val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "unknown" }
+    val machine = profile?.let { p -> MachineSummary(p.name, "${p.user}@${p.host}:${p.port}", p.session) }
     Settings(
-        SettingsState(settings.protectSensitiveScreens, access, version),
+        SettingsState(settings.protectSensitiveScreens, access, version, machine = machine, herdrVersion = view.herdrVersion),
         onProtectSensitive = { scope.launch { graph.setProtectSensitive(it) } },
         onOpenSystemSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
         onBack = onBack,
+        onAddMachine = onAddMachine,
     )
 }
 
@@ -281,20 +305,28 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, onBack: () -> U
         // A refusal is not the end: the screen keeps the recovery row, and a VPN address still works without the grant.
         if (granted && input != null) finish(input)
     }
-    val key = remember(keyTick) { if (graph.phoneKey.exists()) graph.phoneKey.info() else null }
+    // Keystore reads and key generation can take a while on some phones: off the main thread. An unreadable key (lost
+    // Keystore entry, corrupt store) reads as "no key" here; connecting reports it with its own recovery.
+    val key by produceState<Pair<String, io.github.tuthan.paddock.ssh.KeyBacking>?>(null, keyTick) {
+        value = withContext(Dispatchers.Default) {
+            runCatching { if (graph.phoneKey.exists()) graph.phoneKey.publicLine("paddock@phone") to graph.phoneKey.info().backing else null }.getOrNull()
+        }
+    }
     var importedTick by remember { mutableStateOf(0) }
-    val imported by produceState<ImportedKeyInfo?>(null, importedTick) { value = graph.importedKey() }
+    val imported by produceState<ImportedKeyInfo?>(null, importedTick) { value = runCatching { graph.importedKey() }.getOrNull() }
     var importing by rememberSaveable { mutableStateOf(false) }
     // The form is kept by the holder while the import screen is up, so typed values are still there on return.
     val holder = rememberSaveableStateHolder()
     if (importing) {
+        // Back from the import screen returns to the form, not past it.
+        BackHandler { importing = false }
         ImportKeyRoute(graph, onDone = { importedTick++; importing = false }, onBack = { importing = false })
         return
     }
     val state = AddMachineState(
         route = { host -> AddMachineForm.route(host, graph.gate.decide(AddMachineForm.normalizeHost(host))) },
-        publicKeyLine = key?.let { graph.phoneKey.publicLine("paddock@phone") },
-        keyBacking = key?.backing,
+        publicKeyLine = key?.first,
+        keyBacking = key?.second,
         importedKeyId = imported?.id,
         importedKeySummary = imported?.let { "${it.keyType} · ${it.fingerprint}" },
         permissionDenied = denied,
@@ -305,7 +337,7 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, onBack: () -> U
             onConnect = { input ->
                 if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input)
             },
-            onGenerateKey = { graph.phoneKey.getOrCreate(); keyTick++ },
+            onGenerateKey = { scope.launch { withContext(Dispatchers.Default) { runCatching { graph.phoneKey.getOrCreate() } }; keyTick++ } },
             onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },
             onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
             onBack = { if (canGoBack) onBack() },
@@ -342,11 +374,16 @@ private fun ImportKeyRoute(graph: AppGraph, onDone: () -> Unit, onBack: () -> Un
         onClearFile = { picked = null; result = null },
         onImport = { pem, pass ->
             busy = true
+            val pasted = picked == null
             scope.launch {
                 val check = graph.importKey(pem, pass)
                 busy = false
                 result = check
-                if (check is ImportCheck.Ready) onDone()
+                if (check is ImportCheck.Ready) {
+                    // A pasted key is still on the clipboard, where any app could read it: take it off.
+                    if (pasted) clearClipboardIfKey(ctx)
+                    onDone()
+                }
             }
         },
         onBack = onBack,
@@ -359,6 +396,14 @@ private fun readKeyFile(ctx: Context, uri: android.net.Uri): PickedKeyFile? = ru
     val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readNBytes(MAX_KEY_FILE_BYTES + 1) } ?: return null
     if (bytes.size > MAX_KEY_FILE_BYTES) null else PickedKeyFile(name, String(bytes, Charsets.UTF_8))
 }.getOrNull()
+
+/** Clears the clipboard when it holds a private key (the one just pasted). Anything else on it is left alone. */
+private fun clearClipboardIfKey(ctx: Context) {
+    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    val text = runCatching { cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString() }.getOrNull() ?: return
+    if ("PRIVATE KEY-----" !in text) return
+    if (android.os.Build.VERSION.SDK_INT >= 28) cm.clearPrimaryClip() else cm.setPrimaryClip(ClipData.newPlainText("", ""))
+}
 
 @Composable
 private fun HostKeyDialogs(graph: AppGraph, reviewKey: Boolean, dismissReview: () -> Unit) {

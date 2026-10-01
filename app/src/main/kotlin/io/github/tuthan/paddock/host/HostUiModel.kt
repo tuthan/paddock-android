@@ -31,15 +31,16 @@ class HostUiModel(private val scope: CoroutineScope) {
             controller.phase.collectLatest { phase ->
                 if (phase is HostPhase.Monitoring) {
                     val host = phase.host
-                    combine(host.home, host.freshness, host.reconciler.installed, host.blockedPreview) { home, fresh, installed, preview -> Snapshot4(home, fresh, installed, preview) }
-                        .collect { (home, fresh, installed, preview) ->
+                    combine(host.home, host.freshness, host.reconciler.installed, host.blockedPreview, host.lastLoss) { home, fresh, installed, preview, loss -> Snapshot5(home, fresh, installed, preview, loss) }
+                        .collect { (home, fresh, installed, preview, loss) ->
                             _view.value = _view.value.copy(
-                                phase = phase, home = home, freshness = fresh, blockedPreview = preview,
+                                phase = phase, home = home, freshness = fresh, blockedPreview = preview, lastLoss = loss,
                                 lastHome = home ?: _view.value.lastHome, lastReadAtMillis = installed?.readAtMillis ?: _view.value.lastReadAtMillis,
+                                herdrVersion = installed?.snapshot?.version ?: _view.value.herdrVersion,
                             )
                         }
                 } else {
-                    _view.value = _view.value.copy(phase = phase, home = null, freshness = null, blockedPreview = null)
+                    _view.value = _view.value.copy(phase = phase, home = null, freshness = null, blockedPreview = null, lastLoss = null)
                 }
             }
         }
@@ -48,9 +49,10 @@ class HostUiModel(private val scope: CoroutineScope) {
     fun detach() { job?.cancel(); job = null }
 }
 
-private data class Snapshot4(
+private data class Snapshot5(
     val home: io.github.tuthan.paddock.attention.HomeModel?,
     val freshness: io.github.tuthan.paddock.reconcile.Freshness,
     val installed: io.github.tuthan.paddock.reconcile.Installed?,
     val preview: io.github.tuthan.paddock.live.BlockedPreview?,
+    val loss: Throwable?,
 )

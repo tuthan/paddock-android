@@ -105,7 +105,7 @@ class AgentOutputTest {
         assertTrue("user scroll-up was not reported", calls.up >= 1)
     }
 
-    @Test fun followingShowsAPassiveChipAndPausedShowsAButtonThatResumes() {
+    @Test fun followingShowsAPassiveChip() {
         val calls = show(showing(), following = true)
         rule.onNodeWithText("Following").assertIsDisplayed().assertHasNoClickAction()
         assertEquals(0, calls.resume)
@@ -113,6 +113,7 @@ class AgentOutputTest {
 
     @Test fun tappingThePausedChipResumesFollowing() {
         val calls = show(showing(), following = false)
+        byDesc("Paused").assertIsDisplayed()
         rule.onNodeWithText("Paused · tap to follow").assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp).performClick()
         assertEquals(1, calls.resume)
         shoot("output-paused-dark-100")
@@ -120,7 +121,7 @@ class AgentOutputTest {
 
     @Test fun aStaleReadKeepsTheTextAndSaysHowOldItIs() {
         show(showing(n = 5, stale = true, readAt = now - 12_000))
-        rule.onNodeWithText("The last read failed. This is the output from 12 s ago.").assertIsDisplayed()
+        rule.onNodeWithText("Last read failed. Showing the output from 12 s ago.").assertIsDisplayed()
         rule.onNodeWithText("line 1 of the agent output").assertIsDisplayed()
         shoot("output-stale-dark-100")
     }
@@ -128,12 +129,22 @@ class AgentOutputTest {
     @Test fun aVanishedTerminalSaysSoAndOffersBackNeverAnotherPanesText() {
         val calls = show(OutputState.PaneGone)
         rule.onNodeWithText("This terminal is no longer in the session.").assertIsDisplayed()
-        rule.onNodeWithText("Back to the list").assertHasClickAction().performClick()
+        // Nothing that belongs to a live agent stays: no state chip, no tabs, no keys.
+        rule.onNode(hasContentDescription("Keys, unavailable", substring = true)).assertDoesNotExist()
+        rule.onNodeWithText("Terminal").assertDoesNotExist()
+        rule.onNode(hasContentDescription("Blocked, observed", substring = true)).assertDoesNotExist()
+        rule.onNodeWithText("Back to the herd").assertHasClickAction().assertHeightIsAtLeast(48.dp).performClick()
         assertEquals(1, calls.back)
         shoot("output-gone-dark-100")
     }
 
-    @Test fun loadingAndUnavailableAreExplainedNotBlank() {
+    @Test fun anExitedAgentIsNotCalledAMissingTerminal() {
+        show(OutputState.AgentGone)
+        rule.onNodeWithText("The agent in this terminal has exited.").assertIsDisplayed()
+        rule.onNodeWithText("This terminal is no longer in the session.").assertDoesNotExist()
+    }
+
+    @Test fun loadingIsExplainedNotBlank() {
         show(OutputState.Loading)
         rule.onNodeWithText("Reading output…").assertIsDisplayed()
     }
@@ -143,9 +154,9 @@ class AgentOutputTest {
         rule.onNodeWithText("Output is unavailable: no route to host").assertIsDisplayed()
     }
 
-    @Test fun theTerminalTabIsAPlaceholderThatNamesThePhase() {
+    @Test fun theTerminalTabSaysItIsNotBuiltYet() {
         show(showing(), tab = AgentTab.Terminal)
-        rule.onNodeWithText("The terminal view arrives in Phase 05.", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("The terminal view is not built yet.", substring = true).assertIsDisplayed()
     }
 
     @Test fun switchingTabsReportsTheChoiceAndMarksTheSelectedOne() {
@@ -157,7 +168,8 @@ class AgentOutputTest {
 
     @Test fun theKeyStripIsDisabledAndSaysWhy() {
         show(showing())
-        byDesc("Keys, unavailable. Keys arrive in Phase 06").assertIsNotEnabled()
+        byDesc("Keys, unavailable. ${io.github.tuthan.paddock.ui.components.KEYS_NOTE}").assertIsNotEnabled()
+        rule.onNodeWithText(io.github.tuthan.paddock.ui.components.KEYS_NOTE).assertExists()
     }
 
     @Test fun backIsAButtonOfAtLeastTheMinimumTarget() {

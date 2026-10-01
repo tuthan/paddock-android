@@ -64,7 +64,7 @@ class ImportKeyTest {
         return calls
     }
 
-    @Test fun importIsOffMeansNothingIsSentUntilThereIsKeyText() {
+    @Test fun importIsDisabledUntilThereIsKeyText() {
         val calls = show()
         rule.onNodeWithText("Import key").assertIsNotEnabled().performClick()
         assertNull(calls.imported)
@@ -126,10 +126,14 @@ class ImportKeyTest {
         val calls = Calls()
         tester.setContent { PaddockTheme(darkTheme = true) { screen(calls, null, null, false, null) } }
         rule.onNodeWithText("Or paste the key").performTextInput("KEY-TEXT-PLACEHOLDER")
+        rule.onNodeWithText("Passphrase, if the key has one").performTextInput("hunter2")
         rule.onNodeWithText("Import key").assertIsEnabled()
         tester.emulateSavedInstanceStateRestore()
+        // Both fields are masked, so their text never shows in the tree; what is handed over after a restore is the check.
         rule.onNodeWithText("Import key").assertIsNotEnabled()
-        assertTrue(rule.onAllNodesWithText("KEY-TEXT-PLACEHOLDER", substring = true).fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithText("Or paste the key").performTextInput("OTHER")
+        rule.onNodeWithText("Import key").performClick()
+        assertEquals("the key text did not survive" , "OTHER" to "", calls.imported)
     }
 
     @Test fun importStaysReachableAtTwoHundredPercentFont() {
