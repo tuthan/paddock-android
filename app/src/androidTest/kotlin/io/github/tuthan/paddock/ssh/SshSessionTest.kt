@@ -15,8 +15,10 @@ import java.net.Socket
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -287,7 +289,75 @@ class SshSessionTest {
         assertEquals(stale.fingerprint, store.find("profile-1")!!.fingerprint)
     }
 
+    /** sshlib's key-exchange timer runs through the question; on first contact it gets the long bound, and the pin waits for KEX. */
+    @Test
+    fun aFirstContactAnswerSlowerThanTheConnectTimeoutStillConnectsAndPinsOnlyAfterTheKeyExchange() = runBlocking<Unit> {
+        val connector = SshlibConnector(policy, clock, connectTimeout = 2.seconds)
+        var pinnedWhileAsking: Boolean? = null
+        val t0 = System.nanoTime()
+        val s = connector.connect(target(), phoneAuth()) { delay(4_000); pinnedWhileAsking = store.find("profile-1") != null; true }.also { opened += it }
+        note("T first-trust answered after 4 s with a 2 s connect timeout: connected in ${msSince(t0)} ms")
+        assertEquals(false, pinnedWhileAsking)
+        assertTrue(store.find("profile-1") != null)
+        assertEquals("ok\n", String(s.exec(listOf("echo", "ok")).stdout))
+    }
+
+    @Test
+    fun aFirstContactQuestionIsWithdrawnWhenItsTimerRunsOutAndNothingIsPinned() = runBlocking<Unit> {
+        val connector = SshlibConnector(policy, clock, connectTimeout = 2.seconds, firstContactTimeout = 3.seconds)
+        val withdrawn = CompletableDeferred<Unit>()
+        val t0 = System.nanoTime()
+        try {
+            connector.connect(target(), phoneAuth()) { try { awaitCancellation() } finally { withdrawn.complete(Unit) } }
+            fail("connected")
+        } catch (e: ConnectFailure.TimedOut) { }
+        val ms = msSince(t0)
+        withTimeout(1_000) { withdrawn.await() }
+        note("T unanswered first-trust question withdrawn when the timer ran out after $ms ms")
+        assertTrue("gave up after $ms ms", ms in 2_800..6_000)
+        assertNull(store.find("profile-1"))
+    }
+
+    /** The app went to the background mid-question: the connect is cancelled, the dialog goes, and a stale tap answers nothing. */
+    @Test
+    fun cancellingAConnectWithdrawsItsQuestionAndOnlyTheRetrysOwnAnswerPins() = runBlocking<Unit> {
+        val broker = io.github.tuthan.paddock.hostkey.HostKeyBroker()
+        val connector = SshlibConnector(policy, clock)
+        val ask: suspend (io.github.tuthan.paddock.hostkey.PresentedHostKey) -> Boolean = { p -> broker.askFirstTrust("profile-1", "$host:$port", p) }
+        val attempt = launch(Dispatchers.Default) { connector.connect(target(), phoneAuth(), ask).also { opened += it } }
+        withTimeout(10_000) { while (broker.firstTrust.value == null) delay(20) }
+        val stale = broker.firstTrust.value!!.id
+        val t0 = System.nanoTime(); attempt.cancelAndJoin(); val ms = msSince(t0)
+        withTimeout(1_000) { while (broker.firstTrust.value != null) delay(10) }
+        note("T cancelled connect returned after $ms ms and its question was withdrawn")
+        assertTrue("cancel took $ms ms", ms < 1_000)
+        assertNull(store.find("profile-1"))
+        assertFalse(broker.answerFirstTrust(stale, true))
+
+        val retry = async(Dispatchers.Default) { connector.connect(target(), phoneAuth(), ask) }
+        withTimeout(10_000) { while (broker.firstTrust.value == null) delay(20) }
+        assertTrue(broker.firstTrust.value!!.id != stale)
+        assertTrue(broker.answerFirstTrust(broker.firstTrust.value!!.id, true))
+        val s = retry.await().also { opened += it }
+        assertTrue(store.find("profile-1") != null)
+        assertEquals("ok\n", String(s.exec(listOf("echo", "ok")).stdout))
+    }
+
     // ---- authentication -----------------------------------------------------------------------------------
+
+    /** A Keystore failure while signing is not a network error and must not leave the socket open with the link Connecting. */
+    @Test
+    fun aSigningFailureClosesTheConnectionAndIsKeyUnavailable() = runBlocking<Unit> {
+        val broken = object : java.security.PrivateKey {
+            override fun getAlgorithm() = "EC"; override fun getFormat(): String? = null; override fun getEncoded(): ByteArray? = null
+        }
+        val t0 = System.nanoTime()
+        try { SshlibConnector(policy, clock).connect(target(), SshAuth.Phone(broken, phone.getOrCreate().publicKey)) { true }; fail("connected") }
+        catch (e: ConnectFailure.KeyUnavailable) {
+            assertEquals(DownReason.KeyUnavailable, e.reason)
+            note("T signing failure -> KeyUnavailable (${e.cause?.javaClass?.simpleName}) after ${msSince(t0)} ms")
+        }
+    }
 
     @Test
     fun anUnauthorizedKeyIsAuthFailedNotAHang() = runBlocking<Unit> {
@@ -300,7 +370,9 @@ class SshSessionTest {
     @Test
     fun anImportedPassphraseProtectedEd25519KeyConnects() = runBlocking<Unit> {
         val key = File("/data/local/tmp/spike_imported"); assumeTrue("imported key not pushed", key.canRead())
-        val s = session(auth = SshAuth.Imported(key.readText().toCharArray(), "spikepass"))
+        val auth = SshAuth.Imported(key.readText().toCharArray(), "spikepass")
+        val s = session(auth = auth)
+        assertTrue("the key text is wiped once the key pair is built", auth.pem.all { it == '\u0000' })
         assertEquals("imp\n", String(s.exec(listOf("echo", "imp")).stdout))
     }
 

@@ -1,11 +1,15 @@
 package io.github.tuthan.paddock.hostkey
 
 import io.github.tuthan.paddock.ssh.ConnectFailure
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -21,6 +25,7 @@ class HostKeyBrokerTest {
     private val scope = CoroutineScope(Dispatchers.Default)
 
     private suspend fun until(cond: () -> Boolean) = withTimeout(3_000) { while (!cond()) delay(5) }
+    private fun HostKeyBroker.openId() = firstTrust.value!!.id
 
     @Test fun aQuestionSuspendsUntilTheUserAnswersAndThenClears() = runBlocking<Unit> {
         val b = HostKeyBroker()
@@ -28,7 +33,7 @@ class HostKeyBrokerTest {
         until { b.firstTrust.value != null }
         assertEquals("laptop", b.firstTrust.value!!.profileId)
         assertFalse(result.isCompleted)
-        b.answerFirstTrust(true)
+        assertTrue(b.answerFirstTrust(b.openId(), true))
         assertTrue(result.await())
         assertNull(b.firstTrust.value)
     }
@@ -37,11 +42,11 @@ class HostKeyBrokerTest {
         val b = HostKeyBroker()
         val result = scope.async { b.askFirstTrust("laptop", "e", key) }
         until { b.firstTrust.value != null }
-        b.answerFirstTrust(false)
+        b.answerFirstTrust(b.openId(), false)
         assertFalse(result.await())
     }
 
-    @Test fun aCancelledConnectWithdrawsItsDialog() = runBlocking<Unit> {
+    @Test fun aCancelledAskWithdrawsItsDialog() = runBlocking<Unit> {
         val b = HostKeyBroker()
         val result = scope.async { b.askFirstTrust("laptop", "e", key) }
         until { b.firstTrust.value != null }
@@ -49,13 +54,25 @@ class HostKeyBrokerTest {
         until { b.firstTrust.value == null }
     }
 
-    @Test fun aLateAnswerWithNothingAskedDoesNothing() = runBlocking<Unit> {
+    @Test fun anAnswerWithNothingAskedDoesNothing() = runBlocking<Unit> {
         val b = HostKeyBroker()
-        b.answerFirstTrust(true)                                  // no question: must not pre-answer the next one
+        assertFalse(b.answerFirstTrust(1, true))                 // no question: must not pre-answer the next one
         val result = scope.async { b.askFirstTrust("laptop", "e", key) }
         until { b.firstTrust.value != null }
         assertFalse(result.isCompleted)
-        b.answerFirstTrust(false)
+        b.answerFirstTrust(b.openId(), false)
+        assertFalse(result.await())
+    }
+
+    @Test fun anAnswerOnlyAnswersTheQuestionItNamesAndOnlyOnce() = runBlocking<Unit> {
+        val b = HostKeyBroker()
+        val result = scope.async { b.askFirstTrust("laptop", "e", key) }
+        until { b.firstTrust.value != null }
+        val id = b.openId()
+        assertFalse(b.answerFirstTrust(id + 1, true), "an answer to another question")
+        assertFalse(result.isCompleted)
+        assertTrue(b.answerFirstTrust(id, false))
+        assertFalse(b.answerFirstTrust(id, true), "a second tap on the same dialog")
         assertFalse(result.await())
     }
 
@@ -66,9 +83,51 @@ class HostKeyBrokerTest {
         val second = scope.async { b.askFirstTrust("b", "eb", other) }
         delay(100)
         assertEquals("a", b.firstTrust.value!!.profileId, "the second waits behind the first")
-        b.answerFirstTrust(true); assertTrue(first.await())
+        b.answerFirstTrust(b.openId(), true); assertTrue(first.await())
         until { b.firstTrust.value?.profileId == "b" }
-        b.answerFirstTrust(false); assertFalse(second.await())
+        b.answerFirstTrust(b.openId(), false); assertFalse(second.await())
+    }
+
+    /**
+     * The connector's shape: sshlib calls its host-key callback on a thread of its own and blocks that thread until the
+     * callback returns, while the connect coroutine waits for sshlib. Cancelling the connect (the app went to the background)
+     * must withdraw the dialog and release sshlib's thread; a tap on the stale dialog must then answer nothing, and the next
+     * attempt asks a fresh question that its own answer settles.
+     */
+    @Test fun cancellingTheConnectWithdrawsAQuestionAskedFromTheLibrarysThread() = runBlocking<Unit> {
+        val b = HostKeyBroker()
+        val libraryResult = AtomicReference<Any?>("unset")
+        val libraryReturned = CompletableDeferred<Unit>()
+        val connect = scope.launch {
+            val owner = coroutineContext.job
+            thread(name = "fake-sshlib-kex") {
+                libraryResult.set(askFromCallbackThread(owner) { b.askFirstTrust("laptop", "e", key) })
+                libraryReturned.complete(Unit)
+            }
+            libraryReturned.await() // the connect waits for sshlib, cancellably
+        }
+        until { b.firstTrust.value != null }
+        val stale = b.openId()
+        connect.cancel()
+        until { b.firstTrust.value == null }
+        withTimeout(1_000) { libraryReturned.await() }
+        assertNull(libraryResult.get(), "sshlib's thread was released with \"not accepted\"")
+        assertFalse(b.answerFirstTrust(stale, true), "a late tap on the withdrawn dialog answers nothing")
+
+        // The user comes back: the next attempt asks again and its own answer settles it.
+        val retry = scope.async { b.askFirstTrust("laptop", "e", key) }
+        until { b.firstTrust.value != null }
+        assertTrue(b.openId() != stale)
+        assertFalse(b.answerFirstTrust(stale, false), "the old id cannot answer the new question")
+        assertTrue(b.answerFirstTrust(b.openId(), true))
+        assertTrue(retry.await())
+    }
+
+    @Test fun aQuestionOnAnAlreadyCancelledConnectIsNeverShown() = runBlocking<Unit> {
+        val b = HostKeyBroker()
+        val owner = kotlinx.coroutines.Job().also { it.cancel() }
+        assertNull(askFromCallbackThread(owner) { b.askFirstTrust("laptop", "e", key) })
+        assertNull(b.firstTrust.value)
     }
 
     @Test fun aChangedKeyIsRecordedPerProfileUntilCleared() {

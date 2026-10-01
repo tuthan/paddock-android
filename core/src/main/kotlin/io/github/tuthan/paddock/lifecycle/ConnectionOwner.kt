@@ -1,9 +1,11 @@
 package io.github.tuthan.paddock.lifecycle
 
+import io.github.tuthan.paddock.hostkey.HostKeyStoreCorrupt
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.DownReason
 import io.github.tuthan.paddock.ports.LinkState
+import io.github.tuthan.paddock.ports.SecretCorrupt
 import io.github.tuthan.paddock.ports.SshSession
 import io.github.tuthan.paddock.reconcile.Backoff
 import io.github.tuthan.paddock.ssh.ConnectFailure
@@ -31,7 +33,7 @@ sealed interface Connection {
     /** [generation] counts connects for this profile since the owner started holding it: it is the reconnect signal. */
     data class Connected(val session: SshSession, val generation: Long) : Connection
 
-    /** [retryAtMillis] is null when only the user can fix it (a changed key, a refused grant, bad auth): no retry runs. */
+    /** [retryAtMillis] is null when only the user can fix it (a changed key, a refused grant, bad auth, an unreadable key or pin store): no retry runs. */
     data class Failed(val reason: DownReason, val retryAtMillis: Long?) : Connection
 }
 
@@ -157,9 +159,7 @@ class ConnectionOwner(
     }
 
     private suspend fun afterFailedConnect(entry: Entry, e: Throwable) {
-        val needsUser = e is ConnectFailure.AuthFailed || e is ConnectFailure.HostKeyChanged || e is ConnectFailure.HostKeyDeclined ||
-            e is ConnectFailure.BadKey || e is ConnectFailure.Refused
-        val reason = (e as? ConnectFailure)?.reason ?: DownReason.Network(e.message ?: e.javaClass.simpleName)
+        val (reason, needsUser) = connectFailureOf(e)
         if (needsUser) {
             entry.state.value = Connection.Failed(reason, null)
             entry.kicks.receive() // no timer: asking the user again on a loop would be worse than waiting
@@ -171,6 +171,25 @@ class ConnectionOwner(
         val wait = entry.backoff.nextDelayMillis(clock.nowMillis())
         entry.state.value = Connection.Failed(reason, clock.nowMillis() + wait)
         awaitWake(entry, timerMillis = wait)
+    }
+
+    companion object {
+        /**
+         * What a failed connect means for the loop: the reason shown, and whether only the user can fix it (then no timer
+         * runs). Key material or pins that cannot be read are data loss or corruption, never the network, so they stop the
+         * loop with their own reason instead of retrying forever under a "cannot reach the host" message.
+         */
+        fun connectFailureOf(e: Throwable): Pair<DownReason, Boolean> = when (e) {
+            is ConnectFailure -> e.reason to (
+                e is ConnectFailure.AuthFailed || e is ConnectFailure.HostKeyChanged || e is ConnectFailure.HostKeyDeclined ||
+                    e is ConnectFailure.BadKey || e is ConnectFailure.Refused || e is ConnectFailure.KeyUnavailable ||
+                    e is ConnectFailure.HostKeysUnreadable
+                )
+            // Raised by a session factory while it loads key material or pins, before the connector runs.
+            is SecretCorrupt -> DownReason.KeyUnavailable to true
+            is HostKeyStoreCorrupt -> DownReason.HostKeysUnreadable to true
+            else -> DownReason.Network(e.message ?: e.javaClass.simpleName) to false
+        }
     }
 
     /** Waits for the first of: [linkDown] going Down, the timer, or a kick. The other waits are cancelled. */

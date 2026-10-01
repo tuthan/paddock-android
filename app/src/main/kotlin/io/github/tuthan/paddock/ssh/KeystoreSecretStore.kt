@@ -56,6 +56,9 @@ class KeystoreSecretStore(private val dir: File, private val keyAlias: String = 
             }.doFinal(data, 2 + ivLen, data.size - 2 - ivLen)
         } catch (e: GeneralSecurityException) {
             throw SecretCorrupt(name, e)
+        } catch (e: java.security.ProviderException) {
+            // Keystore2 reports some failures (a lost or invalidated wrapping key) as an unchecked ProviderException.
+            throw SecretCorrupt(name, e)
         }
     }
 

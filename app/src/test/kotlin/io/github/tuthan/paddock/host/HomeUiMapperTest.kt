@@ -59,6 +59,23 @@ class HomeUiMapperTest {
         assertEquals(Recovery.Retry, r.recovery)
     }
 
+    @Test fun anUnreadableKeySaysSoInPlainWordsAndNeverMentionsTheNetwork() {
+        val r = map(HostView(phase = HostPhase.Failed(DownReason.KeyUnavailable, null)))
+        val s = r.state as HomeUiState.Degraded
+        assertTrue(s.reason, s.reason.startsWith("The key stored on this phone can't be read. Import it again or create a new phone key"))
+        assertTrue(s.reason, "reach" !in s.reason)
+        assertEquals(Recovery.Retry, r.recovery)
+    }
+
+    @Test fun unreadableHostKeysPointToTheStorageReset() {
+        val r = map(HostView(phase = HostPhase.Failed(DownReason.HostKeysUnreadable, null)))
+        val s = r.state as HomeUiState.Degraded
+        assertTrue(s.reason, s.reason.startsWith("Saved host keys can't be read"))
+        assertTrue(s.reason, s.reason.contains("Nothing was signed in"))
+        assertEquals(Recovery.OpenSettings, r.recovery)
+        assertEquals("Open settings", s.recoveryLabel)
+    }
+
     @Test fun aMissingRelayCarriesThePromptAndOffersToReviewIt() {
         val ask = HostPhase.NeedsRelayInstall("/home/x/.local/share/paddock/paddock-relay.py", "ab".repeat(32), replacing = false)
         val r = map(HostView(phase = ask))

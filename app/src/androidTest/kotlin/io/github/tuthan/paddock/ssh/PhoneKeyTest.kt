@@ -3,6 +3,7 @@ package io.github.tuthan.paddock.ssh
 import android.os.Build
 import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
+import io.github.tuthan.paddock.ports.DownReason
 import java.io.File
 import java.security.Signature
 import org.junit.After
@@ -10,6 +11,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class PhoneKeyTest {
@@ -29,6 +31,15 @@ class PhoneKeyTest {
         Log.i("PHONEKEY", "api=${Build.VERSION.SDK_INT} backing=${info.backing}")
         // The platform tells us; the emulator is Software or Tee, a phone may be StrongBox. Never "assumed".
         assertNotEquals("backing could not be read", KeyBacking.Unknown, info.backing)
+    }
+
+    /** After app-data loss the alias is gone: connecting must report a key problem, not crash or claim the network is down. */
+    @Test
+    fun aMissingKeyIsKeyUnavailableAndIsNeverRegeneratedSilently() {
+        assertFalse(key.exists())
+        try { key.privateKey(); fail("a missing key returned a handle") } catch (e: ConnectFailure.KeyUnavailable) { assertEquals(DownReason.KeyUnavailable, e.reason) }
+        try { key.info(); fail("a missing key returned info") } catch (_: ConnectFailure.KeyUnavailable) { }
+        assertFalse("privateKey() must not create a new identity", key.exists())
     }
 
     @Test

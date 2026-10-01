@@ -1,6 +1,8 @@
 package io.github.tuthan.paddock.lifecycle
 
+import io.github.tuthan.paddock.hostkey.HostKeyStoreCorrupt
 import io.github.tuthan.paddock.hostkey.PresentedHostKey
+import io.github.tuthan.paddock.ports.SecretCorrupt
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.DownReason
@@ -170,6 +172,36 @@ class ConnectionOwnerTest {
         assertEquals(DownReason.PermissionDenied, f.reason)
         assertNull(f.retryAtMillis)
         l.release()
+    }
+
+    /** G1's app-data-loss case: key material or pins that cannot be read stop with their own reason and never loop. */
+    @Test fun unreadableKeysOrPinsWaitForTheUserWithTheirOwnReason() = runBlocking<Unit> {
+        val cases = listOf(
+            ConnectFailure.KeyUnavailable("the phone key does not exist; create it first") to DownReason.KeyUnavailable,
+            SecretCorrupt("imported-imported") to DownReason.KeyUnavailable,
+            ConnectFailure.HostKeysUnreadable(IOException("Unexpected JSON token")) to DownReason.HostKeysUnreadable,
+            HostKeyStoreCorrupt(IOException("Unexpected JSON token")) to DownReason.HostKeysUnreadable,
+        )
+        for ((thrown, expected) in cases) {
+            val p = HostProfile("p-${expected.javaClass.simpleName}-${thrown.javaClass.simpleName}".lowercase(), "P", "10.0.0.9", 22, "jdoe")
+            scriptFor.getOrPut(p.id) { ConcurrentLinkedQueue() } += thrown
+            val before = connects.get()
+            val l = owner().acquire(p)
+            until("failed ${thrown.javaClass.simpleName}") { l.state.value is Connection.Failed }
+            val f = l.state.value as Connection.Failed
+            assertEquals(expected, f.reason, thrown.javaClass.simpleName)
+            assertNull(f.retryAtMillis, "${thrown.javaClass.simpleName}: only the user can fix it")
+            delay(100)
+            assertEquals(before + 1, connects.get(), "${thrown.javaClass.simpleName}: no retry loop")
+            l.release()
+        }
+    }
+
+    @Test fun failureClassificationKeepsTransientErrorsRetryable() {
+        assertEquals(DownReason.Timeout to false, ConnectionOwner.connectFailureOf(ConnectFailure.TimedOut()))
+        assertEquals(false, ConnectionOwner.connectFailureOf(ConnectFailure.Unreachable(IOException("no route"))).second)
+        assertEquals(false, ConnectionOwner.connectFailureOf(IllegalStateException("something else")).second)
+        assertIs<DownReason.Network>(ConnectionOwner.connectFailureOf(IllegalStateException("something else")).first)
     }
 
     @Test fun anUnreachableHostRetriesAndSaysWhen() = runBlocking<Unit> {

@@ -48,6 +48,13 @@ sealed interface DownReason {
     data object HostKeyChanged : DownReason
     /** The Android local-network grant is missing; refused before any socket opened. */
     data object PermissionDenied : DownReason
+    /**
+     * The key this phone signs with cannot be used: the phone key is gone (app data lost) or the Keystore refused it, or the
+     * imported key's stored copy cannot be read. Nothing was signed in; only the user can fix it.
+     */
+    data object KeyUnavailable : DownReason
+    /** The saved host keys cannot be read, so no host can be verified. Nothing was signed in; only the user can fix it. */
+    data object HostKeysUnreadable : DownReason
     data class Network(val message: String) : DownReason
 }
 

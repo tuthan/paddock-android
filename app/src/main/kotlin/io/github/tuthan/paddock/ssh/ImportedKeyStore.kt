@@ -1,5 +1,6 @@
 package io.github.tuthan.paddock.ssh
 
+import io.github.tuthan.paddock.ports.SecretCorrupt
 import io.github.tuthan.paddock.ports.SecretStore
 
 /** What the UI may show about a stored imported key. The key material itself is never exposed here. */
@@ -41,13 +42,14 @@ class ImportedKeyStore(private val secrets: SecretStore) {
     }
 
     /**
-     * Auth material for a connection. An encrypted key uses the remembered passphrase unless [passphrase] is given;
-     * returns null when no key is stored under [id]. Throws [InvalidImportedKey] when the pair is unusable
-     * (for example the passphrase is missing or wrong), so the caller can ask again.
+     * Auth material for one connection (the connector wipes the returned key text, so call this per attempt). An encrypted
+     * key uses the remembered passphrase unless [passphrase] is given; returns null when no key is stored under [id]. A key
+     * that cannot be decoded is reported by the connector as `ConnectFailure.BadKey`. Throws [ConnectFailure.KeyUnavailable]
+     * when the stored copy cannot be unwrapped (corrupt file, or the Keystore wrapping key is gone).
      */
     suspend fun load(id: String, passphrase: String? = null): SshAuth.Imported? {
-        val keyBytes = secrets.get(keyName(id)) ?: return null
-        val remembered = secrets.get(passName(id))
+        val keyBytes = unwrap(keyName(id)) ?: return null
+        val remembered = try { unwrap(passName(id)) } catch (e: ConnectFailure) { keyBytes.fill(0); throw e }
         try {
             val pass = passphrase ?: remembered?.toString(Charsets.UTF_8)
             return SshAuth.Imported(String(keyBytes, Charsets.UTF_8).toCharArray(), pass)
@@ -55,6 +57,9 @@ class ImportedKeyStore(private val secrets: SecretStore) {
     }
 
     suspend fun delete(id: String) { secrets.delete(keyName(id)); secrets.delete(passName(id)); secrets.delete(metaName(id)) }
+
+    private suspend fun unwrap(name: String): ByteArray? =
+        try { secrets.get(name) } catch (e: SecretCorrupt) { throw ConnectFailure.KeyUnavailable("the imported key stored on this phone cannot be read", e) }
 
     private companion object { val SECRET_ID = Regex("[a-z0-9][a-z0-9-]{0,40}") }
 }

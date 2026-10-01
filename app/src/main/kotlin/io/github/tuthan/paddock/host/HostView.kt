@@ -76,6 +76,14 @@ object HomeUiMapper {
             DownReason.HostKeyChanged -> degraded("The host's key changed. Nothing was signed in.", "Review the key", Recovery.ReviewKey, null)
             DownReason.AuthFailed -> degraded("The host did not accept this phone's key. Authorize it on the host, then try again.", "Try again", Recovery.Retry, null)
             DownReason.Refused -> degraded("The connection was not accepted.", "Try again", Recovery.Retry, null)
+            DownReason.KeyUnavailable -> degraded(
+                "The key stored on this phone can't be read. Import it again or create a new phone key, then try again.", "Try again", Recovery.Retry, null,
+            )
+            DownReason.HostKeysUnreadable -> degraded(
+                "Saved host keys can't be read, so Paddock can't check this host's identity. Nothing was signed in. " +
+                    "Clearing Paddock's storage in system settings resets them; then add the machine and authorize this phone again.",
+                "Open settings", Recovery.OpenSettings, null,
+            )
             DownReason.Timeout -> degraded("The host did not answer in time.$retry", if (retry.isEmpty()) "Try again" else null, if (retry.isEmpty()) Recovery.Retry else null, null)
             is DownReason.Network -> degraded("Cannot reach the host: ${reason.message}.$retry".replace("..", "."), if (retry.isEmpty()) "Try again" else null, if (retry.isEmpty()) Recovery.Retry else null, null)
             DownReason.Closed -> degraded("Disconnected.$retry", if (retry.isEmpty()) "Try again" else null, if (retry.isEmpty()) Recovery.Retry else null, null)

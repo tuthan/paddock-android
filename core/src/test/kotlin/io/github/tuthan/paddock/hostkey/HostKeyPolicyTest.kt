@@ -73,6 +73,19 @@ class HostKeyPolicyTest {
     }
 
     @Test
+    fun pinAcceptedPinsOnceAndNeverReplacesAPinMadeMeanwhile() = runBlocking<Unit> {
+        assertNull(policy.pinFor("p"))
+        assertIs<HostKeyState.Pinned>(policy.pinAccepted("p", "e", keyA))
+        assertEquals(keyA.fingerprint, policy.pinFor("p")!!.fingerprint)
+        // A second attempt that was answered for the same key finds it pinned; one for another key finds it changed.
+        assertIs<HostKeyState.Pinned>(policy.pinAccepted("p", "e", keyA))
+        val changed = policy.pinAccepted("p", "e", keyB)
+        assertIs<HostKeyState.Changed>(changed)
+        assertEquals(keyA.fingerprint, store.find("p")!!.fingerprint)
+        assertEquals(1, store.saves)
+    }
+
+    @Test
     fun profilesAreIndependent() = runBlocking<Unit> {
         policy.acceptUnknown("p1", "e", keyA)
         assertIs<HostKeyState.Unknown>(policy.evaluate("p2", "e", keyA))

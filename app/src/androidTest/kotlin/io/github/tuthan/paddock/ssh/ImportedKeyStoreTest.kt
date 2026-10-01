@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
@@ -63,6 +64,16 @@ class ImportedKeyStoreTest {
         assertEquals(ImportCheck.WrongPassphrase, store.import("k1", keyFile.readText().toCharArray(), "nope", false))
         assertEquals(ImportCheck.NotAKey, store.import("k1", "hello".toCharArray(), null, false))
         assertNull(store.info("k1")); assertNull(store.load("k1"))
+    }
+
+    /** A damaged stored copy is a key problem for the user, not a JSON or network error, and nothing is half-loaded. */
+    @Test
+    fun aCorruptStoredKeyIsKeyUnavailable() = runBlocking<Unit> {
+        assumeTrue("imported key not pushed", keyFile.canRead())
+        assertTrue(store.import("k3", keyFile.readText().toCharArray(), "spikepass", rememberPassphrase = true) is ImportCheck.Ready)
+        File(dir, "imported-k3").writeBytes(byteArrayOf(1, 12) + ByteArray(40) { 7 })
+        try { store.load("k3"); fail("a corrupt key loaded") }
+        catch (e: ConnectFailure.KeyUnavailable) { assertEquals(io.github.tuthan.paddock.ports.DownReason.KeyUnavailable, e.reason) }
     }
 
     @Test

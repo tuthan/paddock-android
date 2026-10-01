@@ -34,16 +34,22 @@ class PhoneKey(private val alias: String = DEFAULT_ALIAS) {
         return info()
     }
 
+    /** Throws [ConnectFailure.KeyUnavailable] when the key is gone (app data lost) or the Keystore cannot read it. */
     fun info(): PhoneKeyInfo {
-        val entry = keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry ?: error("phone key does not exist; create it first")
+        val entry = entry()
         return PhoneKeyInfo(entry.certificate.publicKey as ECPublicKey, backingOf(entry.privateKey))
     }
 
-    /** The signing handle for the SSH library. Calls `Signature.getInstance("SHA256withECDSA")` without a provider name. */
-    fun privateKey(): PrivateKey {
+    /**
+     * The signing handle for the SSH library. Calls `Signature.getInstance("SHA256withECDSA")` without a provider name.
+     * Throws [ConnectFailure.KeyUnavailable], which the connection owner shows as a key problem the user must fix, never retried.
+     */
+    fun privateKey(): PrivateKey = entry().privateKey
+
+    private fun entry(): KeyStore.PrivateKeyEntry {
         // Never generate here: a silent new identity would orphan every authorization on the hosts.
-        val entry = keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry ?: error("phone key does not exist; create it first")
-        return entry.privateKey
+        val entry = try { keyStore.getEntry(alias, null) } catch (e: Exception) { throw ConnectFailure.KeyUnavailable("the phone key cannot be read", e) }
+        return entry as? KeyStore.PrivateKeyEntry ?: throw ConnectFailure.KeyUnavailable("the phone key does not exist; create it first")
     }
 
     fun publicLine(comment: String): String = OpenSshKeys.publicLine(getOrCreate().publicKey, comment)

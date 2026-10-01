@@ -2,6 +2,8 @@ package io.github.tuthan.paddock.hostkey
 
 import java.security.MessageDigest
 import java.util.Base64
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A host key as the server presented it: the SSH wire blob and its algorithm name. */
 class PresentedHostKey(val algorithm: String, val blob: ByteArray) {
@@ -37,10 +39,28 @@ sealed interface HostKeyState {
 
 /**
  * The only decision point for host keys. [evaluate] is what the SSH library's verifier calls before any
- * authentication; it never replaces a pin. A pin is created only by [acceptUnknown], after the user agrees,
- * and replaced only by [replaceChanged], which exists for an explicit user action and nothing else.
+ * authentication; it never replaces a pin. A pin is created only by [pinAccepted] (or [acceptUnknown]), after the user
+ * agrees, and replaced only by [replaceChanged], which exists for an explicit user action and nothing else.
  */
 class HostKeyPolicy(private val store: HostKeyStore, private val clock: () -> Long) {
+    private val writeLock = Mutex()
+
+    /** The pin for [profileId], or null on first contact. Throws [HostKeyStoreCorrupt] when the store cannot be read. */
+    suspend fun pinFor(profileId: String): PinnedHostKey? = store.find(profileId)
+
+    /**
+     * Pins a first-contact key the user accepted. The connector calls it only after the key exchange completed, so the
+     * server has proved it holds the key. Returns the state that holds afterwards: [HostKeyState.Pinned], also when a
+     * concurrent attempt pinned the same key first, or [HostKeyState.Changed] when a different key was pinned meanwhile.
+     * Never replaces a pin.
+     */
+    suspend fun pinAccepted(profileId: String, endpoint: String, presented: PresentedHostKey): HostKeyState = writeLock.withLock {
+        when (val state = evaluate(profileId, endpoint, presented)) {
+            is HostKeyState.Unknown -> HostKeyState.Pinned(pinOf(profileId, endpoint, presented).also { store.save(it) })
+            else -> state
+        }
+    }
+
     suspend fun evaluate(profileId: String, endpoint: String, presented: PresentedHostKey): HostKeyState {
         val pin = store.find(profileId) ?: return HostKeyState.Unknown(presented)
         val same = pin.algorithm == presented.algorithm && MessageDigest.isEqual(pin.blob, presented.blob)
@@ -52,14 +72,14 @@ class HostKeyPolicy(private val store: HostKeyStore, private val clock: () -> Lo
         }
     }
 
-    suspend fun acceptUnknown(profileId: String, endpoint: String, presented: PresentedHostKey): PinnedHostKey {
+    suspend fun acceptUnknown(profileId: String, endpoint: String, presented: PresentedHostKey): PinnedHostKey = writeLock.withLock {
         check(store.find(profileId) == null) { "profile $profileId already has a pin; use replaceChanged" }
-        return pinOf(profileId, endpoint, presented).also { store.save(it) }
+        pinOf(profileId, endpoint, presented).also { store.save(it) }
     }
 
-    suspend fun replaceChanged(profileId: String, endpoint: String, presented: PresentedHostKey): PinnedHostKey {
+    suspend fun replaceChanged(profileId: String, endpoint: String, presented: PresentedHostKey): PinnedHostKey = writeLock.withLock {
         check(store.find(profileId) != null) { "profile $profileId has no pin to replace" }
-        return pinOf(profileId, endpoint, presented).also { store.save(it) }
+        pinOf(profileId, endpoint, presented).also { store.save(it) }
     }
 
     private fun pinOf(profileId: String, endpoint: String, p: PresentedHostKey): PinnedHostKey {

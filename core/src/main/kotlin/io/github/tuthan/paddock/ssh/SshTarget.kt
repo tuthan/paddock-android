@@ -22,6 +22,13 @@ sealed class ConnectFailure(message: String, val reason: DownReason, cause: Thro
     class AuthFailed : ConnectFailure("authentication failed", DownReason.AuthFailed)
     /** The imported key could not be used (wrong or missing passphrase, not a key, unsupported). Detected before any socket opens. */
     class BadKey(val detail: String) : ConnectFailure("imported key unusable: $detail", DownReason.AuthFailed)
+    /**
+     * The phone key or the stored imported key cannot be read or cannot sign (missing after app-data loss, corrupt, or refused
+     * by the Keystore). Raised before or during authentication; the connection, if any, is closed.
+     */
+    class KeyUnavailable(detail: String, cause: Throwable? = null) : ConnectFailure("key unavailable: $detail", DownReason.KeyUnavailable, cause)
+    /** The pin store cannot be read; no host key was trusted and nothing was authenticated. */
+    class HostKeysUnreadable(cause: Throwable?) : ConnectFailure("saved host keys cannot be read", DownReason.HostKeysUnreadable, cause)
     class Unreachable(cause: Throwable) : ConnectFailure("cannot reach host: ${cause.message}", DownReason.Network(cause.message ?: cause.javaClass.simpleName), cause)
     class TimedOut(cause: Throwable? = null) : ConnectFailure("connection timed out", DownReason.Timeout, cause)
 }

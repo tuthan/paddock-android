@@ -9,6 +9,7 @@ import com.trilead.ssh2.auth.SignatureProxy
 import io.github.tuthan.paddock.hostkey.HostKeyPolicy
 import io.github.tuthan.paddock.hostkey.HostKeyState
 import io.github.tuthan.paddock.hostkey.PresentedHostKey
+import io.github.tuthan.paddock.hostkey.askFromCallbackThread
 import io.github.tuthan.paddock.ports.BoundedBytes
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.DownReason
@@ -31,10 +32,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -50,7 +55,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 sealed interface SshAuth {
     /** The Keystore handle plus its public half; the private key is never read, only asked to sign. */
     class Phone(val privateKey: PrivateKey, val publicKey: PublicKey) : SshAuth
-    /** An imported OpenSSH private key held in memory only for the connect call. */
+    /**
+     * An imported OpenSSH private key for one connect call. The connector wipes [pem] as soon as the key pair is built, so
+     * load a fresh one for every attempt (the app does: `ImportedKeyStore.load` per connect). [passphrase] is a String and
+     * cannot be wiped.
+     */
     class Imported(val pem: CharArray, val passphrase: String?) : SshAuth
 }
 
@@ -58,6 +67,9 @@ sealed interface SshAuth {
  * Builds sshlib connections behind the [SshSession] port. Order of events for one attempt: the gate, then the
  * socket, then host-key verification (before any authentication), then authentication. See
  * docs/ssh-library-decision.md for why each sshlib workaround exists.
+ *
+ * sshlib's connect and authenticate calls block; they run on their own thread so a cancelled connect returns at once, and
+ * every failure after the socket may have opened closes the connection.
  */
 class SshlibConnector(
     private val hostKeys: HostKeyPolicy,
@@ -68,10 +80,19 @@ class SshlibConnector(
     private val connectTimeout: Duration = 10.seconds,
     /** How long a command or stream waits for one of the [SshlibSession.MAX_CHANNELS] slots before failing with [ChannelsBusy]. */
     private val channelWait: Duration = 30.seconds,
+    /**
+     * How long a first-contact question may stay open. sshlib's key-exchange timer keeps running while its callback waits, and
+     * it cannot end a callback that is blocking its thread (the waiting connect is only woken by that thread), so the question
+     * carries this deadline itself and is withdrawn when it passes; sshlib's timer is set [connectTimeout] beyond it so the
+     * socket is still open for an answer given in time. sshd's own `LoginGraceTime` (120 s by default) can end it sooner.
+     */
+    private val firstContactTimeout: Duration = 180.seconds,
 ) {
     /**
-     * [onUnknownHostKey] is asked once, on first contact, with the algorithm and fingerprint; returning false
-     * declines. It runs before authentication and its answer is the only way a pin is created.
+     * [onUnknownHostKey] is asked once, on first contact, with the algorithm and fingerprint; returning false declines. It
+     * runs before authentication, as a child of this call (cancelling the connect cancels the question), and its answer is
+     * the only way a pin is created. The pin is written only after the key exchange completes, when the server has proved
+     * it holds the key; it is kept even if authentication then fails.
      */
     suspend fun connect(
         target: SshTarget,
@@ -79,56 +100,95 @@ class SshlibConnector(
         onUnknownHostKey: suspend (PresentedHostKey) -> Boolean,
     ): SshSession {
         gate.check(target)?.let { throw ConnectFailure.Refused(it) }
-        // A bad imported key fails here, before any socket opens.
+        // A bad imported key fails here, before any socket opens. The key text is wiped once parsed.
         val importedPair = (auth as? SshAuth.Imported)?.let {
-            try { ImportedKey.keyPair(it.pem, it.passphrase) } catch (e: InvalidImportedKey) { throw ConnectFailure.BadKey(e.check.toString()) }
+            try { ImportedKey.keyPair(it.pem, it.passphrase) }
+            catch (e: InvalidImportedKey) { throw ConnectFailure.BadKey(e.check.toString()) }
+            catch (e: IOException) { throw ConnectFailure.BadKey(e.message ?: "unreadable key") }
+            finally { it.pem.fill('\u0000') }
         }
+        val pin = try { hostKeys.pinFor(target.profileId) } catch (e: IOException) { throw ConnectFailure.HostKeysUnreadable(e) }
         val tracker = LinkTracker(clock).also { it.connecting() }
         val connection = Connection(target.host, target.port)
         // API 26 to 27 have no ChaCha20 provider and sshlib offers chacha20-poly1305 whenever the server does.
         connection.setClient2ServerCiphers(CIPHERS)
         connection.setServer2ClientCiphers(CIPHERS)
 
-        var failure: ConnectFailure? = null
+        val verdict = Verdict()
+        // The host-key question runs on sshlib's thread; this job makes it a child of the connect call.
+        val questions = SupervisorJob(currentCoroutineContext()[Job])
+        val started = TimeSource.Monotonic.markNow()
         val verifier = ServerHostKeyVerifier { _, _, algorithm, blob ->
-            val presented = PresentedHostKey(algorithm, blob)
-            // Called on the connecting thread, so blocking here is what holds authentication back.
-            runBlocking {
-                when (val state = hostKeys.evaluate(target.profileId, target.endpoint, presented)) {
-                    is HostKeyState.Pinned -> true
-                    is HostKeyState.Changed -> { failure = ConnectFailure.HostKeyChanged(state.pin, state.presented); false }
-                    is HostKeyState.Unknown ->
-                        if (onUnknownHostKey(presented)) { hostKeys.acceptUnknown(target.profileId, target.endpoint, presented); true }
-                        else { failure = ConnectFailure.HostKeyDeclined(presented); false }
-                }
-            }
+            verify(target, PresentedHostKey(algorithm, blob), verdict, questions, firstContactTimeout - started.elapsedNow(), onUnknownHostKey)
         }
-        val ms = connectTimeout.inWholeMilliseconds.toInt()
+        val connectMs = connectTimeout.inWholeMilliseconds.toInt()
+        val kexMs = (if (pin == null) firstContactTimeout + connectTimeout else connectTimeout).inWholeMilliseconds.toInt()
         try {
-            withContext(Dispatchers.IO) { connection.connect(verifier, ms, ms) }
+            blocking("paddock-connect") { connection.connect(verifier, connectMs, kexMs) }
         } catch (e: CancellationException) {
-            // The blocking connect runs to completion even when cancelled, so the socket may be open: close it.
-            runCatching { connection.close() }; tracker.down(DownReason.Closed); throw e
-        } catch (e: IOException) {
-            runCatching { connection.close() }
-            val f = failure ?: classify(e)
+            closeOffThread(connection); tracker.down(DownReason.Closed); throw e
+        } catch (e: Throwable) {
+            closeOffThread(connection)
+            val f = verdict.failure ?: if (e is IOException) classify(e) else ConnectFailure.Unreachable(e)
             tracker.down(f.reason)
-            throw f
+            throw if (e is Error) e else f
+        } finally {
+            // A question still open (the key-exchange timer expired, or the connect failed) is withdrawn here.
+            verdict.kexDone = true
+            questions.cancel()
         }
         try {
-            val ok = withContext(Dispatchers.IO) { authenticate(connection, target.user, auth, importedPair) }
+            // The key exchange is complete, so the server holds the key it presented: only now does "trust" become a pin.
+            verdict.accepted?.let { presented ->
+                val after = try { hostKeys.pinAccepted(target.profileId, target.endpoint, presented) } catch (e: IOException) { throw ConnectFailure.HostKeysUnreadable(e) }
+                if (after is HostKeyState.Changed) throw ConnectFailure.HostKeyChanged(after.pin, after.presented)
+            }
+            val ok = blocking("paddock-auth") { authenticate(connection, target.user, auth, importedPair) }
             if (!ok) throw ConnectFailure.AuthFailed()
         } catch (e: CancellationException) {
-            runCatching { connection.close() }; tracker.down(DownReason.Closed); throw e
-        } catch (e: ConnectFailure) {
-            runCatching { connection.close() }; tracker.down(e.reason); throw e
-        } catch (e: IOException) {
-            runCatching { connection.close() }
-            val f = ConnectFailure.AuthFailed().takeIf { e.message?.contains("Authentication", ignoreCase = true) == true } ?: classify(e)
-            tracker.down(f.reason); throw f
+            closeOffThread(connection); tracker.down(DownReason.Closed); throw e
+        } catch (e: Throwable) {
+            // Every failure closes: a Keystore exception escaping sshlib must not leave the socket and its reader thread behind.
+            closeOffThread(connection)
+            val f = authFailure(e)
+            tracker.down(f.reason)
+            throw if (e is Error) e else f
         }
         tracker.up()
         return SshlibSession(connection, tracker, keepalive, keepaliveReplyTimeout, channelWait)
+    }
+
+    /** What the host-key callback decided, read by the connecting coroutine once sshlib returns. */
+    private class Verdict {
+        @Volatile var failure: ConnectFailure? = null
+        /** A first-contact key the user accepted; pinned only after the key exchange completes. */
+        @Volatile var accepted: PresentedHostKey? = null
+        @Volatile var kexDone = false
+    }
+
+    /** Runs on sshlib's thread, before any authentication; blocking here is what holds authentication back. */
+    private fun verify(
+        target: SshTarget, presented: PresentedHostKey, verdict: Verdict, questions: Job, questionTime: Duration,
+        onUnknownHostKey: suspend (PresentedHostKey) -> Boolean,
+    ): Boolean {
+        // A later re-key on a connected session: the pin is in place, so only that key passes and nobody is asked.
+        if (verdict.kexDone) return runBlocking { runCatching { hostKeys.evaluate(target.profileId, target.endpoint, presented) }.getOrNull() is HostKeyState.Pinned }
+        return askFromCallbackThread(questions) {
+            try {
+                when (val state = hostKeys.evaluate(target.profileId, target.endpoint, presented)) {
+                    is HostKeyState.Pinned -> true
+                    is HostKeyState.Changed -> { verdict.failure = ConnectFailure.HostKeyChanged(state.pin, state.presented); false }
+                    // Unanswered in time: the question is cancelled (the broker withdraws the dialog) and the attempt times out.
+                    is HostKeyState.Unknown -> when (withTimeoutOrNull(questionTime) { onUnknownHostKey(presented) }) {
+                        true -> { verdict.accepted = presented; true }
+                        false -> { verdict.failure = ConnectFailure.HostKeyDeclined(presented); false }
+                        null -> { verdict.failure = ConnectFailure.TimedOut(); false }
+                    }
+                }
+            } catch (e: IOException) {
+                verdict.failure = ConnectFailure.HostKeysUnreadable(e); false
+            }
+        } ?: false // cancelled: the connect was cancelled or gave up, and the question was withdrawn
     }
 
     private fun authenticate(c: Connection, user: String, auth: SshAuth, imported: java.security.KeyPair?): Boolean = when (auth) {
@@ -144,6 +204,23 @@ class SshlibConnector(
         is SshAuth.Imported -> c.authenticateWithPublicKey(user, checkNotNull(imported))
     }
 
+    /**
+     * A server that rejects the key makes sshlib return false (AuthFailed above). An exception is something else: a Keystore
+     * or signing failure anywhere in the chain is [ConnectFailure.KeyUnavailable]; sshlib wraps every I/O error during
+     * authentication as "Publickey authentication failed.", so an IOException is classified by its cause like a connect error.
+     */
+    private fun authFailure(e: Throwable): ConnectFailure {
+        val chain = generateSequence(e) { it.cause }.toList()
+        return when {
+            e is ConnectFailure -> e
+            chain.any { it is java.security.GeneralSecurityException || it is java.security.ProviderException || it.javaClass.name == "android.security.KeyStoreException" } ->
+                ConnectFailure.KeyUnavailable("the key could not sign", e)
+            e is IOException && chain.any { it.message?.contains("not supported by the server", ignoreCase = true) == true } -> ConnectFailure.AuthFailed()
+            e is IOException -> classify(e)
+            else -> ConnectFailure.Unreachable(e)
+        }
+    }
+
     private fun classify(e: IOException): ConnectFailure {
         val chain = generateSequence<Throwable>(e) { it.cause }.toList()
         return when {
@@ -151,6 +228,16 @@ class SshlibConnector(
             else -> ConnectFailure.Unreachable(chain.last())
         }
     }
+
+    /** A blocking sshlib call on its own daemon thread; a cancelled caller returns at once and closes the connection. */
+    private suspend fun <T> blocking(name: String, block: () -> T): T {
+        val result = CompletableDeferred<T>()
+        Thread({ try { result.complete(block()) } catch (e: Throwable) { result.completeExceptionally(e) } }, name).apply { isDaemon = true }.start()
+        return result.await()
+    }
+
+    /** Connection.close() waits for the connection's monitor, which a still-running connect or authenticate holds. */
+    private fun closeOffThread(c: Connection) { Thread({ runCatching { c.close() } }, "paddock-close").apply { isDaemon = true; start() } }
 
     companion object {
         private val CIPHERS = arrayOf("aes256-gcm@openssh.com", "aes128-gcm@openssh.com", "aes256-ctr", "aes128-ctr")

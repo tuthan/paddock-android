@@ -423,7 +423,8 @@ private fun clearClipboardIfKey(ctx: Context) {
 private fun HostKeyDialogs(graph: AppGraph, reviewKey: Boolean, dismissReview: () -> Unit) {
     val request by graph.broker.firstTrust.collectAsState()
     request?.let { r ->
-        FingerprintDialog(HostKeyPrompts.firstTrust(r.endpoint, r.presented), onTrust = { graph.broker.answerFirstTrust(true) }, onCancel = { graph.broker.answerFirstTrust(false) })
+        // Answers name the request they answer: a tap on a dialog whose connect was cancelled answers nothing else.
+        FingerprintDialog(HostKeyPrompts.firstTrust(r.endpoint, r.presented), onTrust = { graph.broker.answerFirstTrust(r.id, true) }, onCancel = { graph.broker.answerFirstTrust(r.id, false) })
     }
     val profile by graph.profile.collectAsState()
     val changed by graph.broker.changed.collectAsState()
