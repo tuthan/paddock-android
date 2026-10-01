@@ -1,0 +1,8 @@
+<resources>
+    <!-- Window colours match PaddockTokens `ground` so cold start does not flash the wrong theme. -->
+    <style name="Theme.Paddock" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_ground</item>
+        <item name="android:statusBarColor">@color/window_ground</item>
+        <item name="android:navigationBarColor">@color/window_ground</item>
+    </style>
+</resources>

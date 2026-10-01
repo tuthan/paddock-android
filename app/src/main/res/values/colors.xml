@@ -1,0 +1,4 @@
+<resources>
+    <!-- Window chrome only; Compose paints from PaddockTokens. Light values are placeholders until Phase 10. -->
+    <color name="window_ground">#E6E7ED</color>
+</resources>

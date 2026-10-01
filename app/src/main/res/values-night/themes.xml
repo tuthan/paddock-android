@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.Paddock" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_ground</item>
+        <item name="android:statusBarColor">@color/window_ground</item>
+        <item name="android:navigationBarColor">@color/window_ground</item>
+    </style>
+</resources>
