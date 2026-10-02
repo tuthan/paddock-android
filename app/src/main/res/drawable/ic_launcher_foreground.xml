@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Paddock mark. A P whose stem is a fence post standing proud of the top rail; the bowl is the paddock and the one
+     agent kept in it is needsYou. Geometry and colours: the design note's "Launcher icon" section; the master SVG is in
+     the vault's assets. Inside the 66 dp safe circle of the 108 dp layer. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="-1.5">
+        <!-- The dot's glow is drawn under the P, so the strokes trim it to the bowl. -->
+        <path android:pathData="M46,48.5a9,9 0,1 0,18 0a9,9 0,1 0,-18 0">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="radial"
+                    android:centerX="55"
+                    android:centerY="48.5"
+                    android:gradientRadius="9">
+                    <item android:offset="0.45" android:color="#73F7768E" />
+                    <item android:offset="1" android:color="#00F7768E" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M42,29V78M42,36H56a12.5,12.5 0,0 1,0 25H42"
+            android:strokeWidth="9"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0"
+                    android:startY="29"
+                    android:endX="0"
+                    android:endY="78">
+                    <item android:offset="0" android:color="#FFA4BDFF" />
+                    <item android:offset="1" android:color="#FF5F82DB" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:fillColor="#FFF7768E"
+            android:pathData="M50,48.5a5,5 0,1 0,10 0a5,5 0,1 0,-10 0" />
+    </group>
+</vector>
