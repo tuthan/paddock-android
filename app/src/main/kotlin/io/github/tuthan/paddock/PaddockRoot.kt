@@ -499,10 +499,11 @@ private fun ComposeRoute(
     val gate = ComposerRules.gate(agent, installed?.readAtMillis, openedAt, freshness == Freshness.Live, records, key, text, currentEpoch = liveEpoch, journalUnreadable = journalUnreadable != null)
     val outcome = outcomes[terminalId]
     // The text goes with the prompt: cleared only when herdr accepted it, kept for a refusal, a failure or an unknown outcome.
-    // The draft remembers which accepted row it has already gone with, so an old accepted outcome shown again clears nothing.
+    // The draft remembers which accepted row it has already gone with, so an old accepted outcome shown again clears nothing,
+    // and it goes only while it is still the text that was sent: the field stays editable during a send.
     LaunchedEffect(outcome) {
         val result = outcome?.result
-        if (outcome != null && outcome.kind == OperationKind.Prompt && result is OperationResult.Acknowledged<*>) onDraft { it.accepted(terminalId, result.record.id) }
+        if (outcome != null && outcome.kind == OperationKind.Prompt && result is OperationResult.Acknowledged<*>) onDraft { it.accepted(terminalId, result.record.id, result.record.payloadSha256) }
     }
 
     val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")

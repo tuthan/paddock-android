@@ -56,4 +56,35 @@ class PromptDraftTest {
         val d = PromptDraft().typed("term_1", "first").accepted("term_1", 7).typed("term_2", "elsewhere").typed("term_1", "new draft")
         assertEquals("new draft", d.accepted("term_1", 7).textFor("term_1"))
     }
+
+    private fun sha(text: String) = OperationJournal.sha256Hex(text)
+
+    @Test fun aDelayedAcknowledgementDoesNotTakeTextEditedAfterTheSend() {
+        // Sent "A"; the field stayed editable; the user changed it to "B"; then herdr's answer for "A" arrives.
+        val d = PromptDraft().typed("term_1", "A").typed("term_1", "B").accepted("term_1", recordId = 7, sentSha256 = sha("A"))
+        assertEquals("B", d.textFor("term_1"))
+        assertEquals(mapOf("term_1" to 7L), d.acceptedThrough, "the row is still recorded as seen")
+    }
+
+    @Test fun theAcknowledgementTakesTheTextThatWasSent() {
+        val d = PromptDraft().typed("term_1", "A").accepted("term_1", recordId = 7, sentSha256 = sha("A"))
+        assertEquals("", d.textFor("term_1"))
+    }
+
+    @Test fun textEditedAwayAndBackToWhatWasSentIsTheSentText() {
+        val d = PromptDraft().typed("term_1", "A").typed("term_1", "B").typed("term_1", "A").accepted("term_1", 7, sha("A"))
+        assertEquals("", d.textFor("term_1"))
+    }
+
+    @Test fun theKeptTextSurvivesTheSameAnswerShownAgainAndIsTakenByItsOwnSend() {
+        val kept = PromptDraft().typed("term_1", "A").typed("term_1", "B").accepted("term_1", 7, sha("A"))
+        assertEquals("B", kept.accepted("term_1", 7, sha("A")).textFor("term_1"), "the same row shown again changes nothing")
+        assertEquals("", kept.accepted("term_1", 8, sha("B")).textFor("term_1"), "B's own acceptance takes B")
+    }
+
+    @Test fun textClearedByTheUserAfterTheSendStaysClear() {
+        val d = PromptDraft().typed("term_1", "A").typed("term_1", "").accepted("term_1", 7, sha("A"))
+        assertEquals("", d.textFor("term_1"))
+        assertEquals(mapOf("term_1" to 7L), d.acceptedThrough)
+    }
 }
