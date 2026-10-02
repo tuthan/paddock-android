@@ -736,7 +736,8 @@ private fun ImportKeyRoute(graph: AppGraph, onDone: () -> Unit, onBack: () -> Un
                 result = check
                 if (check is ImportCheck.Ready) {
                     // A pasted key is still on the clipboard, where any app could read it: take it off.
-                    if (pasted) clearClipboardIfKey(ctx)
+                    // On the main thread whatever resumed us: before API 28 the clipboard service needs a Looper to be created.
+                    if (pasted) withContext(Dispatchers.Main) { clearClipboardIfKey(ctx) }
                     onDone()
                 }
             }
