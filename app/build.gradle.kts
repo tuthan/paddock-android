@@ -107,6 +107,8 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
+    // Espresso 3.7.0 over the 3.5.0 that ui-test-junit4 brings: 3.5.0 calls InputManager.getInstance, removed in Android 17 (API 37).
+    androidTestImplementation(libs.androidx.test.espresso.core)
 }
 
 // sshlib's ML-KEM implementation (kyber, keccak, kotlincrypto) is excluded; the cost is recorded in docs/ssh-library-decision.md.
