@@ -27,11 +27,11 @@ class ManualInputTest {
         a: Agent? = agent(), readAtMillis: Long? = readAt, live: Boolean = true, records: List<OperationRecord> = emptyList(), epoch: Long? = key.epoch,
     ) = ManualInputRules.gate(a, readAtMillis, entered, live, records, key, epoch)
 
-    private fun closed(g: KeyGate) = assertIs<KeyGate.Closed>(g)
+    private fun closed(g: OperationGate) = assertIs<OperationGate.Closed>(g)
 
     @Test fun aReadMadeSinceTheSessionBeganOpensTheKeys() {
-        assertEquals(KeyGate.Open, gate())
-        assertEquals(KeyGate.Open, gate(readAtMillis = entered), "a read made at the moment of entering counts")
+        assertEquals(OperationGate.Open, gate())
+        assertEquals(OperationGate.Open, gate(readAtMillis = entered), "a read made at the moment of entering counts")
     }
 
     @Test fun theModeStartsWithAFreshRead() {
@@ -60,13 +60,13 @@ class ManualInputTest {
             agent(AgentStatus.Working), agent(AgentStatus.Blocked), agent(AgentStatus.Unknown), agent(AgentStatus.Done),
             agent(ready = false), agent(launching = true),
         )
-        states.forEach { assertEquals(KeyGate.Open, gate(it), it.toString()) }
+        states.forEach { assertEquals(OperationGate.Open, gate(it), it.toString()) }
     }
 
     @Test fun aResolvedOrFinishedRowAndAnotherTerminalsRowDoNotHoldTheKeys() {
-        assertEquals(KeyGate.Open, gate(records = listOf(row(OperationOutcome.Unknown, resolved = true))), "re-read frees the terminal")
-        assertEquals(KeyGate.Open, gate(records = listOf(row(OperationOutcome.Acknowledged), row(OperationOutcome.Rejected), row(OperationOutcome.NotSent))))
-        assertEquals(KeyGate.Open, gate(records = listOf(row(OperationOutcome.Sent, terminal = "term_other"))))
+        assertEquals(OperationGate.Open, gate(records = listOf(row(OperationOutcome.Unknown, resolved = true))), "re-read frees the terminal")
+        assertEquals(OperationGate.Open, gate(records = listOf(row(OperationOutcome.Acknowledged), row(OperationOutcome.Rejected), row(OperationOutcome.NotSent))))
+        assertEquals(OperationGate.Open, gate(records = listOf(row(OperationOutcome.Sent, terminal = "term_other"))))
     }
 
     @Test fun theKeyGateAndTheComposerGateShareTheirFirstFiveConditions() {

@@ -4,6 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import io.github.tuthan.paddock.ops.OperationKind
+import io.github.tuthan.paddock.ops.OperationOutcome
+import io.github.tuthan.paddock.ops.OperationRecord
 
 class ActivityTest {
     private var next = 1L
@@ -74,5 +77,26 @@ class ActivityTest {
 
     @Test fun theFirstConnectedEverIsNotAGap() {
         assertTrue(Activity.gaps(listOf(obs(ObservationKind.Connected, 10), obs(ObservationKind.StateChanged, 15, terminal = "t1"))).isEmpty())
+    }
+
+
+    private fun op(id: Long, at: Long, kind: OperationKind = OperationKind.Focus, outcome: OperationOutcome = OperationOutcome.Acknowledged) =
+        OperationRecord(id, "h", "s", "t1", 1, kind, at, outcome)
+
+    @Test fun journalRowsAppearAsPhoneActionsAndInAllButNotInTheOtherFilters() {
+        val ops = listOf(op(1, 60), op(2, 70, OperationKind.Prompt, OperationOutcome.Unknown))
+        val observations = listOf(obs(ObservationKind.StateChanged, 55, terminal = "t1"), obs(ObservationKind.Connected, 10))
+        fun rows(f: ActivityFilter) = Activity.build(observations, listOf(action), f, ops)
+        assertEquals(listOf(ops[1], ops[0]), rows(ActivityFilter.PhoneActions).filterIsInstance<ActivityItem.Operation>().map { it.record })
+        assertEquals("the ledger's mark-as-seen is still there beside them", 3, rows(ActivityFilter.PhoneActions).size)
+        assertEquals(2, rows(ActivityFilter.All).filterIsInstance<ActivityItem.Operation>().size)
+        assertTrue(rows(ActivityFilter.StateChanges).none { it is ActivityItem.Operation })
+        assertTrue(rows(ActivityFilter.Connection).none { it is ActivityItem.Operation })
+        assertEquals("without a journal there is nothing to add", emptyList<ActivityItem>(), Activity.build(emptyList(), emptyList(), ActivityFilter.PhoneActions))
+    }
+
+    @Test fun journalRowsSortAmongTheOthersByWhenTheUserAsked() {
+        val items = Activity.build(listOf(obs(ObservationKind.StateChanged, 55, terminal = "t1")), listOf(action), ActivityFilter.All, listOf(op(1, 60), op(2, 40)))
+        assertEquals(listOf(60L, 55L, 50L, 40L), items.map { it.at })
     }
 }

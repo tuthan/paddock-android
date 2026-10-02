@@ -16,7 +16,10 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -32,8 +35,9 @@ import io.github.tuthan.paddock.herdr.AgentStatus
 import io.github.tuthan.paddock.identity.HostProfileId
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
-import io.github.tuthan.paddock.ops.KeyGate
+import io.github.tuthan.paddock.ops.FocusRules
 import io.github.tuthan.paddock.ops.ManualInputRules
+import io.github.tuthan.paddock.ops.OperationGate
 import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationOutcome
 import io.github.tuthan.paddock.ops.OperationRecord
@@ -46,6 +50,9 @@ import io.github.tuthan.paddock.ui.components.KEYS_NOTE
 import io.github.tuthan.paddock.ui.screens.AgentHeader
 import io.github.tuthan.paddock.ui.screens.AgentOutput
 import io.github.tuthan.paddock.ui.screens.AgentTab
+import io.github.tuthan.paddock.ui.screens.FOCUS_FACT
+import io.github.tuthan.paddock.ui.screens.FOCUS_QUESTION
+import io.github.tuthan.paddock.ui.screens.FocusGuard
 import io.github.tuthan.paddock.ui.screens.MANUAL_INPUT_FACT
 import io.github.tuthan.paddock.ui.screens.MANUAL_KEYS_FACT
 import io.github.tuthan.paddock.ui.screens.ManualInput
@@ -67,16 +74,16 @@ class ManualInputPanelTest {
     private val key = TerminalKey(TargetRef(HostProfileId("h1"), "paddock-test", "term_1"), 2)
 
     private class Calls {
-        var enter = 0; var leave = 0; var dismiss = 0; var terminal = 0; var reread = 0
+        var enter = 0; var leave = 0; var dismiss = 0; var terminal = 0; var reread = 0; var focus = 0
         val keys = mutableListOf<OperationKind>()
     }
 
     private val calls = Calls()
     private var ui by mutableStateOf(ManualInputUi(gate = null))
 
-    private fun actions(withReread: Boolean = false) = ManualInputActions(
+    private fun actions(withReread: Boolean = false, onFocus: () -> Unit = { calls.focus++ }) = ManualInputActions(
         onEnter = { calls.enter++ }, onLeave = { calls.leave++ }, onKey = { calls.keys += it },
-        onDismissOutcome = { calls.dismiss++ }, onOpenTerminal = { calls.terminal++ }, onReread = if (withReread) ({ calls.reread++ }) else null,
+        onDismissOutcome = { calls.dismiss++ }, onOpenTerminal = { calls.terminal++ }, onReread = if (withReread) ({ calls.reread++ }) else null, onFocus = onFocus,
     )
 
     private fun showPanel(state: ManualInputUi, dark: Boolean = true, withReread: Boolean = false) {
@@ -91,7 +98,7 @@ class ManualInputPanelTest {
         OperationRecord(1, "h1", "paddock-test", "term_1", 2, kind, entered + 100, outcome)
 
     /** The real gate, so the sentences on screen are the ones the app shows. */
-    private fun gate(a: Agent? = agent(), readAt: Long? = now - 500, live: Boolean = true, records: List<OperationRecord> = emptyList(), epoch: Long? = 2L): KeyGate =
+    private fun gate(a: Agent? = agent(), readAt: Long? = now - 500, live: Boolean = true, records: List<OperationRecord> = emptyList(), epoch: Long? = 2L): OperationGate =
         ManualInputRules.gate(a, readAt, entered, live, records, key, epoch)
 
     private fun shoot(name: String) {
@@ -115,7 +122,7 @@ class ManualInputPanelTest {
 
     @Test fun enteringStartsWithAReadAndTheKeysStayOffUntilItArrives() {
         val reading = gate(readAt = null)
-        assertEquals(SendBlock.Reading, (reading as KeyGate.Closed).block)
+        assertEquals(SendBlock.Reading, (reading as OperationGate.Closed).block)
         showPanel(ManualInputUi(reading))
         rule.onAllNodesWithText("Reading the agent's state…").assertCountEquals(1)
         rule.onNodeWithText("Esc").assertIsDisplayed().assertIsNotEnabled()
@@ -146,9 +153,9 @@ class ManualInputPanelTest {
             SendBlock.InFlight to gate(records = listOf(row(OperationOutcome.Sent))),
             SendBlock.NeedsReread to gate(records = listOf(row(OperationOutcome.Unknown, OperationKind.Prompt))),
         )
-        showPanel(ManualInputUi(KeyGate.Open, readAtMillis = now - 500))
+        showPanel(ManualInputUi(OperationGate.Open, readAtMillis = now - 500))
         for ((block, g) in cases) {
-            val closed = g as KeyGate.Closed
+            val closed = g as OperationGate.Closed
             assertEquals(block, closed.block)
             ui = ManualInputUi(g, readAtMillis = now - 500)
             rule.waitForIdle()
@@ -209,6 +216,103 @@ class ManualInputPanelTest {
         assertEquals(1, calls.terminal)
     }
 
+    private val focusDialog = hasAnyAncestor(isDialog())
+
+    @Test fun desktopFocusIsOneButtonBesideManualInputWhetherOrNotTheModeIsOn() {
+        showPanel(ManualInputUi(gate = null, focus = OperationGate.Open))
+        rule.onNodeWithText("Manual input").assertIsDisplayed()
+        rule.onNodeWithText("Focus on desktop").assertIsDisplayed().assertIsEnabled().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.focus)
+        ui = ManualInputUi(gate(), readAtMillis = now - 500, focus = OperationGate.Open)
+        rule.waitForIdle()
+        rule.onNodeWithText("Manual input").assertDoesNotExist()
+        rule.onNodeWithText("Focus on desktop").assertIsDisplayed().performClick()
+        assertEquals(2, calls.focus)
+        shoot("focus-offered-dark")
+    }
+
+    @Test fun whenFocusIsOffTheButtonIsDisabledAndTheSentenceSaysWhy() {
+        val why = FocusRules.gate(agent(), now - 500, live = false, records = emptyList(), key = key) as OperationGate.Closed
+        assertEquals(SendBlock.NotLive, why.block)
+        showPanel(ManualInputUi(gate = null, focus = why))
+        rule.onNodeWithText("Focus on desktop").assertIsDisplayed().assertIsNotEnabled()
+        rule.onNodeWithText(why.sentence).assertIsDisplayed()
+        byDesc("Focus on desktop is off. ${why.sentence}").assertIsDisplayed()
+        rule.onNodeWithText("Focus on desktop").performClick()
+        assertEquals("a button that is off does nothing", 0, calls.focus)
+    }
+
+    @Test fun aCallStillOnItsWayHoldsFocusToo() {
+        showPanel(ManualInputUi(gate = null, running = true, focus = OperationGate.Open))
+        rule.onNodeWithText("Focus on desktop").assertIsNotEnabled()
+    }
+
+    @Test fun withoutAFocusGateThereIsNoFocusButton() {
+        showPanel(ManualInputUi(gate = null))
+        rule.onNodeWithText("Focus on desktop").assertDoesNotExist()
+    }
+
+    @Test fun theFirstFocusAsksWhatItDoesAndCancelChangesNothing() {
+        var confirmed by mutableStateOf(false)
+        var remembered = 0
+        rule.setContent {
+            PaddockTheme(darkTheme = true) {
+                FocusGuard(confirmed, { remembered++; confirmed = true }, { calls.focus++ }) { request ->
+                    ManualInput(ManualInputUi(gate = null, focus = OperationGate.Open), now, actions(onFocus = request))
+                }
+            }
+        }
+        rule.onNode(hasText("Focus on desktop") and !focusDialog).performClick()
+        rule.onNodeWithText(FOCUS_QUESTION).assertIsDisplayed()
+        rule.onNodeWithText(FOCUS_FACT).assertIsDisplayed()
+        assertEquals("nothing moves before the user agrees", 0, calls.focus)
+        shoot("focus-confirm-dark")
+        rule.onNodeWithText("Cancel").performClick()
+        rule.onNodeWithText(FOCUS_QUESTION).assertDoesNotExist()
+        assertEquals(0, calls.focus)
+        assertEquals("cancelling remembers nothing", 0, remembered)
+        rule.onNode(hasText("Focus on desktop") and !focusDialog).performClick()
+        rule.onNodeWithText(FOCUS_QUESTION).assertIsDisplayed()
+    }
+
+    @Test fun agreeingFocusesOnceRemembersItAndLaterTapsGoStraightThrough() {
+        var confirmed by mutableStateOf(false)
+        var remembered = 0
+        rule.setContent {
+            PaddockTheme(darkTheme = true) {
+                FocusGuard(confirmed, { remembered++; confirmed = true }, { calls.focus++ }) { request ->
+                    ManualInput(ManualInputUi(gate = null, focus = OperationGate.Open), now, actions(onFocus = request))
+                }
+            }
+        }
+        rule.onNode(hasText("Focus on desktop") and !focusDialog).performClick()
+        rule.onNode(hasText("Focus on desktop") and focusDialog).performClick()
+        rule.waitForIdle()
+        assertEquals(1, calls.focus)
+        assertEquals(1, remembered)
+        rule.onNodeWithText(FOCUS_QUESTION).assertDoesNotExist()
+        rule.onNodeWithText("Focus on desktop").performClick()
+        rule.waitForIdle()
+        assertEquals("once agreed, a tap focuses at once", 2, calls.focus)
+        rule.onNodeWithText(FOCUS_QUESTION).assertDoesNotExist()
+        assertEquals("and does not ask to be remembered again", 1, remembered)
+    }
+
+    @Test fun aFocusThatWasAlreadyConfirmedNeverAsks() {
+        var remembered = 0
+        rule.setContent {
+            PaddockTheme(darkTheme = true) {
+                FocusGuard(confirmed = true, onConfirmed = { remembered++ }, focus = { calls.focus++ }) { request ->
+                    ManualInput(ManualInputUi(gate = null, focus = OperationGate.Open), now, actions(onFocus = request))
+                }
+            }
+        }
+        rule.onNodeWithText("Focus on desktop").performClick()
+        assertEquals(1, calls.focus)
+        assertEquals(0, remembered)
+        rule.onNodeWithText(FOCUS_QUESTION).assertDoesNotExist()
+    }
+
     private fun screen(manual: ManualInputUi?, tab: AgentTab = AgentTab.Output, fontScale: Float? = null, dark: Boolean = true) {
         rule.setContent {
             val base = LocalDensity.current
@@ -237,7 +341,7 @@ class ManualInputPanelTest {
     }
 
     @Test fun twoHundredPercentFontNeverSqueezesTheOutputOutAndTheWholePanelStaysReachable() {
-        val closed = gate(live = false) as KeyGate.Closed
+        val closed = gate(live = false) as OperationGate.Closed
         screen(ManualInputUi(closed, readAtMillis = now - 500), fontScale = 2f)
         rule.onNodeWithText("line 30", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Esc").assertIsDisplayed()

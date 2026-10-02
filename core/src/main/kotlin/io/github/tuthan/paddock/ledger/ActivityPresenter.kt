@@ -1,6 +1,9 @@
 package io.github.tuthan.paddock.ledger
 
 import io.github.tuthan.paddock.attention.AgeText
+import io.github.tuthan.paddock.ops.OperationKind
+import io.github.tuthan.paddock.ops.OperationOutcome
+import io.github.tuthan.paddock.ops.OperationPresenter
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -42,6 +45,7 @@ class ActivityPresenter(
     private val titleOf: (host: String, session: String, terminalId: String) -> String? = { _, _, _ -> null },
 ) {
     private val time = DateTimeFormatter.ofPattern("HH:mm", locale)
+    private val operations = OperationPresenter(zone, locale)
     private val date = DateTimeFormatter.ofPattern("EEE d MMM", locale)
 
     fun present(items: List<ActivityItem>, nowMillis: Long): List<ActivitySection> {
@@ -78,6 +82,26 @@ class ActivityPresenter(
             val text = when (a.kind) { ActionKind.MarkSeen -> "You marked $who as seen" } +
                 when (a.outcome) { ActionOutcome.Ok -> ""; ActionOutcome.Failed -> " (failed)"; ActionOutcome.Unknown -> " (outcome unknown)" }
             ActivityRow("a-${a.id}", clock(a.at), text, ActivityRowKind.Acted, ActivityTone.Phone)
+        }
+        is ActivityItem.Operation -> {
+            val r = item.record
+            val who = title(r.host, r.session, r.terminalId)
+            val did = when (r.kind) {
+                OperationKind.Prompt -> "You prompted $who"
+                OperationKind.Esc -> "You sent Esc to $who"
+                OperationKind.CtrlC -> "You sent Ctrl+C to $who"
+                OperationKind.Focus -> "You focused $who on the desktop"
+            }
+            // The sentence says what was attempted; how it ended is in the suffix and, in full, in the detail. A prompt's text is
+            // never here: the journal keeps a hash unless the user turned on keeping it, and Activity does not show it either way.
+            val ended = when (r.outcome) {
+                OperationOutcome.Acknowledged -> ""
+                OperationOutcome.Requested, OperationOutcome.Sent -> " (in progress)"
+                OperationOutcome.Rejected -> " (refused)"
+                OperationOutcome.NotSent -> " (not sent)"
+                OperationOutcome.Unknown -> " (outcome unknown)"
+            }
+            ActivityRow("op-${r.id}", clock(r.requestedAt), did + ended, ActivityRowKind.Acted, ActivityTone.Phone, operations.describe(r))
         }
         is ActivityItem.Gap -> {
             val host = hostName(item.host).ifEmpty { "the host" }

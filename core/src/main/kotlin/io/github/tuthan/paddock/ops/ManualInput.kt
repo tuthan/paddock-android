@@ -32,10 +32,10 @@ class ManualInputMode {
     fun leaveUnless(terminalId: String?) { _current.update { if (it != null && it.terminalId == terminalId) it else null } }
 }
 
-/** Whether Esc and Ctrl+C may be sent now. Closed always carries the sentence that names the condition. */
-sealed interface KeyGate {
-    object Open : KeyGate
-    data class Closed(val block: SendBlock, val sentence: String) : KeyGate
+/** Whether an operation that needs no readiness (a manual key, desktop focus) may be sent now. Closed always carries the sentence that names the condition. */
+sealed interface OperationGate {
+    object Open : OperationGate
+    data class Closed(val block: SendBlock, val sentence: String) : OperationGate
 }
 
 /**
@@ -54,6 +54,6 @@ object ManualInputRules {
         records: List<OperationRecord>,
         key: TerminalKey,
         currentEpoch: Long? = key.epoch,
-    ): KeyGate = terminalBlock(agent, installedReadAtMillis, enteredAtMillis, live, records, key, currentEpoch)
-        ?.let { KeyGate.Closed(it.block, it.sentence) } ?: KeyGate.Open
+    ): OperationGate = terminalBlock(agent, installedReadAtMillis, enteredAtMillis, live, records, key, currentEpoch)
+        ?.let { OperationGate.Closed(it.block, it.sentence) } ?: OperationGate.Open
 }

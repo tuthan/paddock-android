@@ -54,4 +54,13 @@ class AppSettingsTest {
         file.writeText("""{"protectSensitiveScreens": true, "keepPromptText": "yes"}""")
         assertEquals(false, FileAppSettingsStore(file).load().keepPromptText, "a damaged value falls back to the private default")
     }
+
+    @Test fun desktopFocusAsksUntilTheUserHasConfirmedOnceAndRemembersIt() = runBlocking {
+        assertEquals(false, AppSettings().desktopFocusConfirmed)
+        assertEquals(false, FileAppSettingsStore(file).load().desktopFocusConfirmed)
+        FileAppSettingsStore(file).save(AppSettings(desktopFocusConfirmed = true))
+        assertEquals(true, FileAppSettingsStore(file).load().desktopFocusConfirmed, "it survives a restart")
+        file.writeText("""{"protectSensitiveScreens": true, "desktopFocusConfirmed": "yes"}""")
+        assertEquals(false, FileAppSettingsStore(file).load().desktopFocusConfirmed, "a damaged value asks again")
+    }
 }

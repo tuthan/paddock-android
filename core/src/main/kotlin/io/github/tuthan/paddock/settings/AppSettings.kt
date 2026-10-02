@@ -26,6 +26,11 @@ data class AppSettings(
      * which then shows in the unknown-outcome check ("does this text appear in the pane?") after a restart.
      */
     val keepPromptText: Boolean = false,
+    /**
+     * Not a Settings toggle: the user has been told what desktop focus does (it moves the desktop's cursor and marks a
+     * completion seen on the machine) and agreed once. Until then the first tap asks.
+     */
+    val desktopFocusConfirmed: Boolean = false,
 )
 
 interface AppSettingsStore {

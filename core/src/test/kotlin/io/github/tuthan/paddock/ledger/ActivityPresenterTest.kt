@@ -7,6 +7,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import io.github.tuthan.paddock.ops.NotReadyReason
+import io.github.tuthan.paddock.ops.OperationKind
+import io.github.tuthan.paddock.ops.OperationOutcome
+import io.github.tuthan.paddock.ops.OperationRecord
 
 class ActivityPresenterTest {
     private fun ms(day: Int, h: Int, m: Int, s: Int = 0) = ZonedDateTime.of(2026, 10, day, h, m, s, 0, ZoneOffset.UTC).toInstant().toEpochMilli()
@@ -90,4 +94,53 @@ class ActivityPresenterTest {
     }
 
     @Test fun noItemsMeansNoSections() = assertTrue(p().present(emptyList(), now).isEmpty())
+
+
+    private fun op(
+        outcome: OperationOutcome, kind: OperationKind = OperationKind.Prompt, at: Long = ms(1, 14, 3, 5), sentAt: Long? = ms(1, 14, 3, 12), code: String? = null,
+        text: String? = null, terminal: String = "term_a",
+    ) = ActivityItem.Operation(OperationRecord(++id, "laptop", "main", terminal, 1, kind, at, outcome, sentAt = sentAt, code = code, promptText = text))
+
+    private fun opRow(item: ActivityItem.Operation, titles: Map<String, String> = mapOf("term_a" to "approve edit to build.gradle")) =
+        p(titles).present(listOf(item), now).single().rows.single()
+
+    @Test fun anOperationRowSaysWhatWasAskedAndHowItEnded() {
+        val prompt = opRow(op(OperationOutcome.Acknowledged))
+        assertEquals("You prompted approve edit to build.gradle", prompt.text)
+        assertEquals("14:03", prompt.timeLabel)
+        assertEquals(ActivityRowKind.Acted to ActivityTone.Phone, prompt.kind to prompt.tone)
+        assertEquals("Prompt sent 14:03:12 · accepted by herdr, which is not a receipt for any turn", prompt.detail)
+        assertEquals("You sent Esc to approve edit to build.gradle", opRow(op(OperationOutcome.Acknowledged, OperationKind.Esc)).text)
+        assertEquals("You sent Ctrl+C to approve edit to build.gradle", opRow(op(OperationOutcome.Acknowledged, OperationKind.CtrlC)).text)
+        val focus = opRow(op(OperationOutcome.Acknowledged, OperationKind.Focus))
+        assertEquals("You focused approve edit to build.gradle on the desktop", focus.text)
+        assertEquals("The desktop now has this agent focused · 14:03:12", focus.detail)
+    }
+
+    @Test fun aRowThatDidNotFinishCleanlySaysSoInTheSentenceAndTheDetailHasTheWhy() {
+        assertEquals("You prompted approve edit to build.gradle (refused)", opRow(op(OperationOutcome.Rejected, code = "agent_blocked")).text)
+        assertEquals("prompt refused by herdr (agent_blocked)", opRow(op(OperationOutcome.Rejected, code = "agent_blocked")).detail)
+        assertEquals("You prompted approve edit to build.gradle (not sent)", opRow(op(OperationOutcome.NotSent, sentAt = null, code = NotReadyReason.Working.code)).text)
+        assertEquals("prompt not sent (working)", opRow(op(OperationOutcome.NotSent, sentAt = null, code = NotReadyReason.Working.code)).detail)
+        assertEquals("You prompted approve edit to build.gradle (in progress)", opRow(op(OperationOutcome.Sent)).text)
+        assertEquals("You prompted approve edit to build.gradle (in progress)", opRow(op(OperationOutcome.Requested, sentAt = null)).text)
+    }
+
+    @Test fun anUnknownOutcomeCarriesTheNotesOwnSentenceAndNeverASuggestionToSendAgain() {
+        val row = opRow(op(OperationOutcome.Unknown))
+        assertEquals("You prompted approve edit to build.gradle (outcome unknown)", row.text)
+        assertEquals("prompt sent 14:03:12 · outcome unknown · re-read before sending again", row.detail)
+        assertFalse("resend" in row.description.lowercase() || "retry" in row.description.lowercase())
+    }
+
+    @Test fun aPromptsTextNeverReachesActivityEvenWhenTheUserChoseToKeepIt() {
+        val kept = op(OperationOutcome.Acknowledged, text = "rotate the production signing key now")
+        val row = opRow(kept)
+        assertFalse("signing" in row.description, row.description)
+    }
+
+    @Test fun aTerminalThePhoneNoLongerHasFallsBackToAShortId() {
+        val row = opRow(op(OperationOutcome.Acknowledged, OperationKind.Esc, terminal = "term_abc123"), titles = emptyMap())
+        assertEquals("You sent Esc to agent abc123", row.text)
+    }
 }

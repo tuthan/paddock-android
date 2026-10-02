@@ -37,7 +37,11 @@ data class SeenEntry(
 
 enum class ActionKind { MarkSeen }
 
-/** [Unknown] is for a send whose outcome was lost with the link; never retried automatically (Phase 06 journals these). */
+/**
+ * How a ledger action ended. A mark-as-seen is local and finishes at once, so only [Ok] is written today. Sends to a
+ * host (prompt, keys, focus) are not ledger actions: they live in the operation journal, whose Unknown outcome is shown
+ * in Activity as an [ActivityItem.Operation].
+ */
 enum class ActionOutcome { Ok, Failed, Unknown }
 
 @Serializable

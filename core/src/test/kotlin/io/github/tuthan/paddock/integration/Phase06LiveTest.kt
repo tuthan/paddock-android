@@ -3,11 +3,14 @@ package io.github.tuthan.paddock.integration
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.identity.TerminalKey
+import io.github.tuthan.paddock.ledger.Activity
+import io.github.tuthan.paddock.ledger.ActivityFilter
+import io.github.tuthan.paddock.ledger.ActivityPresenter
 import io.github.tuthan.paddock.ledger.InMemoryLedgerStore
 import io.github.tuthan.paddock.ledger.Ledger
 import io.github.tuthan.paddock.live.MonitoredHost
 import io.github.tuthan.paddock.ops.InMemoryJournalStore
-import io.github.tuthan.paddock.ops.KeyGate
+import io.github.tuthan.paddock.ops.OperationGate
 import io.github.tuthan.paddock.ops.ManualInputMode
 import io.github.tuthan.paddock.ops.ManualInputRules
 import io.github.tuthan.paddock.ops.NotReadyReason
@@ -255,16 +258,16 @@ class Phase06LiveTest {
         val mode = ManualInputMode()
         mode.enter(terminal, clock.nowMillis(), h.reconciler.installed.value!!.epoch)
 
-        fun gate(): KeyGate {
+        fun gate(): OperationGate {
             val session = mode.current.value!!
             val installed = h.reconciler.installed.value
             val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminal }
             return ManualInputRules.gate(agent, installed?.readAtMillis, session.enteredAtMillis, h.freshness.value == Freshness.Live, h.operationRecords.value,
                 TerminalKey(key.target, session.epoch), currentEpoch = installed?.epoch)
         }
-        assertEquals(SendBlock.Reading, assertIs<KeyGate.Closed>(gate()).block, "the read from before entering is not the fresh read")
+        assertEquals(SendBlock.Reading, assertIs<OperationGate.Closed>(gate()).block, "the read from before entering is not the fresh read")
         h.refresh()
-        until("a read made after entering") { gate() == KeyGate.Open }
+        until("a read made after entering") { gate() == OperationGate.Open }
 
         val sessionKey = TerminalKey(key.target, mode.current.value!!.epoch)
         sends.sendKey(sessionKey, OperationKind.Esc)
@@ -275,7 +278,7 @@ class Phase06LiveTest {
         delay(1_000)
         assertEquals(1, events("esc").size, "a double tap is one write")
         assertEquals(listOf(OperationKind.Esc), journal.records.value.map { it.kind })
-        assertEquals(KeyGate.Open, gate(), "an acknowledged key does not hold the terminal")
+        assertEquals(OperationGate.Open, gate(), "an acknowledged key does not hold the terminal")
 
         sends.sendKey(sessionKey, OperationKind.CtrlC)
         until("the Ctrl+C outcome") { sends.outcomes.value[terminal]?.let { it.kind == OperationKind.CtrlC && it.result is OperationResult.Acknowledged<*> } == true }
@@ -295,6 +298,20 @@ class Phase06LiveTest {
         val focused = assertIs<OperationResult.Acknowledged<io.github.tuthan.paddock.herdr.Agent>>(r).value
         assertTrue(focused.focused)
         assertEquals(OperationKind.Focus, journal.records.value.single().kind)
+    }
+
+    @Test fun aFocusFromThePhoneAppearsInActivityAsAPhoneActionAndNeverShowsATextItWasNotGiven() = runBlocking<Unit> {
+        val h = host()
+        val key = h.keyOfPane()
+        val title = h.home.value!!.rows.first { it.paneId == pane }.title
+        assertIs<OperationResult.Acknowledged<*>>(h.operations!!.focus(key))
+        val items = Activity.build(emptyList(), emptyList(), ActivityFilter.PhoneActions, journal.records.value)
+        val rows = ActivityPresenter(titleOf = { _, _, t -> if (t == key.target.terminalId) title else null }).present(items, clock.nowMillis()).flatMap { it.rows }
+        val row = rows.single()
+        assertEquals("You focused $title on the desktop", row.text)
+        assertTrue(row.detail!!.startsWith("The desktop now has this agent focused"), row.detail)
+        assertEquals(1, journal.records.value.count { it.kind == OperationKind.Focus })
+        assertTrue(Activity.build(emptyList(), emptyList(), ActivityFilter.Connection, journal.records.value).isEmpty(), "not a connection event")
     }
 
     // ---- AC-06.8 ---------------------------------------------------------------------------------------------------

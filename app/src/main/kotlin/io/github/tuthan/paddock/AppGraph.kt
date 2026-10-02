@@ -176,6 +176,12 @@ class AppGraph(private val app: Application) {
         scope.launch { runCatching { settingsStore.save(_settings.value) } }
     }
 
+    /** The user agreed once to what desktop focus does; the first tap asks until this is set. */
+    fun setDesktopFocusConfirmed() {
+        _settings.value = _settings.value.copy(desktopFocusConfirmed = true)
+        scope.launch { runCatching { settingsStore.save(_settings.value) } }
+    }
+
     /** Replaces the pin with the key the host presented, after the user chose to; then reconnects. */
     suspend fun replaceKey(profile: HostProfile) {
         val changed = broker.changed.value[profile.id] ?: return

@@ -18,15 +18,18 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
-import io.github.tuthan.paddock.ledger.ActivityFilter
-import io.github.tuthan.paddock.ledger.Activity
-import io.github.tuthan.paddock.ledger.ActivityPresenter
-import io.github.tuthan.paddock.ledger.ActivitySection
 import io.github.tuthan.paddock.ledger.ActionKind
 import io.github.tuthan.paddock.ledger.ActionOutcome
+import io.github.tuthan.paddock.ledger.Activity
+import io.github.tuthan.paddock.ledger.ActivityFilter
+import io.github.tuthan.paddock.ledger.ActivityPresenter
+import io.github.tuthan.paddock.ledger.ActivitySection
 import io.github.tuthan.paddock.ledger.Observation
 import io.github.tuthan.paddock.ledger.ObservationKind
 import io.github.tuthan.paddock.ledger.PhoneAction
+import io.github.tuthan.paddock.ops.OperationKind
+import io.github.tuthan.paddock.ops.OperationOutcome
+import io.github.tuthan.paddock.ops.OperationRecord
 import io.github.tuthan.paddock.ui.screens.ActivityLog
 import io.github.tuthan.paddock.ui.theme.PaddockTheme
 import java.io.File
@@ -57,8 +60,8 @@ class ActivityLogTest {
     private val actions = listOf(PhoneAction(4, "laptop", "main", "term_b", 1, ActionKind.MarkSeen, ms(1, 14, 20), ActionOutcome.Ok))
 
     /** The real pipeline: the ledger's own builder, then the presenter. */
-    private fun sections(filter: ActivityFilter = ActivityFilter.All): List<ActivitySection> =
-        presenter.present(Activity.build(observations, actions, filter), now)
+    private fun sections(filter: ActivityFilter = ActivityFilter.All, operations: List<OperationRecord> = emptyList()): List<ActivitySection> =
+        presenter.present(Activity.build(observations, actions, filter, operations), now)
 
     private fun shoot(name: String) {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
@@ -82,6 +85,26 @@ class ActivityLogTest {
         byDesc("14:50, approve edit to build.gradle needed you, working → blocked").assertIsDisplayed()
         byDesc("14:20, You marked write release notes as seen").assertIsDisplayed()
         shoot("activity-all-dark-100")
+    }
+
+    private val journal = listOf(
+        OperationRecord(10, "laptop", "main", "term_a", 1, OperationKind.Focus, ms(1, 14, 30), OperationOutcome.Acknowledged, sentAt = ms(1, 14, 30) + 12_000),
+        OperationRecord(11, "laptop", "main", "term_a", 1, OperationKind.Prompt, ms(1, 14, 40), OperationOutcome.Unknown, sentAt = ms(1, 14, 40) + 7_000, promptText = "rotate the signing key"),
+    )
+
+    @Test fun focusAndAnUnknownPromptAppearAsPhoneActionsWithTheNotesOwnWording() {
+        show(sections(ActivityFilter.PhoneActions, journal), ActivityFilter.PhoneActions)
+        byDesc("14:30, You focused approve edit to build.gradle on the desktop, The desktop now has this agent focused · 14:30:12").assertIsDisplayed()
+        byDesc("14:40, You prompted approve edit to build.gradle (outcome unknown), prompt sent 14:40:07 · outcome unknown · re-read before sending again").assertIsDisplayed()
+        byDesc("14:20, You marked write release notes as seen").assertIsDisplayed()
+        rule.onNodeWithText("rotate the signing key", substring = true).assertDoesNotExist()
+        shoot("activity-journal-rows-dark-100")
+    }
+
+    @Test fun journalRowsAreNotInTheStateChangeOrConnectionViews() {
+        show(sections(ActivityFilter.StateChanges, journal), ActivityFilter.StateChanges)
+        rule.onNodeWithText("You focused", substring = true).assertDoesNotExist()
+        rule.onNodeWithText("You prompted", substring = true).assertDoesNotExist()
     }
 
     @Test fun disconnectedTimeIsAGapRowThatSaysSo() {

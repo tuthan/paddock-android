@@ -1,5 +1,7 @@
 package io.github.tuthan.paddock.ledger
 
+import io.github.tuthan.paddock.ops.OperationRecord
+
 enum class ActivityFilter { All, StateChanges, Connection, PhoneActions }
 
 sealed interface ActivityItem {
@@ -8,16 +10,19 @@ sealed interface ActivityItem {
     data class Observed(val observation: Observation) : ActivityItem { override val at get() = observation.at }
     data class Acted(val action: PhoneAction) : ActivityItem { override val at get() = action.at }
 
+    /** Something this phone asked a host to do (a prompt, a key, desktop focus), from the operation journal. [at] is when the user asked. */
+    data class Operation(val record: OperationRecord) : ActivityItem { override val at get() = record.requestedAt }
+
     /** Time the phone had no link to the host. [to] is null while the host is still disconnected. */
     data class Gap(val from: Long, val to: Long?, val host: String = "", val session: String = "") : ActivityItem { override val at get() = from }
 }
 
-/** The Activity screen's list, newest first. Only observations and phone actions appear, plus gaps for disconnected time. */
+/** The Activity screen's list, newest first. Only observations, phone actions and journal rows appear, plus gaps for disconnected time. */
 object Activity {
     private val stateKinds = setOf(ObservationKind.AgentAppeared, ObservationKind.StateChanged, ObservationKind.AgentGone)
     private val connectionKinds = setOf(ObservationKind.Connected, ObservationKind.Disconnected)
 
-    fun build(observations: List<Observation>, actions: List<PhoneAction>, filter: ActivityFilter): List<ActivityItem> {
+    fun build(observations: List<Observation>, actions: List<PhoneAction>, filter: ActivityFilter, operations: List<OperationRecord> = emptyList()): List<ActivityItem> {
         val items = ArrayList<ActivityItem>()
         val kinds = when (filter) {
             ActivityFilter.All -> ObservationKind.entries.toSet()
@@ -27,7 +32,10 @@ object Activity {
         }
         observations.filter { it.kind in kinds }.mapTo(items) { ActivityItem.Observed(it) }
         if (filter == ActivityFilter.All || filter == ActivityFilter.Connection) items += gaps(observations)
-        if (filter == ActivityFilter.All || filter == ActivityFilter.PhoneActions) actions.mapTo(items) { ActivityItem.Acted(it) }
+        if (filter == ActivityFilter.All || filter == ActivityFilter.PhoneActions) {
+            actions.mapTo(items) { ActivityItem.Acted(it) }
+            operations.mapTo(items) { ActivityItem.Operation(it) }
+        }
         return items.sortedByDescending { it.at }
     }
 
