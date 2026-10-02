@@ -33,8 +33,20 @@ import io.github.tuthan.paddock.ui.theme.PaddockTokens
 
 enum class AgentTab(val label: String) { Output("Output"), Terminal("Terminal") }
 
-/** What the header says about the agent. [observedAtMillis] is when the phone saw this state, null when it never has. */
-data class AgentHeader(val title: String, val context: String, val state: StateWord, val observedAtMillis: Long?)
+/**
+ * What the header says about the agent. [observedAtMillis] is when the phone saw this state, null when it never has.
+ * [agentKind] is the agent's own name ("claude"), for the composer's "Ask claude…".
+ */
+data class AgentHeader(val title: String, val context: String, val state: StateWord, val observedAtMillis: Long?, val agentKind: String? = null)
+
+/** The state the phone last saw and when: "Blocked · observed 40 s ago". Shared by the Output and Compose screens. */
+@Composable
+fun StateChip(header: AgentHeader, nowMillis: Long) {
+    val c = PaddockTokens.colors
+    val observed = header.observedAtMillis?.let { AgeText.observed(nowMillis - it) } ?: "not observed by this phone"
+    val tone = when (header.state) { StateWord.Blocked -> c.needsYou; StateWord.Done -> c.done; StateWord.Working -> c.accent; else -> null }
+    Chip("${header.state.word} · $observed", tone = tone, description = "${header.state.word}, $observed", leading = { StateDot(header.state) })
+}
 
 /**
  * One agent: who it is, then a row of chips with the state the phone last saw (and when) and whether the output is
@@ -56,6 +68,8 @@ fun AgentOutput(
     modifier: Modifier = Modifier,
     /** The Terminal tab's content. It owns the keys, so nothing is drawn under it. */
     terminal: (@Composable () -> Unit)? = null,
+    /** Opens the composer; null (no journal, so no operations) leaves the entry out. */
+    onCompose: (() -> Unit)? = null,
 ) {
     val c = PaddockTokens.colors
     val gone = output == OutputState.PaneGone || output == OutputState.AgentGone
@@ -69,13 +83,8 @@ fun AgentOutput(
                 Gone(output, onBack)
                 return@Column
             }
-            val observed = header.observedAtMillis?.let { AgeText.observed(nowMillis - it) } ?: "not observed by this phone"
-            val tone = when (header.state) { StateWord.Blocked -> c.needsYou; StateWord.Done -> c.done; StateWord.Working -> c.accent; else -> null }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
-                Chip(
-                    "${header.state.word} · $observed", tone = tone, description = "${header.state.word}, $observed",
-                    leading = { StateDot(header.state) },
-                )
+                StateChip(header, nowMillis)
                 if (tab == AgentTab.Output && output is OutputState.Showing) {
                     if (following) Chip("Following", icon = PaddockIcons.Eye, description = "Following the newest output")
                     else Chip("Paused · tap to follow", icon = PaddockIcons.Pause, tone = c.accent, onClick = onResumeFollowing, description = "Output is paused. Tap to follow the newest output")
@@ -91,7 +100,10 @@ fun AgentOutput(
                     AgentTab.Output -> OutputBody(output, nowMillis, following, onUserScrolledUp)
                 }
             }
-            if (tab == AgentTab.Output) KeyStrip()
+            if (tab == AgentTab.Output) {
+                if (onCompose != null) PromptEntry(header.agentKind, onCompose)
+                KeyStrip()
+            }
         }
     }
 }

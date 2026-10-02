@@ -221,4 +221,28 @@ class SettingsTest {
         rule.waitForIdle()
         assertTrue(secure())
     }
+
+    @Test fun keepPromptTextIsOffByDefaultAndTheSwitchSaysWhatItChanges() {
+        var kept: Boolean? = null
+        rule.setContent {
+            PaddockTheme(darkTheme = true) {
+                Settings(SettingsState(true, LocalAccess.NotRequired, "0.1.0", machine = machine), {}, {}, {}, onKeepPromptText = { kept = it })
+            }
+        }
+        rule.onNode(hasContentDescription("Keep prompt text", substring = true).or(androidx.compose.ui.test.hasText("Keep prompt text"))).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Off: the record of what you sent keeps only a fingerprint of each prompt.", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Keep prompt text").performScrollTo().performClick()
+        assertEquals(true, kept)
+    }
+
+    @Test fun theSnippetsRowShowsTheCountAndOpensTheEditor() {
+        var opened = 0
+        rule.setContent {
+            PaddockTheme(darkTheme = true) {
+                Settings(SettingsState(true, LocalAccess.NotRequired, "0.1.0", machine = machine, snippetCount = 3), {}, {}, {}, onEditSnippets = { opened++ })
+            }
+        }
+        rule.onNode(hasContentDescription("Snippets, 3 saved", substring = true)).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, opened)
+    }
 }

@@ -32,6 +32,19 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import io.github.tuthan.paddock.ssh.ImportCheck
 import io.github.tuthan.paddock.ssh.ImportedKeyInfo
+import io.github.tuthan.paddock.identity.TargetRef
+import io.github.tuthan.paddock.identity.TerminalKey
+import io.github.tuthan.paddock.ops.ComposerRules
+import io.github.tuthan.paddock.ops.OperationKind
+import io.github.tuthan.paddock.ops.OperationPresenter
+import io.github.tuthan.paddock.ops.OperationResult
+import io.github.tuthan.paddock.ops.SendBlock
+import io.github.tuthan.paddock.ops.SendGate
+import io.github.tuthan.paddock.ops.Snippets
+import io.github.tuthan.paddock.reconcile.Freshness
+import io.github.tuthan.paddock.ui.screens.Composer
+import io.github.tuthan.paddock.ui.screens.ComposerUi
+import io.github.tuthan.paddock.ui.screens.SnippetEditor
 import io.github.tuthan.paddock.ui.screens.ImportKey
 import io.github.tuthan.paddock.ui.screens.PickedKeyFile
 import kotlinx.coroutines.Dispatchers
@@ -91,7 +104,7 @@ import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class Route { Home, Output, Activity, Settings, AddMachine }
+private enum class Route { Home, Output, Compose, Snippets, Activity, Settings, AddMachine }
 
 private val NAV = listOf(NavItem("Herd", PaddockIcons.Herd), NavItem("Activity", PaddockIcons.Activity))
 
@@ -106,13 +119,15 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
     var route by rememberSaveable { mutableStateOf(Route.Home) }
     var addFrom by rememberSaveable { mutableStateOf(Route.Home) }
     var terminalId by rememberSaveable { mutableStateOf<String?>(null) }
+    var outputTab by rememberSaveable { mutableStateOf(AgentTab.Output) }
+    var snippetsFrom by rememberSaveable { mutableStateOf(Route.Settings) }
     var relayDismissed by rememberSaveable { mutableStateOf(false) }
     var reviewKey by rememberSaveable { mutableStateOf(false) }
     // Add machine opened to set up the watched machine's key (its key could not be read), not to add another.
     var editing by rememberSaveable { mutableStateOf(false) }
 
     val effective = if (boot == Boot.NoMachines) Route.AddMachine else route
-    val backTo = if (effective == Route.AddMachine) addFrom else Route.Home
+    val backTo = when (effective) { Route.AddMachine -> addFrom; Route.Compose -> Route.Output; Route.Snippets -> snippetsFrom; else -> Route.Home }
     // Registered before the screens', so a screen's own back handling (the import screen's) is asked first.
     BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { route = backTo }
     Box(modifier.fillMaxSize().safeDrawingPadding()) {
@@ -123,14 +138,23 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
                     Box(Modifier.weight(1f)) {
                         if (effective == Route.Home) HomeRoute(
                             graph, relayDismissed, { relayDismissed = it }, { reviewKey = true },
-                            onOpen = { terminalId = it; route = Route.Output }, onSettings = { route = Route.Settings },
+                            onOpen = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output }, onSettings = { route = Route.Settings },
                             onSetUpKey = { editing = true; addFrom = Route.Home; route = Route.AddMachine },
                         ) else ActivityRoute(graph)
                     }
                     PaddockNavBar(NAV, if (effective == Route.Home) 0 else 1, { route = if (it == 0) Route.Home else Route.Activity })
                 }
-                Route.Output -> OutputRoute(graph, terminalId, onBack = { route = Route.Home })
-                Route.Settings -> SettingsRoute(graph, onBack = { route = Route.Home }, onAddMachine = { editing = false; addFrom = Route.Settings; route = Route.AddMachine })
+                Route.Output -> OutputRoute(graph, terminalId, outputTab, { outputTab = it }, onBack = { route = Route.Home }, onCompose = { route = Route.Compose })
+                Route.Compose -> ComposeRoute(
+                    graph, terminalId, onBack = { route = Route.Output },
+                    onOpenTerminal = { outputTab = AgentTab.Terminal; route = Route.Output },
+                    onEditSnippets = { snippetsFrom = Route.Compose; route = Route.Snippets },
+                )
+                Route.Snippets -> SnippetsRoute(graph, onBack = { route = snippetsFrom })
+                Route.Settings -> SettingsRoute(
+                    graph, onBack = { route = Route.Home }, onAddMachine = { editing = false; addFrom = Route.Settings; route = Route.AddMachine },
+                    onEditSnippets = { snippetsFrom = Route.Settings; route = Route.Snippets },
+                )
                 Route.AddMachine -> AddMachineRoute(
                     graph, canGoBack = boot == Boot.Ready, editing = editing && boot == Boot.Ready,
                     onBack = { editing = false; route = backTo }, onAdded = { editing = false; route = Route.Home; relayDismissed = false },
@@ -213,7 +237,7 @@ private fun HomeRoute(
 }
 
 @Composable
-private fun OutputRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit) {
+private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onTab: (AgentTab) -> Unit, onBack: () -> Unit, onCompose: () -> Unit) {
     val view by graph.hostUi.view.collectAsState()
     val settings by graph.settings.collectAsState()
     val profile by graph.profile.collectAsState()
@@ -244,15 +268,15 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit
     val output by feed.state.collectAsState()
     val following by feed.following.collectAsState()
     val home by host.home.collectAsState()
-    var tab by rememberSaveable { mutableStateOf(AgentTab.Output) }
     val now = rememberNow()
     val row: AgentRowModel? = home?.rows?.firstOrNull { it.key.target.terminalId == terminalId }
     // "claude · api › tab 2 · main · laptop": what it is, where, which session, which machine.
     val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
-    val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis)
+    val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
     AgentOutput(
-        header, output, following, now, tab, { tab = it }, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() },
+        header, output, following, now, tab, onTab, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() },
         terminal = { TerminalRoute(graph, host, terminalId) },
+        onCompose = if (host.sends != null) onCompose else null,
     )
 }
 
@@ -296,6 +320,73 @@ private fun TerminalRoute(graph: AppGraph, host: io.github.tuthan.paddock.live.M
     TerminalTab(view, actions)
 }
 
+/**
+ * The prompt composer for one agent. Everything it shows is derived from the host's installed read, the journal and the
+ * send controller; the text and the epoch the screen opened in survive a rotation. A send runs in the host's scope, so
+ * turning the phone cannot cancel it, and a refused one keeps the text.
+ */
+@Composable
+private fun ComposeRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit, onOpenTerminal: () -> Unit, onEditSnippets: () -> Unit) {
+    val view by graph.hostUi.view.collectAsState()
+    val settings by graph.settings.collectAsState()
+    val profile by graph.profile.collectAsState()
+    val host = (view.phase as? HostPhase.Monitoring)?.host
+    val sends = host?.sends
+    if (terminalId == null || host == null || sends == null) {
+        Column(Modifier.fillMaxSize()) {
+            ScreenHeader("Prompt", onBack = onBack, compact = true)
+            Column(Modifier.padding(PaddockTokens.spacing.gutter), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("This agent is not available right now. Its machine is not connected.", style = PaddockTokens.type.body, color = PaddockTokens.colors.title)
+                PaddockButton("Back", onBack, kind = ButtonKind.Ghost, icon = PaddockIcons.Back)
+            }
+        }
+        return
+    }
+    SecureWindow(settings.protectSensitiveScreens)
+    val installed by host.reconciler.installed.collectAsState()
+    val freshness by host.freshness.collectAsState()
+    val records by host.operationRecords.collectAsState()
+    val outcomes by sends.outcomes.collectAsState()
+    val running by sends.running.collectAsState()
+    val home by host.home.collectAsState()
+    val snippets by graph.snippets.collectAsState()
+    val now = rememberNow()
+    val presenter = remember { OperationPresenter() }
+    var text by rememberSaveable { mutableStateOf("") }
+    var openedAt by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
+    var openedEpoch by rememberSaveable { mutableStateOf<Long?>(null) }
+    val liveEpoch = installed?.epoch
+    LaunchedEffect(liveEpoch) { if (openedEpoch == null && liveEpoch != null) openedEpoch = liveEpoch }
+    // A read made after the composer opened is what first enables Send.
+    LaunchedEffect(Unit) { host.refresh() }
+
+    val row = home?.rows?.firstOrNull { it.key.target.terminalId == terminalId }
+    val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminalId }
+    val key = TerminalKey(TargetRef(host.profile.hostId, host.sessionName, terminalId), openedEpoch ?: liveEpoch ?: 0L)
+    val gate = ComposerRules.gate(agent, installed?.readAtMillis, openedAt, freshness == Freshness.Live, records, key, text, currentEpoch = liveEpoch)
+    val outcome = outcomes[terminalId]
+    // The text goes with the prompt: cleared only when herdr accepted it, kept for a refusal, a failure or an unknown outcome.
+    LaunchedEffect(outcome) { if (outcome != null && outcome.kind == OperationKind.Prompt && outcome.result is OperationResult.Acknowledged<*>) text = "" }
+
+    val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
+    val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
+    val stale = (gate as? SendGate.Closed)?.block == SendBlock.Stale
+    Composer(
+        ComposerUi(header, gate, sending = terminalId in running, outcome = outcome?.let { presenter.line(it.kind, it.result) }, snippets = snippets),
+        now, text, { text = it }, onSnippet = { text = Snippets.insert(text, it) },
+        onSend = { sends.prompt(key, text, settings.keepPromptText) },
+        onBack = onBack, onEditSnippets = onEditSnippets, onOpenTerminal = onOpenTerminal, onDismissOutcome = { sends.dismiss(terminalId) },
+        gateActionLabel = if (stale) "Re-read" else null,
+        onGateAction = { openedEpoch = liveEpoch; openedAt = System.currentTimeMillis(); host.refresh() },
+    )
+}
+
+@Composable
+private fun SnippetsRoute(graph: AppGraph, onBack: () -> Unit) {
+    val snippets by graph.snippets.collectAsState()
+    SnippetEditor(snippets, onChange = { graph.setSnippets(it) }, onBack = onBack)
+}
+
 @Composable
 private fun ActivityRoute(graph: AppGraph) {
     val profile by graph.profile.collectAsState()
@@ -310,7 +401,8 @@ private fun ActivityRoute(graph: AppGraph) {
 }
 
 @Composable
-private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () -> Unit) {
+private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () -> Unit, onEditSnippets: () -> Unit) {
+    val snippets by graph.snippets.collectAsState()
     val settings by graph.settings.collectAsState()
     val profile by graph.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
@@ -328,11 +420,13 @@ private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () 
     val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "unknown" }
     val machine = profile?.let { p -> MachineSummary(p.name, "${p.user}@${p.host}:${p.port}", p.session) }
     Settings(
-        SettingsState(settings.protectSensitiveScreens, access, version, machine = machine, herdrVersion = view.herdrVersion),
+        SettingsState(settings.protectSensitiveScreens, access, version, machine = machine, herdrVersion = view.herdrVersion, keepPromptText = settings.keepPromptText, snippetCount = snippets.size),
         onProtectSensitive = { scope.launch { graph.setProtectSensitive(it) } },
         onOpenSystemSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
         onBack = onBack,
         onAddMachine = onAddMachine,
+        onKeepPromptText = { graph.setKeepPromptText(it) },
+        onEditSnippets = onEditSnippets,
     )
 }
 

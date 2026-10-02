@@ -24,7 +24,8 @@ class ComposerRulesTest {
 
     private fun gate(
         a: Agent? = agent(), readAtMillis: Long? = readAt, live: Boolean = true, records: List<OperationRecord> = emptyList(), text: String = "hello", strict: Boolean = false,
-    ) = ComposerRules.gate(a, readAtMillis, opened, live, records, key, text, strict)
+        epoch: Long? = key.epoch,
+    ) = ComposerRules.gate(a, readAtMillis, opened, live, records, key, text, strict, epoch)
 
     private fun closed(g: SendGate) = assertIs<SendGate.Closed>(g)
 
@@ -40,6 +41,13 @@ class ComposerRulesTest {
         assertEquals(SendBlock.Reading, closed(gate(readAtMillis = 999)).block)
         assertEquals(SendBlock.Reading, closed(gate(readAtMillis = null)).block)
         assertEquals(SendGate.Open(true), gate(readAtMillis = opened), "a read made at the moment of opening counts")
+    }
+
+    @Test fun aReconnectSinceTheScreenOpenedClosesSendUntilItReReads() {
+        val g = closed(gate(epoch = key.epoch + 1))
+        assertEquals(SendBlock.Stale, g.block)
+        assertTrue("re-established" in g.sentence && "Re-read" in g.sentence)
+        assertEquals(SendGate.Open(true), gate(epoch = null), "with no installed epoch there is nothing to compare")
     }
 
     @Test fun everyNotReadyConditionIsNamedBySentence() {
@@ -86,7 +94,7 @@ class ComposerRulesTest {
     }
 
     @Test fun everyClosedCaseHasASentence() {
-        val cases = listOf(gate(a = null), gate(live = false), gate(readAtMillis = null), gate(records = listOf(row(OperationOutcome.Sent))),
+        val cases = listOf(gate(a = null), gate(live = false), gate(epoch = key.epoch + 1), gate(readAtMillis = null), gate(records = listOf(row(OperationOutcome.Sent))),
             gate(records = listOf(row(OperationOutcome.Unknown))), gate(agent(AgentStatus.Working)), gate(text = ""), gate(text = "x".repeat(AgentOperations.MAX_PROMPT_CHARS + 1)))
         assertEquals(SendBlock.entries.toSet(), cases.map { closed(it).block }.toSet(), "the matrix reaches every block")
         assertTrue(cases.all { closed(it).sentence.isNotBlank() })

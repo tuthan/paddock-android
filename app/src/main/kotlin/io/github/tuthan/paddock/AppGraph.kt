@@ -14,6 +14,9 @@ import io.github.tuthan.paddock.lifecycle.AndroidTriggers
 import io.github.tuthan.paddock.lifecycle.ConnectionOwner
 import io.github.tuthan.paddock.lifecycle.SessionFactory
 import io.github.tuthan.paddock.live.HostSessionController
+import io.github.tuthan.paddock.ops.FileJournalStore
+import io.github.tuthan.paddock.ops.FileSnippetStore
+import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.relay.sha256Hex
 import io.github.tuthan.paddock.settings.AppSettings
@@ -58,6 +61,9 @@ class AppGraph(private val app: Application) {
     val gate = LocalNetworkGate(app)
     val ledger = Ledger(FileLedgerStore(File(files, "ledger.json"))) { System.currentTimeMillis() }
     private val settingsStore = FileAppSettingsStore(File(files, "settings.json"))
+    /** What the phone asked of each terminal, written before it asks. Never deleted for an unknown outcome. */
+    val journal = OperationJournal(FileJournalStore(File(files, "operations.json")), clock)
+    private val snippetStore = FileSnippetStore(File(files, "snippets.json"))
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
     val owner = ConnectionOwner(scope, SessionFactory { profile -> connect(profile) }, clock)
@@ -86,10 +92,15 @@ class AppGraph(private val app: Application) {
     private val _settings = MutableStateFlow(AppSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
+    private val _snippets = MutableStateFlow<List<String>>(emptyList())
+    /** The user's own prompt snippets: on this phone only, never synced. */
+    val snippets: StateFlow<List<String>> = _snippets.asStateFlow()
+
     fun start() {
         triggers.install()
         scope.launch {
             _settings.value = settingsStore.load()
+            _snippets.value = runCatching { snippetStore.load() }.getOrDefault(emptyList())
             val all = runCatching { profiles.list() }.getOrDefault(emptyList())
             // The machine watched last time, not whichever sorts first.
             val watched = all.firstOrNull { it.id == _settings.value.watchedProfileId } ?: all.firstOrNull()
@@ -137,7 +148,7 @@ class AppGraph(private val app: Application) {
         val c = controller
         if (c != null && c.profile == profile) { c.resume(); return@synchronized }
         c?.stop()
-        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin)
+        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin, journal = journal)
         controller = next
         hostUi.attach(next)
         next.start()
@@ -149,6 +160,17 @@ class AppGraph(private val app: Application) {
     suspend fun setProtectSensitive(on: Boolean) {
         _settings.value = _settings.value.copy(protectSensitiveScreens = on)
         settingsStore.save(_settings.value)
+    }
+
+    /** Saved in the graph's scope, so leaving the screen straight after an edit cannot drop the write. */
+    fun setSnippets(items: List<String>) {
+        _snippets.value = items
+        scope.launch { runCatching { snippetStore.save(items) } }
+    }
+
+    fun setKeepPromptText(on: Boolean) {
+        _settings.value = _settings.value.copy(keepPromptText = on)
+        scope.launch { runCatching { settingsStore.save(_settings.value) } }
     }
 
     /** Replaces the pin with the key the host presented, after the user chose to; then reconnects. */

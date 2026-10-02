@@ -26,6 +26,7 @@ object PaddockIcons {
     val Plus = icon("plus", "M12 5v14M5 12h14")
     val Eye = icon("eye", "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z", circle(12f, 12f, 3f))
     val Pause = icon("pause", "M9 6v12M15 6v12")
+    val Send = icon("send", "M12 19V5M5 12l7-7 7 7")
     val Machine = icon("machine", rect(3f, 4f, 18f, 12f, 2f), "M8 20h8M12 16v4")
     val File = icon("file", "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5")
 

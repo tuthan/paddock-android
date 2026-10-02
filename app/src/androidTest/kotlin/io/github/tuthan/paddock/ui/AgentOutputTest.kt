@@ -222,4 +222,21 @@ class AgentOutputTest {
         rule.onNodeWithText("Following").assertIsDisplayed()
         shoot("output-showing-light-100")
     }
+
+    @Test fun theComposerEntryNamesTheAgentAndOpensTheComposerOnlyOnTheOutputTab() {
+        var composed = 0
+        rule.setContent {
+            PaddockTheme(darkTheme = true) {
+                AgentOutput(header.copy(agentKind = "claude"), showing(), true, now, AgentTab.Output, {}, {}, {}, {}, onCompose = { composed++ })
+            }
+        }
+        rule.onNodeWithText("Ask claude…").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        rule.onNode(hasContentDescription("Write a prompt for claude")).performClick()
+        assertEquals(1, composed)
+    }
+
+    @Test fun withoutAJournalThereIsNoComposerEntry() {
+        show(showing())
+        rule.onNodeWithText("Ask the agent…").assertDoesNotExist()
+    }
 }

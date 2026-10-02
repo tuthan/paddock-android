@@ -51,6 +51,9 @@ data class SettingsState(
     /** The herdr version the watched host reported in its last read, when there is one. */
     val herdrVersion: String? = null,
     val protocol: Int = 22,
+    /** Whether the record of what was sent keeps the prompt text (off: a fingerprint only). */
+    val keepPromptText: Boolean = false,
+    val snippetCount: Int = 0,
 )
 
 const val RECONNECT_SHORT = "Fast retries, then up to every 2 minutes"
@@ -68,6 +71,8 @@ fun Settings(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onAddMachine: () -> Unit = {},
+    onKeepPromptText: (Boolean) -> Unit = {},
+    onEditSnippets: () -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     var reconnectOpen by rememberSaveable { mutableStateOf(false) }
@@ -119,11 +124,31 @@ fun Settings(
             Section("Appearance")
             Fixed("Theme", "Paddock palette", "Follows the system light or dark setting.")
 
+            Section("Prompts")
+            Row(
+                Modifier.card(c, padded = false)
+                    .clickable(role = Role.Button, onClickLabel = "Edit snippets", onClick = onEditSnippets)
+                    .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
+                    .semantics(mergeDescendants = true) { contentDescription = "Snippets, ${state.snippetCount} saved, kept on this phone and synced nowhere" },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Snippets", style = PaddockTokens.type.rowTitle, color = c.title)
+                    Text("${state.snippetCount} saved · kept on this phone, synced nowhere", style = PaddockTokens.type.secondary, color = c.dim)
+                }
+                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
+            }
+
             Section("Privacy")
             Toggle(
                 "Protect sensitive screens", state.protectSensitiveScreens, onProtectSensitive, Modifier.card(c, padded = false),
                 inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                 detail = "Blocks screenshots and blanks the recent-apps preview on screens that can show agent output.",
+            )
+            Toggle(
+                "Keep prompt text", state.keepPromptText, onKeepPromptText, Modifier.card(c, padded = false),
+                inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                detail = "Off: the record of what you sent keeps only a fingerprint of each prompt. On: it keeps the text too, on this phone only.",
             )
 
             Section("About")
