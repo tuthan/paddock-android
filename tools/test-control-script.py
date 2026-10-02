@@ -13,16 +13,22 @@ SCRIPT = os.path.join(HERE, "..", "host", "paddock-control.py")
 
 FAKE = textwrap.dedent('''\
     #!/usr/bin/env python3
-    import json, os, sys, time
+    import json, os, sys, threading, time
     log = open(os.environ["FAKE_LOG"], "a")
     def note(kind, value): log.write(json.dumps([kind, value]) + "\\n"); log.flush()
     note("argv", sys.argv[1:])
     mode = os.environ.get("FAKE_MODE", "normal")
-    def emit(obj): sys.stdout.write(json.dumps(obj) + "\\n"); sys.stdout.flush()
+    # One writer at a time, and nothing after the closing frame: real herdr says terminal.closed last. Without the lock the
+    # chatty thread, waiting on the same stdout, could slip one more frame in between the closing frame and os._exit.
+    emit_lock, closing = threading.Lock(), [False]
+    def emit(obj, last=False):
+        with emit_lock:
+            if closing[0]: return
+            closing[0] = last
+            sys.stdout.write(json.dumps(obj) + "\\n"); sys.stdout.flush()
     emit({"type": "terminal.frame", "seq": 1, "encoding": "ansi", "full": True, "width": 60, "height": 20, "bytes": ""})
     if mode == "exit3": sys.exit(3)
     if mode == "chatty":
-        import threading
         def spew():
             blob = "x" * 8192
             while True:
@@ -33,13 +39,13 @@ FAKE = textwrap.dedent('''\
         try: obj = json.loads(line)
         except ValueError: continue
         if obj.get("type") == "terminal.release" and mode != "stubborn":
-            emit({"type": "terminal.closed", "reason": "detached"}); os._exit(0)
+            emit({"type": "terminal.closed", "reason": "detached"}, last=True); os._exit(0)
         if obj.get("type") == "terminal.input":
             emit({"type": "terminal.frame", "seq": 2, "encoding": "ansi", "full": False, "width": 60, "height": 20, "bytes": obj.get("bytes", "")})
     # stdin closed: herdr detaches the controller
     if mode == "stubborn": time.sleep(60)
     note("eof", True)
-    emit({"type": "terminal.closed", "reason": "detached"})
+    emit({"type": "terminal.closed", "reason": "detached"}, last=True)
 ''')
 
 
