@@ -14,6 +14,8 @@ import io.github.tuthan.paddock.output.OutputRead
 import io.github.tuthan.paddock.output.OutputFeed
 import io.github.tuthan.paddock.ops.AgentOperations
 import io.github.tuthan.paddock.ops.OperationJournal
+import io.github.tuthan.paddock.ops.OperationRecord
+import io.github.tuthan.paddock.ops.SendController
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.SshSession
 import io.github.tuthan.paddock.reconcile.Freshness
@@ -88,6 +90,12 @@ class MonitoredHost(
 
     /** Prompt, Esc, Ctrl+C and desktop focus for this host's agents, journaled; null when no journal was given. */
     val operations: AgentOperations? = journal?.let { AgentOperations(relay, it, { reconciler.installed.value }, clock) }
+
+    /** Runs those operations in this host's scope and keeps the newest outcome per terminal; null with [operations]. */
+    val sends: SendController? = operations?.let { SendController(scope, it) }
+
+    /** Every row of the operation journal, oldest first: the composer's gate and Activity read it. Empty without a journal. */
+    val operationRecords: StateFlow<List<OperationRecord>> = journal?.records ?: MutableStateFlow(emptyList<OperationRecord>()).asStateFlow()
     val freshness: StateFlow<Freshness> get() = monitor.freshness
     /** Why the monitor last went stale (a dropped stream, a failed or unreadable read), for the host's banner. */
     val lastLoss: StateFlow<Throwable?> get() = monitor.lastLoss

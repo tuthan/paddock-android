@@ -45,4 +45,13 @@ class AppSettingsTest {
         FileAppSettingsStore(file).save(AppSettings(false))
         assertEquals(listOf("settings.json"), dir.list()!!.toList())
     }
+
+    @Test fun promptTextIsNotKeptByDefaultAndTheChoiceSurvivesANewStore() = runBlocking {
+        assertEquals(false, AppSettings().keepPromptText)
+        assertEquals(false, FileAppSettingsStore(file).load().keepPromptText)
+        FileAppSettingsStore(file).save(AppSettings(keepPromptText = true))
+        assertEquals(true, FileAppSettingsStore(file).load().keepPromptText)
+        file.writeText("""{"protectSensitiveScreens": true, "keepPromptText": "yes"}""")
+        assertEquals(false, FileAppSettingsStore(file).load().keepPromptText, "a damaged value falls back to the private default")
+    }
 }

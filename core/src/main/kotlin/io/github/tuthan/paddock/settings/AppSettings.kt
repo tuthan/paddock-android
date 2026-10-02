@@ -21,6 +21,11 @@ data class AppSettings(
     val protectSensitiveScreens: Boolean = true,
     /** The machine to watch on start; null (or a removed profile) falls back to the first one. */
     val watchedProfileId: String? = null,
+    /**
+     * Off by default: the operation journal records a prompt as a SHA-256 and nothing else. On, it also keeps the text,
+     * which then shows in the unknown-outcome check ("does this text appear in the pane?") after a restart.
+     */
+    val keepPromptText: Boolean = false,
 )
 
 interface AppSettingsStore {

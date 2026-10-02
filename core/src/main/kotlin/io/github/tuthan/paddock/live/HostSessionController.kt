@@ -11,6 +11,7 @@ import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.ledger.Ledger
 import io.github.tuthan.paddock.lifecycle.Connection
 import io.github.tuthan.paddock.lifecycle.Lease
+import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.DownReason
 import io.github.tuthan.paddock.ports.SshSession
@@ -82,6 +83,8 @@ class HostSessionController(
     /** The pinned `paddock-control.py` and its hash; null leaves terminals observe-only. Installed only when the user asks for control. */
     private val controlScript: ByteArray? = null,
     private val controlSha256: String? = null,
+    /** The phone's operation journal; without one the host is read-only (no prompt, key or focus operations). */
+    private val journal: OperationJournal? = null,
 ) {
     private val _phase = MutableStateFlow<HostPhase>(HostPhase.Connecting)
     val phase: StateFlow<HostPhase> = _phase.asStateFlow()
@@ -208,6 +211,7 @@ class HostSessionController(
             scope, profile, chosen.name, session, path, chosen.socketPath, ledger, clock, foreground, herdr,
             beforeReconnect = { installer.verifiedPath(home) },
             controlHelper = controlScript?.let { SshControlHelper(RelayInstaller(session, it, controlSha256!!, fileName = "paddock-control.py")) },
+            journal = journal,
         )
         synchronized(lock) {
             if (stopped) return
