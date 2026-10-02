@@ -2,7 +2,7 @@
 
 A phone companion for [herdr](https://herdr.dev): answer the herd, do not operate it. Native Kotlin, SSH only, no server of its own. Plan and phase notes live in the docs vault under `herdr-android/`.
 
-Status: Phase 05 implemented (manual terminal): the Terminal tab observes a pane read-only, and on request controls it through a pinned host helper with a lease; see `docs/terminal-control.md`. Phase 04 (monitor UI) is implemented before it. `:core` is JVM only (enforced); `:app` is the Android shell. Device-only acceptance is open (Phase 04: AC-04.8 recents thumbnail, AC-04.9 cold start, TalkBack; Phase 05: airplane mode and the scroll timing on a physical phone); see the vault's evidence reports.
+Status: Phase 06 implemented (composer and operation journal): prompts to a ready agent, Esc and Ctrl+C only in Manual input, desktop focus with a first-time question, and a write-ahead journal whose unknown outcomes are re-read and never resent; see `docs/operations.md`. Phase 05 (manual terminal, `docs/terminal-control.md`) and Phase 04 (monitor UI) come before it. `:core` is JVM only (enforced); `:app` is the Android shell. Device-only acceptance is open (Phase 04: AC-04.8 recents thumbnail, AC-04.9 cold start, TalkBack; Phase 05: airplane mode and the scroll timing on a physical phone; Phase 06: the link cut on a physical phone); see the vault's evidence reports.
 
 ## Requirements
 
@@ -17,6 +17,7 @@ tools/check.sh --offline                     # the CI gate: wrapper, SDK revisio
 ./tools/check-pins.sh                        # installed herdr and the pinned schema and fixtures still agree
 ./tools/check-pins.sh --pins-only            # the same hash and coverage rule without herdr (part of tools/check.sh)
 ./tools/test-scripts.sh                      # self-tests of the fixture and pin scripts against a fake herdr
+python3 tools/test-blackhole-proxy.py        # self-test of the link-cut proxy the device flows use (part of tools/check.sh)
 ```
 
 `FixturePinTest` and `tools/check-pins.sh` fail if a file pinned in `protocol/SOURCE.json` is missing or differs, or if any file under `protocol/` (except `SOURCE.json` itself) or `fixtures/` is not pinned there. A fixture change is a deliberate pin update: recapture, `git rm` the previous version's corpus and schema if herdr moved, run `tools/pin-source.sh <date> <host>` (it reads the herdr version and protocol from the corpus and refuses stale files), review the diff, commit schema, fixtures and manifest together.
@@ -27,7 +28,7 @@ tools/check.sh --offline                     # the CI gate: wrapper, SDK revisio
 | --- | --- |
 | JVM unit | `./gradlew :core:test` (fixtures only; no herdr needed) |
 | JVM integration | Phase 03 onward: start the disposable session (below), set `PADDOCK_TEST_SOCKET` to its socket |
-| Emulator | `tools/run-ui-tests.sh <serial>` (Compose tests plus screenshots); `tools/run-live-e2e.sh <serial>` (the whole app against a throwaway sshd and `paddock-test`); `tools/run-terminal-e2e.sh <serial>` (the Terminal tab: observe, conflict, takeover, typing, scroll timing, resize, release, rotation, background and Back while controlling, link loss; `LINK_CUT=airplane` for real airplane mode on Android 12+); `tools/check-permission-flow.py` (Android 17, adb-driven); `tools/check-add-machine-ime.py` (keyboard and rotation) |
+| Emulator | `tools/run-ui-tests.sh <serial>` (Compose tests plus screenshots); `tools/run-live-e2e.sh <serial>` (the whole app against a throwaway sshd and `paddock-test`); `tools/run-terminal-e2e.sh <serial>` (the Terminal tab: observe, conflict, takeover, typing, scroll timing, resize, release, rotation, background and Back while controlling, link loss; `LINK_CUT=airplane` for real airplane mode on Android 12+); `tools/run-operations-e2e.sh <serial>` (Phase 06 through the whole app, in two stages with an app restart: Manual input and Esc, the focus question, prompts, the journal read from the phone, a link cut right after a prompt was delivered, Re-read, Ctrl+C; uses `tools/fake-agent.py`, `tools/blackhole-proxy.py` and `tools/cut-after-submit.py`); `tools/check-permission-flow.py` (Android 17, adb-driven); `tools/check-add-machine-ime.py` (keyboard and rotation) |
 | Physical | Phase 02 onward |
 
 ## The disposable session
