@@ -40,7 +40,10 @@ class SubscribeTimeout : Exception("subscription not acknowledged in time")
  */
 class RelayTimeout(val method: String, val after: Duration) : Exception("herdr did not answer $method within $after")
 
-/** The stream of a subscription was closed by herdr's `events_lost`: the caller must mark itself stale and reconcile. */
+/**
+ * The stream of a subscription was closed by herdr's `events_lost`: the caller must mark itself stale and reconcile. herdr 0.9.1 has
+ * never been seen to send it (docs/events-under-load.md); a loss shows as silent gaps or as a stream that ends without a marker.
+ */
 class EventsLost : Exception("events lost")
 
 /** Splits a byte stream into UTF-8 lines. A line that grows past [limit] bytes before its newline is a protocol error. */

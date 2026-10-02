@@ -49,9 +49,11 @@ object EventMapper {
     )
     private val STATUS_NAMES = setOf("pane.agent_status_changed", "pane_agent_status_changed")
     /**
-     * The mapping note says an `events_lost` closes the stream. Its wire form is not in the schema and no fixture
-     * captured one, so it is accepted both as an event name and (see [isEventsLost]) as an error code. Unobserved
-     * until a test can provoke it.
+     * The mapping note says an `events_lost` closes the stream. Its wire form is not in the schema, and herdr 0.9.1 never
+     * sent one in any run that tried to provoke it (docs/events-under-load.md): a subscriber that falls behind silently
+     * loses events (with the newest kept) or, when it stops reading altogether, is cut off with no marker. It stays accepted
+     * as an event name and as an error code (see [isEventsLost]) in case a later herdr sends it, but nothing may wait for it:
+     * events are only invalidations, and the heartbeat read and the reconnect after a closed stream are what catch a loss.
      */
     const val EVENTS_LOST = "events_lost"
 
