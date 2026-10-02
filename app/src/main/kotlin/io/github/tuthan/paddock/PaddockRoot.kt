@@ -96,6 +96,7 @@ import io.github.tuthan.paddock.ui.screens.AddMachineState
 import io.github.tuthan.paddock.ui.screens.AgentHeader
 import io.github.tuthan.paddock.ui.screens.AgentOutput
 import io.github.tuthan.paddock.ui.screens.AgentTab
+import io.github.tuthan.paddock.ui.screens.outputFeedVisible
 import io.github.tuthan.paddock.ui.screens.ESC_ENTERS_MANUAL_NOTE
 import io.github.tuthan.paddock.ui.screens.FocusGuard
 import io.github.tuthan.paddock.ui.screens.HerdHome
@@ -276,15 +277,19 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onT
     SecureWindow(settings.protectSensitiveScreens)
     val feed = remember(host, terminalId) { host.outputFeed(terminalId) }
     val owner = LocalContext.current as? LifecycleOwner
+    var resumed by remember(feed) { mutableStateOf(false) }
     DisposableEffect(feed, owner) {
         feed.start()
         val observer = LifecycleEventObserver { _, e ->
-            when (e) { Lifecycle.Event.ON_RESUME -> feed.setVisible(true); Lifecycle.Event.ON_PAUSE -> feed.setVisible(false); else -> Unit }
+            when (e) { Lifecycle.Event.ON_RESUME -> resumed = true; Lifecycle.Event.ON_PAUSE -> resumed = false; else -> Unit }
         }
         owner?.lifecycle?.addObserver(observer)
-        if (owner?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == true) feed.setVisible(true)
+        if (owner?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == true) resumed = true
         onDispose { owner?.lifecycle?.removeObserver(observer); feed.setVisible(false); feed.stop() }
     }
+    // Polling needs the screen in the foreground and the Output tab shown: the Terminal tab streams on its own.
+    val outputShown = outputFeedVisible(resumed, tab)
+    LaunchedEffect(feed, outputShown) { feed.setVisible(outputShown) }
     val output by feed.state.collectAsState()
     val following by feed.following.collectAsState()
     val home by host.home.collectAsState()

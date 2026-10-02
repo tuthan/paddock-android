@@ -39,6 +39,13 @@ import io.github.tuthan.paddock.ui.theme.PaddockTokens
 enum class AgentTab(val label: String) { Output("Output"), Terminal("Terminal") }
 
 /**
+ * Whether the Output tab's feed may poll: the screen is in the foreground and Output is the tab shown. The Terminal tab streams
+ * the terminal itself; a hidden Output feed would go on opening an SSH command and parsing a 200-line capture every second
+ * beside it, for text nobody can see.
+ */
+fun outputFeedVisible(resumed: Boolean, tab: AgentTab): Boolean = resumed && tab == AgentTab.Output
+
+/**
  * What the header says about the agent. [observedAtMillis] is when the phone saw this state, null when it never has.
  * [agentKind] is the agent's own name ("claude"), for the composer's "Ask claude…".
  */
