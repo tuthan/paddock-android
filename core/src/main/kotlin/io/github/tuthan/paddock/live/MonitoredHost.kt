@@ -96,6 +96,9 @@ class MonitoredHost(
 
     /** Every row of the operation journal, oldest first: the composer's gate and Activity read it. Empty without a journal. */
     val operationRecords: StateFlow<List<OperationRecord>> = journal?.records ?: MutableStateFlow(emptyList<OperationRecord>()).asStateFlow()
+
+    /** Why the journal's saved rows cannot be read (every operation is off then), or null. Always null without a journal. */
+    val journalUnreadable: StateFlow<String?> = journal?.unreadable ?: MutableStateFlow<String?>(null).asStateFlow()
     val freshness: StateFlow<Freshness> get() = monitor.freshness
     /** Why the monitor last went stale (a dropped stream, a failed or unreadable read), for the host's banner. */
     val lastLoss: StateFlow<Throwable?> get() = monitor.lastLoss

@@ -24,8 +24,8 @@ class ComposerRulesTest {
 
     private fun gate(
         a: Agent? = agent(), readAtMillis: Long? = readAt, live: Boolean = true, records: List<OperationRecord> = emptyList(), text: String = "hello", strict: Boolean = false,
-        epoch: Long? = key.epoch,
-    ) = ComposerRules.gate(a, readAtMillis, opened, live, records, key, text, strict, epoch)
+        epoch: Long? = key.epoch, journalUnreadable: Boolean = false,
+    ) = ComposerRules.gate(a, readAtMillis, opened, live, records, key, text, strict, epoch, journalUnreadable)
 
     private fun closed(g: SendGate) = assertIs<SendGate.Closed>(g)
 
@@ -81,6 +81,20 @@ class ComposerRulesTest {
         assertEquals(SendGate.Open(true), gate(records = listOf(row(OperationOutcome.Acknowledged), row(OperationOutcome.Rejected), row(OperationOutcome.NotSent))))
     }
 
+    @Test fun anUnreadableJournalClosesEveryOperationWhateverTheTerminalLooksLike() {
+        val g = closed(gate(journalUnreadable = true))
+        assertEquals(SendBlock.JournalUnreadable, g.block)
+        assertTrue("Settings" in g.sentence && "duplicate" in g.sentence)
+        // The terminal's own conditions are read first: a gone agent or a dead link is the more useful sentence.
+        assertEquals(SendBlock.AgentGone, closed(gate(a = null, journalUnreadable = true)).block)
+        assertEquals(SendBlock.NotLive, closed(gate(live = false, journalUnreadable = true)).block)
+        // The key and focus gates share the rule.
+        val agent = agent()
+        assertEquals(SendBlock.JournalUnreadable, (ManualInputRules.gate(agent, readAt, opened, true, emptyList(), key, journalUnreadable = true) as OperationGate.Closed).block)
+        assertEquals(SendBlock.JournalUnreadable, (FocusRules.gate(agent, readAt, true, emptyList(), key, journalUnreadable = true) as OperationGate.Closed).block)
+        assertEquals(OperationGate.Open, ManualInputRules.gate(agent, readAt, opened, true, emptyList(), key))
+    }
+
     @Test fun anotherTerminalsRowsDoNotMatter() {
         assertEquals(SendGate.Open(true), gate(records = listOf(row(OperationOutcome.Sent, terminal = "term_other"))))
     }
@@ -95,7 +109,7 @@ class ComposerRulesTest {
 
     @Test fun everyClosedCaseHasASentence() {
         val cases = listOf(gate(a = null), gate(live = false), gate(epoch = key.epoch + 1), gate(readAtMillis = null), gate(records = listOf(row(OperationOutcome.Sent))),
-            gate(records = listOf(row(OperationOutcome.Unknown))), gate(agent(AgentStatus.Working)), gate(text = ""), gate(text = "x".repeat(AgentOperations.MAX_PROMPT_CHARS + 1)))
+            gate(records = listOf(row(OperationOutcome.Unknown))), gate(journalUnreadable = true), gate(agent(AgentStatus.Working)), gate(text = ""), gate(text = "x".repeat(AgentOperations.MAX_PROMPT_CHARS + 1)))
         assertEquals(SendBlock.entries.toSet(), cases.map { closed(it).block }.toSet(), "the matrix reaches every block")
         assertTrue(cases.all { closed(it).sentence.isNotBlank() })
     }

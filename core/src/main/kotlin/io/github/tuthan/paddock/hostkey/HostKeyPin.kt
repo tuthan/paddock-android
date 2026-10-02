@@ -107,8 +107,15 @@ class HostKeyPolicy(private val store: HostKeyStore, private val clock: () -> Lo
         pinOf(profileId, endpoint, presented).also { store.save(it) }
     }
 
-    suspend fun replaceChanged(profileId: String, endpoint: String, presented: PresentedHostKey): PinnedHostKey = writeLock.withLock {
-        check(store.find(profileId) != null) { "profile $profileId has no pin to replace" }
+    /**
+     * Replaces the pin the user was shown ([expected]) with the key they approved. Fails when the stored pin is no longer
+     * [expected], so an approval cannot overwrite a pin that changed after the dialog was drawn.
+     */
+    suspend fun replaceChanged(profileId: String, endpoint: String, expected: PinnedHostKey, presented: PresentedHostKey): PinnedHostKey = writeLock.withLock {
+        val current = checkNotNull(store.find(profileId)) { "profile $profileId has no pin to replace" }
+        check(HostKeyAlgorithms.keyType(current.algorithm) == HostKeyAlgorithms.keyType(expected.algorithm) && MessageDigest.isEqual(current.blob, expected.blob)) {
+            "the pin for $profileId is not the one that was shown"
+        }
         pinOf(profileId, endpoint, presented).also { store.save(it) }
     }
 

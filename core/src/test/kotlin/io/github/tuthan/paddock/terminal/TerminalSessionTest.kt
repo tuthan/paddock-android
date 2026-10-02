@@ -7,9 +7,12 @@ import io.github.tuthan.paddock.ports.ExecResult
 import io.github.tuthan.paddock.ports.LinkState
 import io.github.tuthan.paddock.ports.SshSession
 import io.github.tuthan.paddock.ports.StreamChannel
+import io.github.tuthan.paddock.ports.TerminalEngine
 import io.github.tuthan.paddock.relay.FakeStream
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineScope
@@ -71,7 +74,7 @@ class TerminalSessionTest {
     private val fast = TerminalOptions(leaseSeconds = 15, pingEvery = 40.milliseconds, releaseWait = 200.milliseconds, resyncWait = 200.milliseconds, viewportSettle = 80.milliseconds)
     private val clock = Clock { System.currentTimeMillis() }
 
-    private fun session(host: TestHost, helper: ControlHelperPort? = FakeHelper(), pane: () -> String? = { "w1:p1" }, engine: VtEngine = VtEngine()) =
+    private fun session(host: TestHost, helper: ControlHelperPort? = FakeHelper(), pane: () -> String? = { "w1:p1" }, engine: TerminalEngine = VtEngine()) =
         TerminalSession(scope, host, HerdrCli(herdr, "paddock-test"), pane, helper, clock, engine, fast)
 
     private fun frame(seq: Long, full: Boolean, text: String, w: Int = 60, h: Int = 20): String {
@@ -461,5 +464,43 @@ class TerminalSessionTest {
     @Test fun framesAreNeverKeptAfterTheSessionIsClosed() {
         val host = TestHost(); val s = session(host); observing(host, s)
         s.close(); waitUntil("cleared") { s.view.value == TerminalView() }
+    }
+
+    /** An engine that cannot draw until [open] is released: a screen that is slower than the host. */
+    private class StalledEngine(private val inner: VtEngine = VtEngine(), val open: CountDownLatch = CountDownLatch(1)) : TerminalEngine by inner {
+        override fun feed(bytes: ByteArray, offset: Int, length: Int) { open.await(20, TimeUnit.SECONDS); inner.feed(bytes, offset, length) }
+    }
+
+    @Test fun outputFasterThanTheScreenIsHeldOnTheHostNotQueuedHere() {
+        val engine = StalledEngine(); val host = TestHost(); val s = session(host, engine = engine)
+        try {
+            s.open(40, 25)
+            waitUntil("observer opened") { host.observers.isNotEmpty() }
+            val o = host.observers.last()
+            repeat(500) { o.feed(frame(it + 1L, full = it == 0, text = if (it == 0) "${ESC}[2J${ESC}[1;1Hhello" else "${ESC}[1;1Hx")) }
+            Thread.sleep(400)
+            // The actor is stuck drawing the first frame: the reader may hold that one, a full queue and the one it is waiting to add.
+            val taken = o.taken
+            assertTrue(taken <= TerminalLimits.STREAM_QUEUE_LINES + 3, "the reader took $taken of 500 frames while the screen was stuck")
+        } finally { engine.open.countDown() }
+        waitUntil("every frame drawn once the screen catches up") { s.view.value.frames == 500L }
+        assertEquals(500, host.observers.last().taken)
+    }
+
+    @Test fun aCommandOvertakesFramesQueuedBehindASlowScreen() {
+        val engine = StalledEngine(); val host = TestHost(); val s = session(host, engine = engine)
+        try {
+            s.open(40, 25)
+            waitUntil("observer opened") { host.observers.isNotEmpty() }
+            val o = host.observers.last()
+            repeat(200) { o.feed(frame(it + 1L, full = it == 0, text = if (it == 0) "${ESC}[2J${ESC}[1;1Hhello" else "${ESC}[1;1Hx")) }
+            Thread.sleep(200)
+            s.suspend()
+        } finally { engine.open.countDown() }
+        // The suspend is answered before the frames behind it: the screen is forgotten and the stale frames are never drawn.
+        waitUntil("suspended") { s.view.value.mode == TerminalMode.Idle }
+        Thread.sleep(300)
+        assertTrue(s.view.value.frames < 50L, "frames drawn after the suspend: ${s.view.value.frames}")
+        assertNull(s.view.value.grid)
     }
 }

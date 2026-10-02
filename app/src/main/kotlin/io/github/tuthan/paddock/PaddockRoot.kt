@@ -317,11 +317,12 @@ private fun focusView(host: MonitoredHost, terminalId: String): FocusView {
     val installed by host.reconciler.installed.collectAsState()
     val freshness by host.freshness.collectAsState()
     val records by host.operationRecords.collectAsState()
+    val journalUnreadable by host.journalUnreadable.collectAsState()
     val target = TargetRef(host.profile.hostId, host.sessionName, terminalId)
-    val epoch = installed?.epoch ?: return FocusView(null, FocusRules.gate(null, null, freshness == Freshness.Live, records, TerminalKey(target, 0L)))
+    val epoch = installed?.epoch ?: return FocusView(null, FocusRules.gate(null, null, freshness == Freshness.Live, records, TerminalKey(target, 0L), journalUnreadable = journalUnreadable != null))
     val key = TerminalKey(target, epoch)
     val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminalId }
-    return FocusView(key, FocusRules.gate(agent, installed?.readAtMillis, freshness == Freshness.Live, records, key, currentEpoch = epoch))
+    return FocusView(key, FocusRules.gate(agent, installed?.readAtMillis, freshness == Freshness.Live, records, key, currentEpoch = epoch, journalUnreadable = journalUnreadable != null))
 }
 
 /** What the agent screen and the composer share about Manual input for one terminal: the session, its key and its gate. */
@@ -333,10 +334,11 @@ private fun manualView(graph: AppGraph, host: MonitoredHost, terminalId: String)
     val installed by host.reconciler.installed.collectAsState()
     val freshness by host.freshness.collectAsState()
     val records by host.operationRecords.collectAsState()
+    val journalUnreadable by host.journalUnreadable.collectAsState()
     val mine = session?.takeIf { it.terminalId == terminalId } ?: return ManualView(null, null, null)
     val key = TerminalKey(TargetRef(host.profile.hostId, host.sessionName, terminalId), mine.epoch)
     val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminalId }
-    val gate = ManualInputRules.gate(agent, installed?.readAtMillis, mine.enteredAtMillis, freshness == Freshness.Live, records, key, currentEpoch = installed?.epoch)
+    val gate = ManualInputRules.gate(agent, installed?.readAtMillis, mine.enteredAtMillis, freshness == Freshness.Live, records, key, currentEpoch = installed?.epoch, journalUnreadable = journalUnreadable != null)
     return ManualView(mine, key, gate)
 }
 
@@ -493,7 +495,8 @@ private fun ComposeRoute(
     val row = home?.rows?.firstOrNull { it.key.target.terminalId == terminalId }
     val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminalId }
     val key = TerminalKey(TargetRef(host.profile.hostId, host.sessionName, terminalId), openedEpoch ?: liveEpoch ?: 0L)
-    val gate = ComposerRules.gate(agent, installed?.readAtMillis, openedAt, freshness == Freshness.Live, records, key, text, currentEpoch = liveEpoch)
+    val journalUnreadable by host.journalUnreadable.collectAsState()
+    val gate = ComposerRules.gate(agent, installed?.readAtMillis, openedAt, freshness == Freshness.Live, records, key, text, currentEpoch = liveEpoch, journalUnreadable = journalUnreadable != null)
     val outcome = outcomes[terminalId]
     // The text goes with the prompt: cleared only when herdr accepted it, kept for a refusal, a failure or an unknown outcome.
     // The draft remembers which accepted row it has already gone with, so an old accepted outcome shown again clears nothing.
@@ -522,8 +525,14 @@ private fun ComposeRoute(
         onSend = { sends.prompt(key, text, settings.keepPromptText) },
         onBack = onBack, onEditSnippets = onEditSnippets, onOpenTerminal = onOpenTerminal, onDismissOutcome = { sends.dismiss(terminalId) },
         onReread = reread, onDismissReread = { sends.dismissReread(terminalId) },
-        gateActionLabel = if (stale || block == SendBlock.NeedsReread) "Re-read" else null,
-        onGateAction = { if (stale) { openedEpoch = liveEpoch; openedAt = System.currentTimeMillis(); host.refresh() } else reread() },
+        gateActionLabel = when { stale || block == SendBlock.NeedsReread -> "Re-read"; block == SendBlock.JournalUnreadable -> "Retry"; else -> null },
+        onGateAction = {
+            when {
+                stale -> { openedEpoch = liveEpoch; openedAt = System.currentTimeMillis(); host.refresh() }
+                block == SendBlock.JournalUnreadable -> graph.journal.retryLoad()
+                else -> reread()
+            }
+        },
         // A key goes only inside Manual input and under the keys' own gate. With the mode off, Esc is the way in: the tap turns the
         // mode on (which starts with a read) and sends nothing; the keys open once that read is installed, and a second tap sends.
         escEnabled = terminalId !in running && (if (keyGate == null) liveEpoch != null else keyGate is OperationGate.Open),
@@ -592,14 +601,18 @@ private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () 
     }
     val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "unknown" }
     val machine = profile?.let { p -> MachineSummary(p.name, "${p.user}@${p.host}:${p.port}", p.session) }
+    val journalUnreadable by graph.journal.unreadable.collectAsState()
     Settings(
-        SettingsState(settings.protectSensitiveScreens, access, version, machine = machine, herdrVersion = view.herdrVersion, keepPromptText = settings.keepPromptText, snippetCount = snippets.size),
+        SettingsState(settings.protectSensitiveScreens, access, version, machine = machine, herdrVersion = view.herdrVersion, keepPromptText = settings.keepPromptText, snippetCount = snippets.size, journalUnreadable = journalUnreadable),
         onProtectSensitive = { scope.launch { graph.setProtectSensitive(it) } },
         onOpenSystemSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
         onBack = onBack,
         onAddMachine = onAddMachine,
         onKeepPromptText = { graph.setKeepPromptText(it) },
         onEditSnippets = onEditSnippets,
+        onRetryJournal = { graph.journal.retryLoad() },
+        // Off the main thread: setting the file aside is disk work. A failure leaves the journal unreadable, which the card keeps saying.
+        onResetJournal = { scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { graph.journal.resetUnreadable() } } },
     )
 }
 
@@ -768,11 +781,11 @@ private fun HostKeyDialogs(graph: AppGraph, reviewKey: Boolean, dismissReview: (
     val changed by graph.broker.changed.collectAsState()
     val c = profile?.let { changed[it.id] }
     val scope = rememberCoroutineScope()
-    if (reviewKey && c != null && profile != null) {
-        val p = profile!!
+    if (reviewKey && c != null) {
         FingerprintDialog(
             HostKeyPrompts.changed(c.endpoint, HostKeyState.Changed(c.pin, c.presented)),
-            onTrust = { scope.launch { graph.replaceKey(p); dismissReview() } },
+            // The tap approves the key drawn here: `c` names its attempt, and replaceKey refuses it once a later attempt replaced it.
+            onTrust = { scope.launch { graph.replaceKey(c); dismissReview() } },
             onCancel = dismissReview,
         )
     }

@@ -54,6 +54,8 @@ data class SettingsState(
     /** Whether the record of what was sent keeps the prompt text (off: a fingerprint only). */
     val keepPromptText: Boolean = false,
     val snippetCount: Int = 0,
+    /** Why the saved record of sends cannot be read, or null. While it is set no prompt, key or focus is sent. */
+    val journalUnreadable: String? = null,
 )
 
 const val RECONNECT_SHORT = "Fast retries, then up to every 2 minutes"
@@ -73,15 +75,34 @@ fun Settings(
     onAddMachine: () -> Unit = {},
     onKeepPromptText: (Boolean) -> Unit = {},
     onEditSnippets: () -> Unit = {},
+    onRetryJournal: () -> Unit = {},
+    onResetJournal: () -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     var reconnectOpen by rememberSaveable { mutableStateOf(false) }
+    var resetOpen by rememberSaveable { mutableStateOf(false) }
+    if (resetOpen) {
+        ConfirmDialog(
+            "Reset the record of sends?",
+            "Paddock keeps the unreadable file aside and starts an empty record. Any send whose outcome was unknown is forgotten, so look at the agent before you send again: an earlier prompt may already have arrived.",
+            confirm = "Reset the record", onConfirm = { resetOpen = false; onResetJournal() }, onCancel = { resetOpen = false }, danger = true,
+        )
+    }
     Column(modifier.fillMaxSize()) {
         ScreenHeader("Settings", onBack = onBack)
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(start = PaddockTokens.spacing.gutter, end = PaddockTokens.spacing.gutter, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (state.journalUnreadable != null) {
+                Section("Send record")
+                Banner(
+                    "Sending is off. The record of what this phone sent cannot be read, so a duplicate prompt cannot be ruled out. ${state.journalUnreadable}",
+                    actionLabel = "Retry", onAction = onRetryJournal,
+                )
+                PaddockButton("Reset the record…", { resetOpen = true }, kind = ButtonKind.Danger)
+            }
+
             Section("Machine")
             if (state.machine != null) {
                 Fixed(state.machine.name, null, listOfNotNull(state.machine.endpoint, state.machine.session?.let { "session $it" } ?: "default session").joinToString(" · "), mono = true)

@@ -140,4 +140,50 @@ class HostKeyBrokerTest {
         b.clearChanged("laptop")
         assertTrue(b.changed.value.isEmpty())
     }
+
+    private val pin get() = PinnedHostKey("laptop", "10.0.0.2:22", key.algorithm, key.blob, key.fingerprint, 1_000L, 2_000L)
+
+    @Test fun anApprovalOfTheWarningThatWasShownTakesItOnce() {
+        val b = HostKeyBroker()
+        b.recordChanged("laptop", "10.0.0.2:22", ConnectFailure.HostKeyChanged(pin, other))
+        val shown = b.changed.value.getValue("laptop")
+        val taken = assertNotNull(b.takeChanged("laptop", shown.id))
+        assertEquals(other.fingerprint, taken.presented.fingerprint)
+        assertTrue(b.changed.value.isEmpty())
+        assertNull(b.takeChanged("laptop", shown.id))
+    }
+
+    @Test fun aLaterFailedAttemptReplacesTheWarningAndAnApprovalOfTheEarlierOneTakesNothing() {
+        val b = HostKeyBroker()
+        val third = PresentedHostKey("ssh-ed25519", byteArrayOf(7, 7, 7))
+        b.recordChanged("laptop", "10.0.0.2:22", ConnectFailure.HostKeyChanged(pin, other))
+        val shown = b.changed.value.getValue("laptop")
+        b.recordChanged("laptop", "10.0.0.2:22", ConnectFailure.HostKeyChanged(pin, third))
+        assertNull(b.takeChanged("laptop", shown.id))
+        // The newer warning, with the key the host presented last, is untouched.
+        assertEquals(third.fingerprint, b.changed.value.getValue("laptop").presented.fingerprint)
+    }
+
+    @Test fun aWarningClearedByAGoodConnectCannotBeApproved() {
+        val b = HostKeyBroker()
+        b.recordChanged("laptop", "10.0.0.2:22", ConnectFailure.HostKeyChanged(pin, other))
+        val shown = b.changed.value.getValue("laptop")
+        b.clearChanged("laptop")
+        assertNull(b.takeChanged("laptop", shown.id))
+    }
+
+    @Test fun aTakenWarningComesBackOnlyIfNothingNewerWasRecorded() {
+        val b = HostKeyBroker()
+        b.recordChanged("laptop", "10.0.0.2:22", ConnectFailure.HostKeyChanged(pin, other))
+        val shown = b.changed.value.getValue("laptop")
+        val taken = assertNotNull(b.takeChanged("laptop", shown.id))
+        b.restoreChanged(taken)
+        assertEquals(shown.id, b.changed.value.getValue("laptop").id)
+
+        val again = assertNotNull(b.takeChanged("laptop", shown.id))
+        b.recordChanged("laptop", "10.0.0.2:22", ConnectFailure.HostKeyChanged(pin, PresentedHostKey("ssh-ed25519", byteArrayOf(5))))
+        val newer = b.changed.value.getValue("laptop").id
+        b.restoreChanged(again)
+        assertEquals(newer, b.changed.value.getValue("laptop").id)
+    }
 }

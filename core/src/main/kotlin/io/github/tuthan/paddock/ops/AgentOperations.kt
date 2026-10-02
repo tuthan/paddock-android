@@ -20,6 +20,16 @@ import kotlinx.serialization.json.put
 data class AgentRead(val agent: Agent, val readAtMillis: Long)
 
 /**
+ * herdr's answer to a write named another terminal than the one the phone meant. The write goes to a pane id in a request
+ * of its own, after the read that checked the pane, and herdr's agent calls take no terminal id, so a pane that changed hands
+ * between the two (a move) takes the write. The answer is the first and only place that shows it. The row becomes Unknown,
+ * never Acknowledged, and its note starts with [PREFIX] so every screen can say where the write really went.
+ */
+class Misdelivered(expected: String, actual: String) : Exception("$PREFIX: herdr answered for terminal $actual, not $expected") {
+    companion object { const val PREFIX = "misdelivered" }
+}
+
+/**
  * The phone's mutations on an agent: a prompt, Esc, Ctrl+C and desktop focus. Each is one [Operation]: the pane is
  * resolved from the installed snapshot in the epoch the screen opened in, the row is written, a fresh `agent.get`
  * confirms the pane still holds that terminal (and, for a prompt, that [isReady] holds), and one request goes out
@@ -86,7 +96,7 @@ class AgentOperations(
             },
             send = { pane, before ->
                 relay.call("agent.prompt", buildJsonObject { put("target", pane); put("text", text) }, timeout = sendTimeout, beforeWrite = before)
-                    .decode<AgentInfoResult>("agent_prompted").agent
+                    .decode<AgentInfoResult>("agent_prompted").agent.answeredFor(key)
             })
     }
 
@@ -108,13 +118,17 @@ class AgentOperations(
         preflight = { pane -> identity(key, pane) },
         send = { pane, before ->
             relay.call("agent.focus", buildJsonObject { put("target", pane) }, timeout = sendTimeout, beforeWrite = before)
-                .decode<AgentInfoResult>("agent_info").agent
+                .decode<AgentInfoResult>("agent_info").agent.answeredFor(key)
         })
 
     private suspend fun identity(key: TerminalKey, pane: String): Preflight {
         val agent = readPane(pane).agent
         return if (agent.terminalId != key.target.terminalId) movedPane() else Preflight.Go(agent.stateChangeSeq)
     }
+
+    /** The agent herdr answered for must be the terminal this operation meant: the write has already happened, so a mismatch is reported, not undone. */
+    private fun Agent.answeredFor(key: TerminalKey): Agent =
+        if (terminalId == key.target.terminalId) this else throw Misdelivered(key.target.terminalId, terminalId)
 
     private fun movedPane() = Preflight.Refuse("pane_moved", "The pane now holds another terminal. Re-read and try again.")
 

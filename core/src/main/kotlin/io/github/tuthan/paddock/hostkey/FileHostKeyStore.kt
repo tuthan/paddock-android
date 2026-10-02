@@ -1,5 +1,6 @@
 package io.github.tuthan.paddock.hostkey
 
+import io.github.tuthan.paddock.storage.DurableFile
 import java.io.File
 import java.io.IOException
 import java.util.Base64
@@ -16,7 +17,7 @@ import kotlinx.serialization.json.Json
 class HostKeyStoreCorrupt(cause: Throwable?) : IOException("host key store is unreadable", cause)
 
 /**
- * Pins in one JSON file, rewritten whole through a temp file and rename. A handful of entries per phone, so a
+ * Pins in one JSON file, rewritten whole through [DurableFile] (a synced temp file, an atomic rename, a synced directory). A handful of entries per phone, so a
  * database buys nothing yet; the [HostKeyStore] port keeps a later move to Room local. Keep [file] in app-private,
  * backup-excluded storage.
  */
@@ -66,14 +67,12 @@ class FileHostKeyStore(private val file: File) : HostKeyStore {
     }
 
     private suspend fun store(pins: Map<String, PinnedHostKey>) = withContext(Dispatchers.IO) {
-        file.absoluteFile.parentFile?.let { check(it.isDirectory || it.mkdirs()) { "cannot create ${it.path}" } }
         val text = json.encodeToString(
             FileDto(pins = pins.values.sortedBy { it.profileId }.map {
                 Dto(it.profileId, it.endpoint, it.algorithm, Base64.getEncoder().encodeToString(it.blob), it.fingerprint, it.firstSeenMillis, it.lastSeenMillis)
             }),
         )
-        val tmp = File(file.path + ".tmp")
-        tmp.writeText(text)
-        if (!tmp.renameTo(file)) { tmp.delete(); throw IOException("could not write ${file.name}") }
+        // Synced file, atomic move, synced directory: a pin the user approved is still there after a power loss.
+        DurableFile.replace(file, text.toByteArray(Charsets.UTF_8))
     }
 }

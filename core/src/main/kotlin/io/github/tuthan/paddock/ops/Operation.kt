@@ -17,8 +17,8 @@ sealed interface Preflight {
 /**
  * How an operation ended, for the screen to show as it is. [Acknowledged] means herdr answered success: the write was
  * accepted, which is not a receipt for any turn. [Unknown] must be drawn as unknown. Every other case is certain:
- * [Rejected] is herdr's own refusal, and [NotSent], [Stale], [Busy], [NeedsReread] and [JournalFailed] mean nothing
- * reached the host.
+ * [Rejected] is herdr's own refusal, and [NotSent], [Stale], [Busy], [NeedsReread], [JournalFailed] and [JournalUnreadable]
+ * mean nothing reached the host.
  */
 sealed interface OperationResult<out T> {
     data class Acknowledged<T>(val record: OperationRecord, val value: T) : OperationResult<T>
@@ -33,6 +33,8 @@ sealed interface OperationResult<out T> {
     data class Stale(val key: TerminalKey) : OperationResult<Nothing>
     /** The journal row could not be made durable, so the send did not happen. */
     data class JournalFailed(val cause: String) : OperationResult<Nothing>
+    /** The saved journal cannot be read, so no earlier outcome can be ruled out. Nothing was written; see [OperationJournal.resetUnreadable]. */
+    data class JournalUnreadable(val reason: String) : OperationResult<Nothing>
 }
 
 /**
@@ -67,6 +69,7 @@ object Operation {
                 is Begin.Started -> b.record
                 is Begin.InFlight -> return OperationResult.Busy(b.first)
                 is Begin.NeedsReread -> return OperationResult.NeedsReread(b.unknown)
+                is Begin.Unreadable -> return OperationResult.JournalUnreadable(b.reason)
             }
         } catch (e: JournalWriteFailed) { return OperationResult.JournalFailed(e.message.orEmpty()) }
 

@@ -245,4 +245,40 @@ class SettingsTest {
         rule.onNode(hasContentDescription("Snippets, 3 saved", substring = true)).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         assertEquals(1, opened)
     }
+
+    @Test fun anUnreadableSendRecordSaysSendingIsOffAndOffersRetryAndAResetThatAsksFirst() {
+        var retried = 0; var reset = 0
+        rule.setContent {
+            PaddockTheme(darkTheme = true) {
+                Settings(
+                    SettingsState(true, LocalAccess.NotRequired, "0.1.0", machine = machine, journalUnreadable = "the saved journal is not valid"),
+                    {}, {}, {}, onRetryJournal = { retried++ }, onResetJournal = { reset++ },
+                )
+            }
+        }
+        rule.onNodeWithText("Sending is off.", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("the saved journal is not valid", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Retry").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, retried)
+
+        // The reset forgets unknown outcomes, so a tap only asks; Cancel is the safe choice and changes nothing.
+        rule.onNodeWithText("Reset the record…").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+        rule.onNodeWithText("Reset the record of sends?").assertIsDisplayed()
+        rule.onNodeWithText("an earlier prompt may already have arrived", substring = true).assertIsDisplayed()
+        assertEquals(0, reset)
+        rule.onNodeWithText("Cancel").performClick()
+        rule.onNodeWithText("Reset the record of sends?").assertDoesNotExist()
+        assertEquals(0, reset)
+
+        rule.onNodeWithText("Reset the record…").performScrollTo().performClick()
+        rule.onNodeWithText("Reset the record").performClick()
+        assertEquals(1, reset)
+        rule.onNodeWithText("Reset the record of sends?").assertDoesNotExist()
+    }
+
+    @Test fun aReadableSendRecordShowsNoSendRecordCard() {
+        rule.setContent { PaddockTheme(darkTheme = true) { Settings(SettingsState(true, LocalAccess.NotRequired, "0.1.0", machine = machine), {}, {}, {}) } }
+        rule.onNodeWithText("Sending is off.", substring = true).assertDoesNotExist()
+        rule.onNodeWithText("Reset the record…").assertDoesNotExist()
+    }
 }

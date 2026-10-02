@@ -39,6 +39,7 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
         is OperationResult.NeedsReread -> ResultLine("An earlier send's outcome is unknown. Re-read before sending again.", ResultTone.Refused, unknown = true)
         is OperationResult.Stale -> ResultLine("This screen is out of date. Re-read the agent, then try again. Nothing was sent.", ResultTone.Problem)
         is OperationResult.JournalFailed -> ResultLine("Nothing was sent: the operation record could not be written on this phone.", ResultTone.Problem)
+        is OperationResult.JournalUnreadable -> ResultLine("Nothing was sent: the record of earlier sends on this phone cannot be read. Retry or reset it in Settings.", ResultTone.Problem)
     }
 
     /**
@@ -82,6 +83,8 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
     fun unknownText(record: OperationRecord): String {
         val sent = record.sentAt?.let { " ${at(it)}" }.orEmpty()
         val tail = record.resolvedAt?.let { "re-read ${short(it)}" } ?: "re-read before sending again"
+        // Known, not unknown: herdr named another terminal in its answer, so the write landed on a different agent.
+        if (record.note.startsWith(Misdelivered.PREFIX)) return "${record.kind.wire} sent$sent · herdr says it reached a different agent than this one · check that agent · $tail"
         return "${record.kind.wire} sent$sent · outcome unknown · $tail"
     }
 

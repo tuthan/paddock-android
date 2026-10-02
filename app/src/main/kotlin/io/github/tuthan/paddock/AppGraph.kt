@@ -2,6 +2,7 @@ package io.github.tuthan.paddock
 
 import android.app.Application
 import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.hostkey.ChangedKey
 import io.github.tuthan.paddock.hostkey.FileHostKeyStore
 import io.github.tuthan.paddock.hostkey.HostKeyBroker
 import io.github.tuthan.paddock.hostkey.HostKeyPolicy
@@ -182,12 +183,22 @@ class AppGraph(private val app: Application) {
         scope.launch { runCatching { settingsStore.save(_settings.value) } }
     }
 
-    /** Replaces the pin with the key the host presented, after the user chose to; then reconnects. */
-    suspend fun replaceKey(profile: HostProfile) {
-        val changed = broker.changed.value[profile.id] ?: return
-        hostKeyPolicy.replaceChanged(profile.id, changed.endpoint, changed.presented)
-        broker.clearChanged(profile.id)
-        owner.refresh(profile.id)
+    /**
+     * Replaces the pin with the key the user was shown ([shown], the warning the dialog drew), then reconnects, so the new pin
+     * is checked by a fresh connection. Returns false and changes nothing when that warning is no longer the one on record
+     * (cleared by a good connect, or replaced by a later failed attempt that may carry another key): the tap approved a key,
+     * and only that key.
+     */
+    suspend fun replaceKey(shown: ChangedKey): Boolean {
+        val c = broker.takeChanged(shown.profileId, shown.id) ?: return false
+        try {
+            hostKeyPolicy.replaceChanged(c.profileId, c.endpoint, c.pin, c.presented)
+        } catch (e: Throwable) {
+            broker.restoreChanged(c)
+            throw e
+        }
+        owner.refresh(c.profileId)
+        return true
     }
 
     private suspend fun connect(profile: HostProfile) = run {
@@ -197,7 +208,9 @@ class AppGraph(private val app: Application) {
             KeyKind.Imported -> importedKeys.load(profile.importedKeyId!!) ?: throw ConnectFailure.BadKey("the imported key is missing")
         }
         try {
+            // A connect that got through presented the pinned key (or was pinned just now): an older changed-key warning is stale.
             connector.connect(target, auth) { presented -> broker.askFirstTrust(profile.id, target.endpoint, presented) }
+                .also { broker.clearChanged(profile.id) }
         } catch (e: ConnectFailure.HostKeyChanged) {
             broker.recordChanged(profile.id, target.endpoint, e)
             throw e

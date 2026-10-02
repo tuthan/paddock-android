@@ -4,7 +4,7 @@ import io.github.tuthan.paddock.herdr.Agent
 import io.github.tuthan.paddock.identity.TerminalKey
 
 /** Why Send is off. The composer shows the sentence beside the button, so every disabled state names its condition. */
-enum class SendBlock { AgentGone, NotLive, Stale, Reading, InFlight, NeedsReread, NotReady, EmptyPrompt, TooLong }
+enum class SendBlock { AgentGone, NotLive, Stale, Reading, JournalUnreadable, InFlight, NeedsReread, NotReady, EmptyPrompt, TooLong }
 
 sealed interface SendGate {
     /** Send may be tapped. [hintsUnreported]: herdr gave no readiness hint for this agent, so only its status backs the send. */
@@ -36,9 +36,10 @@ object ComposerRules {
         text: String,
         requireHints: Boolean = false,
         currentEpoch: Long? = key.epoch,
+        journalUnreadable: Boolean = false,
     ): SendGate {
         fun closed(block: SendBlock, sentence: String, why: NotReadyReason? = null) = SendGate.Closed(block, sentence, why)
-        terminalBlock(agent, installedReadAtMillis, openedAtMillis, live, records, key, currentEpoch)?.let { return it }
+        terminalBlock(agent, installedReadAtMillis, openedAtMillis, live, records, key, currentEpoch, journalUnreadable)?.let { return it }
         val present = requireNotNull(agent) { "terminalBlock lets only a present agent through" }
         val ready = when (val r = isReady(present, readAtMillis = installedReadAtMillis!!, nowMillis = installedReadAtMillis, requireHints = requireHints)) {
             is Readiness.NotReady -> return closed(SendBlock.NotReady, r.primary.sentence, r.primary)
@@ -55,7 +56,8 @@ object ComposerRules {
  * connection is still the one the screen opened in, whether the phone has read the agent since the screen opened, and
  * any earlier operation on the terminal. Null means the terminal can take an operation; what each kind needs beyond
  * that (readiness and text for a prompt, nothing for a key) is the caller's. When this returns null, [installedReadAtMillis]
- * is not null and [agent] is present.
+ * is not null and [agent] is present. [journalUnreadable] is the operation journal's own state: with its saved rows lost to the
+ * phone, every operation is off, whatever the terminal looks like.
  */
 internal fun terminalBlock(
     agent: Agent?,
@@ -65,12 +67,14 @@ internal fun terminalBlock(
     records: List<OperationRecord>,
     key: TerminalKey,
     currentEpoch: Long?,
+    journalUnreadable: Boolean = false,
 ): SendGate.Closed? {
     fun closed(block: SendBlock, sentence: String) = SendGate.Closed(block, sentence)
     if (agent == null) return closed(SendBlock.AgentGone, "This agent is no longer in the session.")
     if (!live) return closed(SendBlock.NotLive, "Not connected to the machine right now. Sending is off until the link is back.")
     if (currentEpoch != null && currentEpoch != key.epoch) return closed(SendBlock.Stale, "The connection was re-established since this screen opened. Re-read the agent first.")
     if (installedReadAtMillis == null || installedReadAtMillis < openedAtMillis) return closed(SendBlock.Reading, "Reading the agent's state…")
+    if (journalUnreadable) return closed(SendBlock.JournalUnreadable, "The record of earlier sends on this phone cannot be read, so a duplicate cannot be ruled out. Sending is off until it is restored or reset in Settings.")
     val mine = records.filter { it.sameTerminal(key) }
     if (mine.any { it.inFlight }) return closed(SendBlock.InFlight, "Another send to this agent is still running.")
     if (mine.any { it.awaitsReread }) return closed(SendBlock.NeedsReread, "An earlier send's outcome is unknown. Re-read before sending again.")

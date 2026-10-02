@@ -43,7 +43,7 @@ sealed interface OperationGate {
  * what the agent is doing, and Esc is most useful when the agent is working or blocked, so no status closes it. What does
  * close it is the same list as for a prompt, because the journal refuses the same cases: the agent is gone, the link is
  * down, the connection was re-established since the session began, no read since the session began, an operation already
- * running on the terminal, or an unknown outcome still waiting for a re-read.
+ * running on the terminal, an unknown outcome still waiting for a re-read, or a saved journal that cannot be read.
  */
 object ManualInputRules {
     fun gate(
@@ -54,6 +54,7 @@ object ManualInputRules {
         records: List<OperationRecord>,
         key: TerminalKey,
         currentEpoch: Long? = key.epoch,
-    ): OperationGate = terminalBlock(agent, installedReadAtMillis, enteredAtMillis, live, records, key, currentEpoch)
+        journalUnreadable: Boolean = false,
+    ): OperationGate = terminalBlock(agent, installedReadAtMillis, enteredAtMillis, live, records, key, currentEpoch, journalUnreadable)
         ?.let { OperationGate.Closed(it.block, it.sentence) } ?: OperationGate.Open
 }

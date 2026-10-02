@@ -37,6 +37,13 @@ class OperationFixturesTest {
     private val key = TerminalKey(TargetRef(HostProfileId("h1"), "paddock-test", "term_65cbe353cc3172"), epoch = 1)
     private val now = 1_000_000L
 
+    /**
+     * The operation fixtures were captured from the fake agent's own pane, the agent-get fixtures from another, so their
+     * terminal ids differ. A write must be answered for the terminal it meant (herdr names the agent it wrote to, and the
+     * app reports any other, see [Misdelivered]), so the harness answers as the terminal under test. The files stay as captured.
+     */
+    private fun answeredFor(body: String, terminalId: String) = body.replace(Regex("\"terminal_id\"\\s*:\\s*\"[^\"]*\""), "\"terminal_id\":\"$terminalId\"")
+
     /** Answers `agent.get` with [get] and every other method with [other], each with the request's own id. */
     private fun ops(get: String, other: String?, journal: OperationJournal, requireHints: Boolean = false, methods: MutableList<String> = CopyOnWriteArrayList()): AgentOperations {
         val session = FakeSession(onStream = { s ->
@@ -44,7 +51,7 @@ class OperationFixturesTest {
                 val req = Json.parseToJsonElement(line).jsonObject
                 val method = req["method"]!!.jsonPrimitive.content
                 methods += method
-                val body = if (method == "agent.get") get else other ?: ""
+                val body = if (method == "agent.get") get else other?.let { answeredFor(it, key.target.terminalId) } ?: ""
                 s.feed(body.replaceFirst(Regex("\"id\":\"[^\"]*\""), "\"id\":\"${req["id"]!!.jsonPrimitive.content}\"") + "\n")
             }
         })

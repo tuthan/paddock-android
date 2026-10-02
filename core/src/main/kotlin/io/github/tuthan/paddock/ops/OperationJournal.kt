@@ -76,6 +76,8 @@ sealed interface Begin {
     data class InFlight(val first: OperationRecord) : Begin
     /** The terminal has an unknown outcome the user has not re-read yet: nothing new goes out until they do. */
     data class NeedsReread(val unknown: OperationRecord) : Begin
+    /** The saved journal cannot be read, so no earlier outcome can be ruled out: nothing goes out until it is restored or reset. */
+    data class Unreadable(val reason: String) : Begin
 }
 
 /**
@@ -87,24 +89,64 @@ sealed interface Begin {
  *
  * On start, a [OperationOutcome.Requested] row (the process died before any write) becomes [OperationOutcome.NotSent]
  * and a [OperationOutcome.Sent] row (it died with a write possibly out) becomes [OperationOutcome.Unknown].
+ *
+ * A saved journal that cannot be read is not an empty one: the unknown rows in it are what stops a second prompt after a
+ * lost answer. The journal then holds nothing, writes nothing (the file is never overwritten) and [begin] answers
+ * [Begin.Unreadable] until [retryLoad] reads it or [resetUnreadable], the user's explicit choice, sets it aside.
  */
 class OperationJournal(private val store: JournalStore, private val clock: Clock) {
     private val lock = Any()
     private var data: JournalData
     private val _records = MutableStateFlow<List<OperationRecord>>(emptyList())
+    private val _unreadable = MutableStateFlow<String?>(null)
 
     /** Every row, oldest first. */
     val records: StateFlow<List<OperationRecord>> = _records.asStateFlow()
+
+    /** Why the saved journal cannot be read, or null when it can. While set, nothing is sent. */
+    val unreadable: StateFlow<String?> = _unreadable.asStateFlow()
 
     /** True when the last best-effort write failed. Memory is still right. */
     @Volatile var saveFailed: Boolean = false; private set
 
     init {
-        val loaded = store.load()
+        val loaded = try { store.load() } catch (e: JournalUnreadable) { _unreadable.value = e.message ?: "the saved journal is unreadable"; null }
+        data = if (loaded == null) JournalData() else adopt(loaded)
+    }
+
+    /** Recovers and prunes a journal just read, shows it, and saves it back when that changed anything. */
+    private fun adopt(loaded: JournalData): JournalData {
         val recovered = recover(loaded)
-        data = pruned(recovered)
-        _records.value = data.records
-        if (recovered != loaded || data != recovered) persistQuietly(data)
+        val kept = pruned(recovered)
+        _records.value = kept.records
+        if (recovered != loaded || kept != recovered) persistQuietly(kept)
+        return kept
+    }
+
+    /** Reads the saved journal again after it was unreadable. True when it is readable now (or never was unreadable). */
+    fun retryLoad(): Boolean = synchronized(lock) {
+        if (_unreadable.value == null) return true
+        try {
+            data = adopt(store.load())
+            _unreadable.value = null
+            true
+        } catch (e: JournalUnreadable) {
+            _unreadable.value = e.message ?: "the saved journal is unreadable"
+            false
+        }
+    }
+
+    /**
+     * The user's explicit reset of an unreadable journal: the saved file is kept aside, the journal starts empty and sends
+     * work again. Every unknown outcome in the lost file is forgotten with it, which is why only a person calls this.
+     * Throws an [java.io.IOException] and stays unreadable when the file cannot be set aside.
+     */
+    fun resetUnreadable(): Unit = synchronized(lock) {
+        if (_unreadable.value == null) return
+        store.discardUnreadable()
+        data = JournalData()
+        _records.value = emptyList()
+        _unreadable.value = null
     }
 
     /**
@@ -112,6 +154,7 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
      * only when [keepText] is true.
      */
     fun begin(key: TerminalKey, kind: OperationKind, payload: String? = null, keepText: Boolean = false): Begin = synchronized(lock) {
+        _unreadable.value?.let { return Begin.Unreadable(it) }
         data.records.firstOrNull { it.sameTerminal(key) && it.inFlight }?.let { return Begin.InFlight(it) }
         data.records.firstOrNull { it.sameTerminal(key) && it.awaitsReread }?.let { return Begin.NeedsReread(it) }
         val row = OperationRecord(
@@ -171,6 +214,7 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
     private fun replace(next: OperationRecord) = data.copy(records = data.records.map { if (it.id == next.id) next else it })
 
     private fun commit(next: JournalData, mustPersist: Boolean) {
+        check(_unreadable.value == null) { "the saved journal is unreadable; nothing may be written over it" }
         if (mustPersist) { try { store.save(next) } catch (e: IOException) { throw JournalWriteFailed(e) } }
         else persistQuietly(next)
         data = next

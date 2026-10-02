@@ -91,6 +91,26 @@ class AgentOperationsTest {
 
     // ---- prompt ------------------------------------------------------------------------------------------------------
 
+    @Test fun anAnswerForAnotherTerminalIsNeverAcknowledgedAndSaysWhereTheWriteWent() = runBlocking<Unit> {
+        // The pane id changed hands after the read: herdr takes the prompt for the agent now behind it and names that terminal.
+        script(rest = { m, _, id -> if (m == "agent.prompt") ok(id, "agent_prompted", agentJson(id, terminal = "term_other")) else Reply.Drop })
+        val r = ops().prompt(key, "do the thing")
+        assertIs<OperationResult.Unknown>(r)
+        val row = journal.records.value.single()
+        assertEquals(OperationOutcome.Unknown, row.outcome)
+        assertTrue(row.note.startsWith(Misdelivered.PREFIX) && "term_other" in row.note && "term_1" in row.note, row.note)
+        val line = io.github.tuthan.paddock.ops.OperationPresenter().line(OperationKind.Prompt, r)
+        assertTrue("different agent" in line.text, line.text)
+        // It blocks this terminal until the person looks, like any unknown outcome.
+        assertTrue(journal.begin(key, OperationKind.Prompt, "again") is Begin.NeedsReread)
+    }
+
+    @Test fun focusAnsweredForAnotherTerminalIsReportedTheSameWay() = runBlocking<Unit> {
+        script(rest = { m, _, id -> if (m == "agent.focus") ok(id, "agent_info", agentJson(id, terminal = "term_other")) else Reply.Drop })
+        assertIs<OperationResult.Unknown>(ops().focus(key))
+        assertTrue(journal.records.value.single().note.startsWith(Misdelivered.PREFIX))
+    }
+
     @Test fun aPromptReadsFirstThenWritesOneRequestWithItsTextInsideTheJson() = runBlocking<Unit> {
         script(rest = { m, _, id -> if (m == "agent.prompt") ok(id, "agent_prompted", agentJson(id)) else Reply.Drop })
         val text = "first line\nsecond \"quoted\" line with ü and a tab\t"

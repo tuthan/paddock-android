@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -175,7 +176,15 @@ class TerminalSession(
 
     private enum class Kind { Observe, Control }
 
+    /** What the screen and the timers ask for. Small and rare, so unbounded; never a frame. */
     private val commands = Channel<Cmd>(Channel.UNLIMITED)
+    /**
+     * [Cmd.Line] and [Cmd.StreamEnded] from the stream collector, in order. Bounded: a full queue suspends the collector, which
+     * stops reading the SSH channel, whose window then closes on the host, so output faster than the screen can draw waits
+     * on the host instead of piling up here. Kept apart from [commands] so that bounding it never drops a release, a key or a
+     * suspend, and so that those overtake queued frames.
+     */
+    private val stream = Channel<Cmd>(TerminalLimits.STREAM_QUEUE_LINES)
     private val actor: Job
     private val linkWatch: Job
 
@@ -201,8 +210,16 @@ class TerminalSession(
     init {
         // However the actor ends (close, a cancelled scope), the channel is closed and the screen forgotten.
         actor = scope.launch {
-            try { for (cmd in commands) handle(cmd) }
-            finally { withContext(NonCancellable) { tearDown(); engine.clear(); _view.value = TerminalView() } }
+            try {
+                while (true) {
+                    // Commands first: a queue of frames never delays a release, a keystroke or the app leaving the foreground.
+                    val cmd = commands.tryReceive().getOrNull() ?: select<Cmd?> {
+                        commands.onReceiveCatching { it.getOrNull() }
+                        stream.onReceiveCatching { it.getOrNull() }
+                    } ?: break
+                    handle(cmd)
+                }
+            } finally { withContext(NonCancellable) { tearDown(); engine.clear(); _view.value = TerminalView() } }
         }
         linkWatch = scope.launch { ssh.link.collect { if (it is LinkState.Down) commands.trySend(Cmd.LinkDown) } }
     }
@@ -389,9 +406,10 @@ class TerminalSession(
         sequencer.reset()
         jobs += scope.launch {
             var error: Throwable? = null
-            try { ch.stdout.lines(TerminalLimits.LINE_BYTES).collect { commands.trySend(Cmd.Line(mine, it)) } }
+            // send, not trySend: when the actor is behind, this suspends and the SSH channel is not read until it catches up.
+            try { ch.stdout.lines(TerminalLimits.LINE_BYTES).collect { stream.send(Cmd.Line(mine, it)) } }
             catch (e: CancellationException) { throw e } catch (e: Throwable) { error = e }
-            commands.trySend(Cmd.StreamEnded(mine, error))
+            stream.send(Cmd.StreamEnded(mine, error))
         }
         jobs += scope.launch {
             try { ch.stderr.collect { stderrTail = (stderrTail + it.toString(Charsets.UTF_8)).takeLast(STDERR_KEEP) } } catch (e: CancellationException) { throw e } catch (_: Throwable) { }

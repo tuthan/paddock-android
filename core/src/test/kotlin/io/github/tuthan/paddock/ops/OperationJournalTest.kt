@@ -242,12 +242,92 @@ class OperationJournalTest {
         assertTrue(second.id > first.id)
     }
 
-    @Test fun anUnreadableFileIsKeptAsideAndTheJournalStartsEmpty() {
+    // ---- an unreadable saved journal -------------------------------------------------------------------------------
+
+    @Test fun anUnreadableFileIsLeftWhereItIsAndNothingIsSentOrWrittenOverIt() {
         val file = File(tmp.root, "operations.json")
         file.writeText("{ not json")
         val j = journal(FileJournalStore(file))
         assertTrue(j.records.value.isEmpty())
-        assertEquals("{ not json", File(tmp.root, "operations.json.corrupt").readText())
+        assertNotNull(j.unreadable.value)
+        val b = j.begin(key(), OperationKind.Prompt, "x")
+        assertTrue("a send is refused, not allowed through an empty journal: $b", b is Begin.Unreadable)
+        assertEquals("the unreadable file is untouched", "{ not json", file.readText())
+        assertFalse("nothing is moved aside without the user's reset", File(tmp.root, "operations.json.corrupt").exists())
+        assertFalse(File(tmp.root, "operations.json.tmp").exists())
+    }
+
+    @Test fun anUnreadableFileThatCannotBeReadIsNotTreatedAsEmptyEither() {
+        val file = File(tmp.root, "operations.json")
+        file.mkdir()   // a directory where the file should be: readText fails with an IOException
+        val j = journal(FileJournalStore(file))
+        assertNotNull(j.unreadable.value)
+        assertTrue(j.begin(key(), OperationKind.Prompt, "x") is Begin.Unreadable)
+        assertTrue(file.isDirectory)
+    }
+
+    @Test fun retryingReadsTheFileAgainAndRestoresTheRowsAndTheUnknownGuard() {
+        val file = File(tmp.root, "operations.json")
+        val good = journal(FileJournalStore(file))
+        val r = good.started(); good.markSent(r.id, "w2:p1"); good.unknown(r.id, "link lost")
+        val saved = file.readText()
+
+        file.writeText("{ not json")
+        val j = journal(FileJournalStore(file))
+        assertNotNull(j.unreadable.value)
+        assertFalse("still damaged", j.retryLoad())
+        assertNotNull(j.unreadable.value)
+
+        file.writeText(saved)   // restored from a backup
+        assertTrue(j.retryLoad())
+        assertNull(j.unreadable.value)
+        assertEquals(listOf(r.id), j.records.value.map { it.id })
+        assertTrue("the unknown row blocks the terminal again", j.begin(key(), OperationKind.Prompt, "again") is Begin.NeedsReread)
+    }
+
+    @Test fun resettingSetsTheFileAsideAndStartsEmptyOnlyWhenAsked() {
+        val file = File(tmp.root, "operations.json")
+        file.writeText("{ not json")
+        val j = journal(FileJournalStore(file))
+        j.resetUnreadable()
+        assertNull(j.unreadable.value)
+        assertEquals("kept for a person to look at", "{ not json", File(tmp.root, "operations.json.corrupt").readText())
+        assertFalse(file.exists())
+        val row = j.started()
+        assertEquals(listOf(row), FileJournalStore(file).load().records)
+        j.resetUnreadable()   // nothing unreadable now: nothing happens
+        assertEquals(listOf(row), j.records.value)
+    }
+
+    @Test fun aFailedResetStaysUnreadable() {
+        val s = InMemoryJournalStore().also { it.unreadable = true }
+        val failing = object : JournalStore by s { override fun discardUnreadable() { throw java.io.IOException("read-only") } }
+        val j = journal(failing)
+        try { j.resetUnreadable(); fail("the reset reported success") } catch (_: java.io.IOException) { }
+        assertNotNull(j.unreadable.value)
+        assertTrue(j.begin(key(), OperationKind.Prompt, "x") is Begin.Unreadable)
+    }
+
+    @Test fun anUnreadableJournalIsReportedByTheOperationAsNothingSent() {
+        val s = InMemoryJournalStore().also { it.unreadable = true }
+        val j = journal(s)
+        val result = kotlinx.coroutines.runBlocking {
+            Operation.run(j, key(), OperationKind.Prompt, "x", resolveTarget = { "w2:p1" }, send = { _, _ -> fail("a send went out through an unreadable journal") })
+        }
+        assertTrue(result is OperationResult.JournalUnreadable)
+        assertTrue(s.discards == 0)
+    }
+
+    @Test fun theFileStoreCreatesItsDirectoryAndLeavesNoTempFileBehindWhetherOrNotTheSaveWorked() {
+        val file = File(tmp.root, "sub/operations.json")
+        val store = FileJournalStore(file)
+        store.save(JournalData(nextId = 7))
+        assertEquals(7L, store.load().nextId)
+        assertFalse(File(file.absolutePath + ".tmp").exists())
+        // A save that cannot complete leaves the old content and no temp file.
+        val blocker = File(tmp.root, "blocked").also { it.mkdir(); File(it, "x").writeText("x") }
+        try { FileJournalStore(blocker).save(JournalData()); fail("saving over a non-empty directory succeeded") } catch (_: java.io.IOException) { }
+        assertFalse(File(blocker.absolutePath + ".tmp").exists())
     }
 
     // ---- retention -------------------------------------------------------------------------------------------------

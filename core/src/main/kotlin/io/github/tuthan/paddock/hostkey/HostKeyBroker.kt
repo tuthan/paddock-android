@@ -9,6 +9,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -16,8 +17,12 @@ import kotlinx.coroutines.sync.withLock
 /** A first-contact key waiting for the user. [id] names this question; an answer must name the question it answers. */
 data class FirstTrustRequest(val id: Long, val profileId: String, val endpoint: String, val presented: PresentedHostKey)
 
-/** A pinned machine that presented a different key. Nothing was authenticated. */
-data class ChangedKey(val profileId: String, val endpoint: String, val pin: PinnedHostKey, val presented: PresentedHostKey)
+/**
+ * A pinned machine that presented a different key. Nothing was authenticated. [id] names the failed attempt that recorded
+ * it: a person who approved this key approved this attempt, and [HostKeyBroker.takeChanged] refuses an id that is no longer
+ * the one on record.
+ */
+data class ChangedKey(val id: Long, val profileId: String, val endpoint: String, val pin: PinnedHostKey, val presented: PresentedHostKey)
 
 /**
  * The hand-off between a connect that is waiting on a person and the screen that asks them. The connector calls
@@ -64,11 +69,30 @@ class HostKeyBroker {
         return open.answer.complete(accept)
     }
 
+    /** A later failed attempt replaces the earlier warning, and with it the id an approval of the earlier one would name. */
     fun recordChanged(profileId: String, endpoint: String, failure: ConnectFailure.HostKeyChanged) {
-        _changed.value = _changed.value + (profileId to ChangedKey(profileId, endpoint, failure.pin, failure.presented))
+        val next = ChangedKey(ids.incrementAndGet(), profileId, endpoint, failure.pin, failure.presented)
+        _changed.update { it + (profileId to next) }
     }
 
-    fun clearChanged(profileId: String) { _changed.value = _changed.value - profileId }
+    /** Drops the warning for [profileId] whichever attempt it names: the host has since presented its pinned key. */
+    fun clearChanged(profileId: String) { _changed.update { it - profileId } }
+
+    /**
+     * Removes and returns the warning for [profileId] only while it is still attempt [id], the one the person was shown. Null
+     * when it was cleared or a later attempt replaced it: an approval of a key must never apply to another one.
+     */
+    fun takeChanged(profileId: String, id: Long): ChangedKey? {
+        var taken: ChangedKey? = null
+        _changed.update { cur ->
+            taken = cur[profileId]?.takeIf { it.id == id }
+            if (taken != null) cur - profileId else cur
+        }
+        return taken
+    }
+
+    /** Puts back a warning [takeChanged] removed when acting on it failed, unless a later attempt has recorded one meanwhile. */
+    fun restoreChanged(c: ChangedKey) { _changed.update { if (c.profileId in it) it else it + (c.profileId to c) } }
 }
 
 /**

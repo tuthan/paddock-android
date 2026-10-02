@@ -118,8 +118,8 @@ class ComposerTest {
         OperationRecord(1, "h1", "paddock-test", "term_1", 2, OperationKind.Prompt, 1_000, outcome, resolvedAt = if (resolved) 1_100 else null)
 
     /** The real gate for each situation, so this test and the rules cannot drift apart. */
-    private fun gate(a: Agent? = agent(), live: Boolean = true, epoch: Long = 2, readAt: Long? = 1_500, records: List<OperationRecord> = emptyList(), text: String = "hello") =
-        ComposerRules.gate(a, readAt, 1_000, live, records, key, text, currentEpoch = epoch)
+    private fun gate(a: Agent? = agent(), live: Boolean = true, epoch: Long = 2, readAt: Long? = 1_500, records: List<OperationRecord> = emptyList(), text: String = "hello", journalUnreadable: Boolean = false) =
+        ComposerRules.gate(a, readAt, 1_000, live, records, key, text, currentEpoch = epoch, journalUnreadable = journalUnreadable)
 
     // ---- Send's gate ---------------------------------------------------------------------------------------------
 
@@ -137,6 +137,7 @@ class ComposerTest {
             "link down" to gate(live = false),
             "epoch moved" to gate(epoch = 3),
             "not read since opening" to gate(readAt = null),
+            "journal unreadable" to gate(journalUnreadable = true),
             "in flight" to gate(records = listOf(record(OperationOutcome.Sent))),
             "unknown outcome" to gate(records = listOf(record(OperationOutcome.Unknown))),
             "working" to gate(agent(AgentStatus.Working)),
@@ -267,6 +268,16 @@ class ComposerTest {
         rule.onNodeWithText("Open terminal").performScrollTo().performClick()
         assertEquals(1, calls.terminal)
         assertEquals("keep this text", fieldText())
+    }
+
+    @Test fun anUnreadableSendRecordClosesSendNamesWhyAndOffersRetry() {
+        val gate = SendGate.Closed(SendBlock.JournalUnreadable, "The record of earlier sends on this phone cannot be read, so a duplicate cannot be ruled out. Sending is off until it is restored or reset in Settings.")
+        val calls = show(ComposerUi(header, gate), initialText = "hello", gateActionLabel = "Retry")   // the label the route passes for this gate
+        rule.onNodeWithText(gate.sentence).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Send prompt").assertIsNotEnabled()
+        rule.onNodeWithText("Retry").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.gateAction)
+        assertEquals(0, calls.send)
     }
 
     @Test fun anUnknownOutcomeOffersAReReadAndNeverAResend() {

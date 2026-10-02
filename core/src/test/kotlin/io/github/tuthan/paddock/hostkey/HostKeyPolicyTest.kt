@@ -66,11 +66,22 @@ class HostKeyPolicyTest {
 
     @Test
     fun replaceIsExplicitAndNeedsAnExistingPin() = runBlocking<Unit> {
-        assertFailsWith<IllegalStateException> { policy.replaceChanged("p", "e", keyB) }
+        val shown = pinOf(keyA)
+        assertFailsWith<IllegalStateException> { policy.replaceChanged("p", "e", shown, keyB) }
         policy.acceptUnknown("p", "e", keyA)
-        policy.replaceChanged("p", "e", keyB)
+        policy.replaceChanged("p", "e", shown, keyB)
         assertEquals(keyB.fingerprint, store.find("p")!!.fingerprint)
     }
+
+    @Test
+    fun replaceRefusesWhenThePinIsNotTheOneTheUserWasShown() = runBlocking<Unit> {
+        val third = PresentedHostKey("ssh-ed25519", byteArrayOf(5, 5, 5, 5))
+        policy.acceptUnknown("p", "e", keyB)   // the pin changed after the dialog was drawn for keyA's pin
+        assertFailsWith<IllegalStateException> { policy.replaceChanged("p", "e", pinOf(keyA), third) }
+        assertEquals(keyB.fingerprint, store.find("p")!!.fingerprint)
+    }
+
+    private fun pinOf(k: PresentedHostKey) = PinnedHostKey("p", "e", k.algorithm, k.blob, k.fingerprint, 1L, 1L)
 
     @Test
     fun pinAcceptedPinsOnceAndNeverReplacesAPinMadeMeanwhile() = runBlocking<Unit> {

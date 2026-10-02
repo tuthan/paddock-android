@@ -116,6 +116,10 @@ finish() {
 }
 reach() { wait_at "$1" || { say "FAIL the test never reached '$1'"; fail=1; kill $INSTR 2>/dev/null; $ADB shell am force-stop $PKG; finish 1; }; }
 check() { if eval "$2"; then say "PASS $1"; else say "FAIL $1"; fail=1; fi; }
+# For a fact the host learns a moment after the phone does: herdr acknowledges a key once it has written it to the pane, and the
+# agent logs it when it reads it, so a check made at once can see the count one short (seen on API 26: the Esc was logged 14 ms
+# after the check). Retries for up to 3 s. Counts only grow, so a duplicate still fails: it never goes back to the right number.
+check_soon() { local n=0; until eval "$2"; do n=$((n+1)); if [ "$n" -ge 15 ]; then say "FAIL $1"; fail=1; return; fi; sleep 0.2; done; say "PASS $1"; }
 
 FIRST="first prompt from the phone"; SECOND="second prompt, cut after the write"; THIRD="third prompt, deliberate"
 INSTR_OUT=instrument1.txt
@@ -123,8 +127,8 @@ instrument t1_keysFocusAndPromptsThenTheLinkDiesAfterTheWriteLeavingAnUnknownOut
 
 # ---------------- stage 1 ----------------
 reach esc-sent
-check "AC-06.5 one Esc reached the agent and nothing else did" '[ "$(count esc)" = 1 ] && [ "$(count ctrl-c)" = 0 ] && [ "$(count submit)" = 0 ]'
-check "the pane shows the Esc" 'pane_has "\[esc\]"'
+check_soon "AC-06.5 one Esc reached the agent and nothing else did" '[ "$(count esc)" = 1 ] && [ "$(count ctrl-c)" = 0 ] && [ "$(count submit)" = 0 ]'
+check_soon "the pane shows the Esc" 'pane_has "\[esc\]"'
 check "AC-06.5 the journal has one Esc row, acknowledged, with a send time" '[ "$(rows Esc | jq -r "length, .[0].outcome, (.[0].sentAt != null)" | tr "\n" " ")" = "1 Acknowledged true " ]'
 snap esc
 go esc-sent

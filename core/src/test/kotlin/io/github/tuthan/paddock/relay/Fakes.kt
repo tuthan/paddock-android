@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 
 /** A stream the test feeds by hand: [feed] puts bytes on stdout, [end] closes it. */
@@ -21,7 +22,9 @@ class FakeStream(val argv: List<String>) : StreamChannel {
     @Volatile var closed = false
     @Volatile var stdinClosed = false
     var exit = 0
-    override val stdout: Flow<ByteArray> = out.receiveAsFlow()
+    /** How many chunks the reader has taken from this stream, to show whether it was held back. */
+    @Volatile var taken = 0; private set
+    override val stdout: Flow<ByteArray> = out.receiveAsFlow().onEach { taken++ }
     override val stderr: Flow<ByteArray> = emptyFlow()
     /** Called with each request line written, so a scripted host can answer. */
     @Volatile var onRequest: (String) -> Unit = {}

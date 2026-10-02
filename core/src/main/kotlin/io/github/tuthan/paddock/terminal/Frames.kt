@@ -41,6 +41,11 @@ object TerminalLimits {
     const val FRAME_BYTES = 1 shl 20
     /** The longest JSON line: base64 of a full frame plus the envelope. */
     const val LINE_BYTES = (FRAME_BYTES / 3 + 1) * 4 + 4096
+    /**
+     * Lines read from the host but not yet drawn. Each can be [LINE_BYTES] at the very most, usually a few kilobytes, so the
+     * queue holds a few megabytes at its worst and the stream waits on the host beyond that.
+     */
+    const val STREAM_QUEUE_LINES = 16
     const val MAX_COLS = 1000
     const val MAX_ROWS = 500
     const val MAX_CELLS = 250_000
