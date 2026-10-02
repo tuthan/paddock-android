@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -19,6 +20,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -252,14 +254,17 @@ class ComposerTest {
     }
 
     @Test fun anUnknownOutcomeOffersAReReadAndNeverAResend() {
+        val gate = SendGate.Closed(SendBlock.NeedsReread, "An earlier send's outcome is unknown. Re-read before sending again.")
         val calls = show(
-            ComposerUi(header, SendGate.Closed(SendBlock.NeedsReread, "An earlier send's outcome is unknown. Re-read before sending again."),
-                outcome = ResultLine("prompt sent 14:03:12 · outcome unknown · re-read before sending again", ResultTone.Unknown, unknown = true)),
-            initialText = "hello", onReread = {},
+            ComposerUi(header, gate, outcome = ResultLine("prompt sent 14:03:12 · outcome unknown · re-read before sending again", ResultTone.Unknown, unknown = true)),
+            initialText = "hello", onReread = {}, gateActionLabel = "Re-read",   // the label the route passes for this gate
         )
         rule.onNodeWithText("prompt sent 14:03:12 · outcome unknown · re-read before sending again").performScrollTo().assertIsDisplayed()
+        rule.onAllNodesWithText("Re-read").assertCountEquals(1)
+        rule.onNodeWithText(gate.sentence).assertDoesNotExist()
         rule.onNodeWithText("Re-read").performScrollTo().performClick()
         assertEquals(1, calls.reread)
+        assertEquals("the row's own button, not the gate's", 0, calls.gateAction)
         rule.onNodeWithText("Send prompt").assertIsNotEnabled()
         rule.onNodeWithText("Resend").assertDoesNotExist()
         rule.onNodeWithText("Send again").assertDoesNotExist()

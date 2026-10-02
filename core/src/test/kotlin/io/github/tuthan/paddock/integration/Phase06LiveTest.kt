@@ -108,12 +108,12 @@ class Phase06LiveTest {
             .also { started += it; it.start(); withTimeout(15_000) { it.freshness.first { f -> f == Freshness.Live } }
                 until("the agent pane in the home") { it.home.value?.rows?.any { r -> r.paneId == pane } == true } }
 
-    private fun MonitoredHost.keyOfPane(): TerminalKey = home.value!!.rows.first { it.paneId == pane }.key
+    private fun MonitoredHost.keyOfPane(of: String = pane): TerminalKey = home.value!!.rows.first { it.paneId == of }.key
 
-    private fun events(kind: String): List<kotlinx.serialization.json.JsonObject> =
-        if (!log.exists()) emptyList() else log.readLines().filter { it.isNotBlank() }.map { Json.parseToJsonElement(it).jsonObject }.filter { it["event"]!!.jsonPrimitive.content == kind }
+    private fun events(kind: String, from: File = log): List<kotlinx.serialization.json.JsonObject> =
+        if (!from.exists()) emptyList() else from.readLines().filter { it.isNotBlank() }.map { Json.parseToJsonElement(it).jsonObject }.filter { it["event"]!!.jsonPrimitive.content == kind }
 
-    private fun submissions() = events("submit").map { it["text"]!!.jsonPrimitive.content }
+    private fun submissions(from: File = log) = events("submit", from).map { it["text"]!!.jsonPrimitive.content }
     private fun promptRequests() = env.session.stdinLog.count { "\"agent.prompt\"" in it }
 
     // ---- AC-06.1 -----------------------------------------------------------------------------------------------
@@ -134,6 +134,37 @@ class Phase06LiveTest {
         assertEquals(OperationJournal.sha256Hex(text), row.payloadSha256)
         assertEquals(null, row.promptText, "the journal keeps a hash, not the text")
         println("AC-06.1: 1 submission, ${text.length} chars, journal row ${row.id} acknowledged")
+    }
+
+    /**
+     * What the composer's fact line ("an agent that does not accept pasted text may take one as Enter") rests on, measured on
+     * herdr 0.9.1: herdr follows the agent's own bracketed-paste mode. The agent of the other tests asks for it and takes the
+     * line break inside one submission; an agent that never asked for it (FAKE_AGENT_PASTE=0) receives each line as its own.
+     * Paddock cannot see the mode (frames do not carry it), which is why the screen says so instead of promising one submission.
+     */
+    @Test fun aLineBreakStaysInsideOneSubmissionOnlyForAnAgentThatEnabledBracketedPaste() = runBlocking<Unit> {
+        val plainLog = File(tmp.root, "plain.log")
+        val plain = env.split(pane)
+        try {
+            env.runInPane(plain, "FAKE_AGENT_PASTE=0 FAKE_AGENT_LOG=${plainLog.absolutePath} ${File(tmp.root, "bin").absolutePath}/claude")
+            until("the agent without bracketed paste to start") { "fake agent ready" in env.paneText(plain) }
+            env.reportAgent(plain, "idle", agent = "claude")
+            val h = host()
+            until("both agents in the home") { h.home.value?.rows?.any { r -> r.paneId == plain } == true }
+            assertIs<OperationResult.Acknowledged<*>>(h.operations!!.prompt(h.keyOfPane(plain), "alpha\nbeta"))
+            until("both lines") { submissions(plainLog).size == 2 }
+            delay(500)
+            assertEquals(listOf("alpha", "beta"), submissions(plainLog), "without bracketed paste each line is its own submission")
+            assertIs<OperationResult.Acknowledged<*>>(h.operations!!.prompt(h.keyOfPane(), "gamma\ndelta"))
+            until("the paste-enabled agent's submission") { submissions().isNotEmpty() }
+            delay(500)
+            assertEquals(listOf("gamma\ndelta"), submissions(), "with bracketed paste the line break stays inside one submission")
+            println("bracketed paste: off -> ${submissions(plainLog)}; on -> ${submissions().map { it.replace("\n", "\\n") }}")
+        } finally {
+            runCatching { env.sendKeys(plain, "ctrl+c") }
+            runCatching { env.releaseAgent(plain, "claude") }
+            runCatching { env.close(plain) }
+        }
     }
 
     // ---- AC-06.2: the live half ------------------------------------------------------------------------------------

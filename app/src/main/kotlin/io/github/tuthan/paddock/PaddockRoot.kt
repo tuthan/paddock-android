@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -41,6 +42,7 @@ import io.github.tuthan.paddock.ops.ManualInputRules
 import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationPresenter
 import io.github.tuthan.paddock.ops.OperationResult
+import io.github.tuthan.paddock.ops.PromptDraft
 import io.github.tuthan.paddock.ops.PromptTextCheck
 import io.github.tuthan.paddock.ops.ResultLine
 import io.github.tuthan.paddock.ops.RereadOutcome
@@ -136,6 +138,8 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
     var snippetsFrom by rememberSaveable { mutableStateOf(Route.Settings) }
     var relayDismissed by rememberSaveable { mutableStateOf(false) }
     var reviewKey by rememberSaveable { mutableStateOf(false) }
+    // The composer's text lives here, above the route: leaving the composer (Edit snippets, Back) or a reconnect that swaps it for "not available" must not lose it.
+    var draft by rememberSaveable(stateSaver = PromptDraftSaver) { mutableStateOf(PromptDraft()) }
     // Add machine opened to set up the watched machine's key (its key could not be read), not to add another.
     var editing by rememberSaveable { mutableStateOf(false) }
 
@@ -162,7 +166,7 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
                 }
                 Route.Output -> OutputRoute(graph, terminalId, outputTab, { outputTab = it }, onBack = { route = Route.Home }, onCompose = { route = Route.Compose })
                 Route.Compose -> ComposeRoute(
-                    graph, terminalId, onBack = { route = Route.Output },
+                    graph, terminalId, draft, { change -> draft = change(draft) }, onBack = { route = Route.Output },
                     onOpenTerminal = { outputTab = AgentTab.Terminal; route = Route.Output },
                     onEditSnippets = { snippetsFrom = Route.Compose; route = Route.Snippets },
                 )
@@ -430,13 +434,27 @@ private fun TerminalRoute(graph: AppGraph, host: io.github.tuthan.paddock.live.M
     TerminalTab(view, actions)
 }
 
+/** The draft survives a rotation and a process restore with the rest of the root's saved state; a terminal id is never empty. */
+private val PromptDraftSaver = listSaver<PromptDraft, Any>(
+    save = { d -> listOf<Any>(d.terminalId.orEmpty(), d.text) + d.acceptedThrough.flatMap { (id, row) -> listOf(id, row) } },
+    restore = { saved ->
+        PromptDraft(
+            terminalId = (saved[0] as String).ifEmpty { null }, text = saved[1] as String,
+            acceptedThrough = saved.drop(2).chunked(2).associate { (id, row) -> id as String to row as Long },
+        )
+    },
+)
+
 /**
  * The prompt composer for one agent. Everything it shows is derived from the host's installed read, the journal and the
  * send controller; the text and the epoch the screen opened in survive a rotation. A send runs in the host's scope, so
  * turning the phone cannot cancel it, and a refused one keeps the text.
  */
 @Composable
-private fun ComposeRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit, onOpenTerminal: () -> Unit, onEditSnippets: () -> Unit) {
+private fun ComposeRoute(
+    graph: AppGraph, terminalId: String?, draft: PromptDraft, onDraft: ((PromptDraft) -> PromptDraft) -> Unit,
+    onBack: () -> Unit, onOpenTerminal: () -> Unit, onEditSnippets: () -> Unit,
+) {
     val view by graph.hostUi.view.collectAsState()
     val settings by graph.settings.collectAsState()
     val profile by graph.profile.collectAsState()
@@ -463,7 +481,8 @@ private fun ComposeRoute(graph: AppGraph, terminalId: String?, onBack: () -> Uni
     val snippets by graph.snippets.collectAsState()
     val now = rememberNow()
     val presenter = remember { OperationPresenter() }
-    var text by rememberSaveable { mutableStateOf("") }
+    val text = draft.textFor(terminalId)
+    val setText = { value: String -> onDraft { it.typed(terminalId, value) } }
     var openedAt by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
     var openedEpoch by rememberSaveable { mutableStateOf<Long?>(null) }
     val liveEpoch = installed?.epoch
@@ -477,7 +496,11 @@ private fun ComposeRoute(graph: AppGraph, terminalId: String?, onBack: () -> Uni
     val gate = ComposerRules.gate(agent, installed?.readAtMillis, openedAt, freshness == Freshness.Live, records, key, text, currentEpoch = liveEpoch)
     val outcome = outcomes[terminalId]
     // The text goes with the prompt: cleared only when herdr accepted it, kept for a refusal, a failure or an unknown outcome.
-    LaunchedEffect(outcome) { if (outcome != null && outcome.kind == OperationKind.Prompt && outcome.result is OperationResult.Acknowledged<*>) text = "" }
+    // The draft remembers which accepted row it has already gone with, so an old accepted outcome shown again clears nothing.
+    LaunchedEffect(outcome) {
+        val result = outcome?.result
+        if (outcome != null && outcome.kind == OperationKind.Prompt && result is OperationResult.Acknowledged<*>) onDraft { it.accepted(terminalId, result.record.id) }
+    }
 
     val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
     val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
@@ -495,7 +518,7 @@ private fun ComposeRoute(graph: AppGraph, terminalId: String?, onBack: () -> Uni
     }
     Composer(
         ComposerUi(header, gate, sending = terminalId in running, outcome = outcomeLine(presenter, outcome, agent?.stateChangeSeq, now), snippets = snippets, rereadLines = rereadLines),
-        now, text, { text = it }, onSnippet = { text = Snippets.insert(text, it) },
+        now, text, setText, onSnippet = { setText(Snippets.insert(text, it)) },
         onSend = { sends.prompt(key, text, settings.keepPromptText) },
         onBack = onBack, onEditSnippets = onEditSnippets, onOpenTerminal = onOpenTerminal, onDismissOutcome = { sends.dismiss(terminalId) },
         onReread = reread, onDismissReread = { sends.dismissReread(terminalId) },

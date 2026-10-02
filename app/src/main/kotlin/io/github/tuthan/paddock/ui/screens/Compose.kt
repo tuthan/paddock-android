@@ -137,12 +137,14 @@ fun Composer(
                     PaddockButton(if (ui.sending) "Sending…" else "Send prompt", onSend, m, enabled = open && !ui.sending, icon = PaddockIcons.Send)
                 },
             )
-            if (closed != null && closed.block != SendBlock.EmptyPrompt) {
+            // An unknown outcome is explained once, by its own row with the Re-read next to it; the gate repeats it only when there is no such row (after a restart).
+            val explainedBelow = closed?.block == SendBlock.NeedsReread && ui.outcome?.unknown == true && onReread != null
+            if (closed != null && closed.block != SendBlock.EmptyPrompt && !explainedBelow) {
                 Text(closed.sentence, style = PaddockTokens.type.secondary, color = c.dim, modifier = Modifier.semantics { contentDescription = "Send is off. ${closed.sentence}" })
             } else if (ui.gate is SendGate.Open && ui.gate.hintsUnreported) {
                 Note("Ready by herdr's status. This agent reports no readiness hint, so Paddock checks the status again right before it sends.")
             }
-            if (closed != null && gateActionLabel != null) PaddockButton(gateActionLabel, onGateAction, kind = ButtonKind.Ghost, small = true, fillWidth = false)
+            if (closed != null && gateActionLabel != null && !explainedBelow) PaddockButton(gateActionLabel, onGateAction, kind = ButtonKind.Ghost, small = true, fillWidth = false)
             if (!escEnabled && escNote != null) Note(escNote)
             ui.outcome?.let { OutcomeLine(it, onOpenTerminal, onDismissOutcome, onReread) }
             if (ui.rereadLines.isNotEmpty()) RereadReport(ui.rereadLines, onDismissReread)
