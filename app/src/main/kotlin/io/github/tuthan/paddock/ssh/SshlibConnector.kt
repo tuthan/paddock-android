@@ -40,13 +40,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
@@ -410,8 +407,8 @@ internal class SshlibSession(
 
     private inner class Stream(private val session: Session, private val channel: Opened) : StreamChannel {
         private val closed = AtomicBoolean(false)
-        private val out = Pipe(session.stdout)
-        private val err = Pipe(session.stderr)
+        private val out = pipeOf(session.stdout)
+        private val err = pipeOf(session.stderr)
         override val stdout: Flow<ByteArray> get() = out.flow
         override val stderr: Flow<ByteArray> get() = err.flow
         override suspend fun write(bytes: ByteArray) = onWorker { session.stdin.write(bytes); session.stdin.flush() }
@@ -429,40 +426,10 @@ internal class SshlibSession(
         }
     }
 
-    /**
-     * One sshlib input stream, read on a worker into a bounded channel. A collector suspends on the channel, never on the read,
-     * so cancelling it returns at once. The reader starts on first collection and ends when the stream closes or [close] runs.
-     */
-    private inner class Pipe(private val input: java.io.InputStream) {
-        private val chunks = Channel<ByteArray>(PIPE_CHUNKS)
-        private val started = AtomicBoolean(false)
-
-        val flow: Flow<ByteArray> = flow {
-            if (started.compareAndSet(false, true)) start()
-            for (chunk in chunks) emit(chunk)
-        }
-
-        private fun start() {
-            try { workers.execute(::pump) } catch (e: RejectedExecutionException) { chunks.close(SessionDown((tracker.link.value as? LinkState.Down)?.reason ?: DownReason.Closed)) }
-        }
-
-        private fun pump() {
-            val buf = ByteArray(8192)
-            try {
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    // Fails once close() has run (also while blocked on a full buffer): stop reading.
-                    if (chunks.trySendBlocking(buf.copyOf(n)).isFailure) return
-                }
-                chunks.close()
-            } catch (e: Throwable) {
-                chunks.close(if (e is IOException) downOr(e) else e) // a no-op after close()
-            }
-        }
-
-        fun close() { chunks.close() }
-    }
+    private fun pipeOf(input: java.io.InputStream) = StreamPipe(
+        input, workers::execute, ::downOr,
+        notStarted = { SessionDown((tracker.link.value as? LinkState.Down)?.reason ?: DownReason.Closed) },
+    )
 
     private fun drain(input: java.io.InputStream, into: BoundedBytes) {
         val buf = ByteArray(8192)
@@ -479,7 +446,6 @@ internal class SshlibSession(
 
     companion object {
         const val MAX_CHANNELS = 8
-        private const val PIPE_CHUNKS = 16
         private const val EXIT_POLL_MS = 200L
         private const val EXIT_OR_CLOSED = ChannelCondition.EXIT_STATUS or ChannelCondition.CLOSED
     }
