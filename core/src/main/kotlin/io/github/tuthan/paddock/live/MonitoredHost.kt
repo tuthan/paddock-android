@@ -32,6 +32,7 @@ import io.github.tuthan.paddock.attention.ObservedAt
 import io.github.tuthan.paddock.herdr.AgentStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -119,6 +120,12 @@ class MonitoredHost(
     /** When the phone first saw each terminal in its current state. */
     private val firstSeen = HashMap<String, FirstSeen>()
 
+    /**
+     * Parent of the eagerly shared [home]. [stop] cancels it: `stateIn` in the app's own scope would keep its collector, this
+     * host, its last snapshot and its session alive for as long as the app runs, one more for every replacement host.
+     */
+    private val sharing = SupervisorJob(scope.coroutineContext[Job])
+
     /** The home list, null before the first authoritative read. Rebuilt on every installed read and every Done tap. */
     val home: StateFlow<HomeModel?> = combine(reconciler.installed, seenVersion) { installed, _ ->
         installed?.let {
@@ -127,7 +134,7 @@ class MonitoredHost(
             val observed = observedAt(it)
             AttentionModel.home(it.snapshot, it.readAtMillis, profile.hostId, sessionName, it.epoch, observedAt = observed, seen = ledger.seenLookup(profile.hostId, sessionName, it.epoch))
         }
-    }.stateIn(scope, SharingStarted.Eagerly, null)
+    }.stateIn(CoroutineScope(scope.coroutineContext + sharing), SharingStarted.Eagerly, null)
 
     /**
      * "Observed N ago" is the time since the phone first saw the state, never a server duration. A state seen in an
@@ -184,6 +191,8 @@ class MonitoredHost(
     fun stop() {
         closeTerminal()
         jobs.forEach { it.cancel() }; jobs.clear()
+        previewJob?.cancel()
+        sharing.cancel()
         monitor.stop()
         live.value = false
         if (wasLive.compareAndSet(true, false)) ledger.observeHost(ObservationKind.Disconnected, profile.hostId, sessionName, reconciler.installed.value?.epoch ?: 0)
