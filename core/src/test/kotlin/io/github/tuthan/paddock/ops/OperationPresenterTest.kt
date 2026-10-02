@@ -93,4 +93,58 @@ class OperationPresenterTest {
         val withText = record(outcome = OperationOutcome.Acknowledged).copy(promptText = "secret words", payloadSha256 = "abc")
         for (o in OperationOutcome.entries) assertFalse("secret words" in p.describe(withText.copy(outcome = o)))
     }
+
+
+    // ---- no progress observed, and what a re-read shows ---------------------------------------------------------------
+
+    private fun acked(seq: Long? = 7, sentAt: Long? = sent, kind: OperationKind = OperationKind.Prompt, outcome: OperationOutcome = OperationOutcome.Acknowledged) =
+        record(kind = kind, outcome = outcome).copy(seqAtSend = seq, sentAt = sentAt)
+
+    @Test fun fiveSecondsWithoutAStateObservationLabelsAnAcceptedPromptAndNothingElse() {
+        assertFalse(p.noProgress(acked(), currentSeq = 7, nowMillis = sent + 4_999), "not yet")
+        assertTrue(p.noProgress(acked(), currentSeq = 7, nowMillis = sent + 5_000))
+        assertTrue(p.noProgress(acked(), currentSeq = 7, nowMillis = sent + 60_000), "and it stays")
+        assertFalse(p.noProgress(acked(), currentSeq = 8, nowMillis = sent + 60_000), "a state observation after the send means there is progress to see")
+        assertFalse(p.noProgress(acked(), currentSeq = null, nowMillis = sent + 60_000), "an agent that is not in the read: nothing is claimed")
+        assertFalse(p.noProgress(acked(seq = null), currentSeq = 7, nowMillis = sent + 60_000), "without the seq the send began with there is nothing to compare")
+        assertFalse(p.noProgress(acked(sentAt = null), currentSeq = 7, nowMillis = sent + 60_000))
+        assertFalse(p.noProgress(acked(kind = OperationKind.Esc), currentSeq = 7, nowMillis = sent + 60_000), "the rule is for prompts")
+        assertFalse(p.noProgress(acked(outcome = OperationOutcome.Unknown), currentSeq = 7, nowMillis = sent + 60_000), "an unknown outcome has its own line")
+        assertFalse(p.noProgress(acked(outcome = OperationOutcome.Rejected), currentSeq = 7, nowMillis = sent + 60_000))
+    }
+
+    @Test fun theLabelIsAddedToAnAcceptedPromptsLineOnlyWhenAsked() {
+        val ack = OperationResult.Acknowledged(acked(), Unit)
+        assertEquals("Prompt sent 14:03:12 · accepted by herdr, which is not a receipt for any turn", p.line(OperationKind.Prompt, ack).text)
+        assertEquals("Prompt sent 14:03:12 · accepted by herdr, which is not a receipt for any turn · no progress observed", p.line(OperationKind.Prompt, ack, noProgress = true).text)
+        assertEquals("Esc sent 14:03:12 · accepted by herdr", p.line(OperationKind.Esc, OperationResult.Acknowledged(acked(kind = OperationKind.Esc), Unit), noProgress = true).text)
+        assertEquals("no progress observed", NO_PROGRESS)
+    }
+
+    private fun report(freed: OperationKind?, status: io.github.tuthan.paddock.herdr.AgentStatus = io.github.tuthan.paddock.herdr.AgentStatus.Working) =
+        ReReadReport("term_1", reread, status, listOfNotNull(freed?.let { record(kind = it, outcome = OperationOutcome.Unknown, resolvedAt = reread) }))
+
+    @Test fun aRereadStatesWhatHerdrReportsNowAndWhatTheCheckDoesAndDoesNotTell() {
+        val status = "Re-read 14:05:40 · herdr reports the agent as working"
+        assertEquals(listOf(status), p.rereadLines(report(null), TextCheck.Found), "nothing was waiting: only the state")
+        assertEquals(listOf(status, "Paddock kept only a hash of this prompt, so it cannot look for its text. Check the terminal."), p.rereadLines(report(OperationKind.Prompt), TextCheck.NotKept))
+        assertEquals("The output has not been read yet, so the prompt's text cannot be looked for.", p.rereadLines(report(OperationKind.Prompt), TextCheck.NoOutput)[1])
+        assertEquals("The prompt's text appears in the last 200 lines of output. That does not say the agent took it as a prompt.", p.rereadLines(report(OperationKind.Prompt), TextCheck.Found)[1])
+        assertEquals("The prompt's text does not appear in the last 200 lines of output. That does not say it was not received.", p.rereadLines(report(OperationKind.Prompt), TextCheck.NotFound)[1])
+        assertEquals("Paddock cannot tell whether the key reached the agent. Look at the terminal.", p.rereadLines(report(OperationKind.Esc), TextCheck.NotKept)[1])
+        assertEquals("Paddock cannot tell whether the key reached the agent. Look at the terminal.", p.rereadLines(report(OperationKind.CtrlC), TextCheck.Found)[1], "a key has no text to look for")
+        assertEquals("Paddock cannot tell whether the desktop focused the agent. Look at the desktop.", p.rereadLines(report(OperationKind.Focus), TextCheck.Found)[1])
+    }
+
+    @Test fun aRereadNeverJudgesWhetherAPromptWasReceived() {
+        val all = TextCheck.entries.flatMap { c -> OperationKind.entries.flatMap { k -> p.rereadLines(report(k), c) } }.joinToString(" ").lowercase()
+        for (word in listOf("was received", "was delivered", "succeeded", "failed", "lost", "resend", "retry", "try again")) {
+            assertFalse(word in all.replace("it was not received", "").replace("not received", ""), word)
+        }
+    }
+
+    @Test fun aRereadThatDidNothingSaysSoAndWhy() {
+        assertEquals("This agent is no longer in the session, or its pane now holds another terminal. Nothing was re-read.", p.rereadFailure(RereadOutcome.Failed(gone = true, detail = "x")))
+        assertEquals("Could not read the agent, so nothing was re-read (relay exited).", p.rereadFailure(RereadOutcome.Failed(gone = false, detail = "relay exited")))
+    }
 }

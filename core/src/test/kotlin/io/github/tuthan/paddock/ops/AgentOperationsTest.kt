@@ -287,4 +287,49 @@ class AgentOperationsTest {
         script(terminal = "term_other")
         assertFailsWith<StalePane> { ops().read(key) }
     }
+
+
+    @Test fun rereadAllReadsOnceFreesEveryWaitingRowAndReportsTheStateHerdrGivesNow() = runBlocking<Unit> {
+        script(rest = { _, _, _ -> Reply.Drop })                        // idle, so the prompt goes; its answer never comes
+        val o = ops()
+        val unknown = assertIs<OperationResult.Unknown>(o.prompt(key, "hello", keepText = true)).record
+        script(status = "working")                                       // by the re-read the agent has moved on
+        val readsBefore = host.count("agent.get")
+        now += 40_000
+        val report = o.rereadAll(key)
+        assertEquals(1, host.count("agent.get") - readsBefore, "one fresh read")
+        assertEquals(listOf(unknown.id), report.resolved.map { it.id })
+        assertEquals(io.github.tuthan.paddock.herdr.AgentStatus.Working, report.status)
+        assertEquals(now, report.readAtMillis)
+        assertEquals(OperationOutcome.Unknown, journal.get(unknown.id)!!.outcome, "the row stays unknown")
+        assertEquals("hello", journal.get(unknown.id)!!.promptText, "and keeps what it kept")
+        assertTrue(journal.unresolvedUnknown(key).isEmpty())
+    }
+
+    @Test fun rereadAllWithNothingWaitingStillReadsAndFreesNothing() = runBlocking<Unit> {
+        script()
+        val report = ops().rereadAll(key)
+        assertTrue(report.resolved.isEmpty())
+        assertEquals(1, host.count("agent.get"))
+    }
+
+    @Test fun rereadAllAfterARestartUsesTheEpochNowInstalledNotTheOneTheRowWasWrittenIn() = runBlocking<Unit> {
+        script(rest = { _, _, _ -> Reply.Drop })
+        val unknown = assertIs<OperationResult.Unknown>(ops().prompt(key, "hello")).record
+        assertEquals(2L, unknown.epoch)
+        script()
+        val newKey = TerminalKey(key.target, epoch = 5)          // the connection after a restart is a new epoch
+        val report = ops(installed = snapshot(epoch = 5)).rereadAll(newKey)
+        assertEquals(listOf(unknown.id), report.resolved.map { it.id })
+        assertFailsWith<StalePane> { ops(installed = snapshot(epoch = 5)).rereadAll(key) }
+    }
+
+    @Test fun rereadAllThatCannotReadLeavesEveryRowWaiting() = runBlocking<Unit> {
+        script(rest = { _, _, _ -> Reply.Drop })
+        val o = ops()
+        val unknown = assertIs<OperationResult.Unknown>(o.prompt(key, "hello")).record
+        host.handler = { _, _, _ -> Reply.Drop }
+        assertFailsWith<Exception> { o.rereadAll(key) }
+        assertTrue(journal.get(unknown.id)!!.awaitsReread)
+    }
 }

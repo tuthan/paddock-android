@@ -206,7 +206,9 @@ class Phase06LiveTest {
         assertIs<OperationResult.NeedsReread>(ops.prompt(key, "sent into a dying link"))
         assertEquals(1, promptRequests(), "nothing was written a second time")
         // The user re-reads, and only then can they decide what to do.
-        ops.reread(key, unknown.record.id)
+        val report = ops.rereadAll(key)
+        assertEquals(listOf(unknown.record.id), report.resolved.map { it.id }, "one read frees the one waiting row")
+        assertTrue(journal.records.value.first { it.id == unknown.record.id }.let { it.outcome == OperationOutcome.Unknown && it.resolvedAt != null }, "it stays unknown, re-read")
         assertIs<OperationResult.Acknowledged<*>>(ops.prompt(key, "a deliberate second prompt"))
         until("the second prompt") { submissions().size == landed + 1 }
         println("AC-06.3 (JVM tier): unknown after the cut; the first prompt ${if (landed == 1) "had reached" else "had not reached"} the pane; no automatic second write")

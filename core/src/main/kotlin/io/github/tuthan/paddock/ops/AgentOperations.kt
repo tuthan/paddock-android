@@ -55,6 +55,19 @@ class AgentOperations(
     /** The user re-read after an unknown outcome: the row stays unknown and stops blocking the terminal. */
     suspend fun reread(key: TerminalKey, operationId: Long): AgentRead = read(key).also { journal.resolve(operationId, "re-read") }
 
+    /**
+     * The user chose Re-read: one fresh read of the agent, then every unknown row of the terminal stops blocking it. The
+     * rows stay Unknown. A read that fails leaves them all waiting. [key] carries the epoch of the connection now installed,
+     * not the one the rows were written in: after a restart that is a different epoch, and a re-read looks at the agent as
+     * it is now.
+     */
+    suspend fun rereadAll(key: TerminalKey): ReReadReport {
+        val waiting = journal.unresolvedUnknown(key)
+        val read = read(key)
+        val resolved = waiting.map { journal.resolve(it.id, "re-read") }
+        return ReReadReport(key.target.terminalId, read.readAtMillis, read.agent.agentStatus, resolved)
+    }
+
     suspend fun prompt(key: TerminalKey, text: String, keepText: Boolean = false): OperationResult<Agent> {
         require(text.isNotBlank()) { "an empty prompt is never sent" }
         require(text.length <= MAX_PROMPT_CHARS) { "a prompt is at most $MAX_PROMPT_CHARS characters" }

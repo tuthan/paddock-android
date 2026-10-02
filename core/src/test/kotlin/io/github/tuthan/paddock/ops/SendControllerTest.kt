@@ -119,4 +119,53 @@ class SendControllerTest {
         assertTrue(methods.contains("agent.focus"))
         scope.cancel()
     }
+
+
+    private suspend fun makeUnknown(c: SendController): OperationRecord {
+        hold = true
+        c.prompt(key, "hello", keepText = true)
+        until("the prompt to be written") { methods.contains("agent.prompt") }
+        held!!.end()                                                    // the link dies with the answer still owed
+        until("the unknown outcome") { c.outcomes.value["term_1"]?.result is OperationResult.Unknown }
+        hold = false
+        return journal.records.value.single()
+    }
+
+    @Test fun aRereadFreesTheWaitingRowAndItsReportIsKeptUntilDismissed() = runBlocking<Unit> {
+        val c = SendController(scope, ops)
+        val unknown = makeUnknown(c)
+        assertTrue(unknown.awaitsReread)
+        c.reread(key)
+        until("the re-read") { c.rereads.value["term_1"] != null }
+        val done = assertIs<RereadOutcome.Done>(c.rereads.value.getValue("term_1"))
+        assertEquals(listOf(unknown.id), done.report.resolved.map { it.id })
+        assertTrue(journal.records.value.single().resolvedAt != null)
+        assertTrue(c.running.value.isEmpty())
+        assertEquals(1, methods.count { it == "agent.prompt" }, "a re-read writes nothing")
+        c.dismissReread("term_1")
+        assertNull(c.rereads.value["term_1"])
+        scope.cancel()
+    }
+
+    @Test fun aRereadOfAnAgentThatIsGoneSaysSoAndLeavesTheRowWaiting() = runBlocking<Unit> {
+        val c = SendController(scope, ops)
+        val unknown = makeUnknown(c)
+        val gone = TerminalKey(TargetRef(HostProfileId("h1"), "paddock-test", "term_1"), epoch = 99)
+        c.reread(gone)
+        until("the re-read") { c.rereads.value["term_1"] != null }
+        assertTrue(assertIs<RereadOutcome.Failed>(c.rereads.value.getValue("term_1")).gone)
+        assertTrue(journal.get(unknown.id)!!.awaitsReread)
+        scope.cancel()
+    }
+
+    @Test fun aTapOnRereadWhileAnotherCallRunsIsIgnoredAndANewOperationClearsTheReport() = runBlocking<Unit> {
+        val c = SendController(scope, ops)
+        makeUnknown(c)
+        c.reread(key)
+        until("the re-read") { c.rereads.value["term_1"] != null }
+        c.sendKey(key, OperationKind.Esc)
+        until("the Esc outcome") { c.outcomes.value["term_1"]?.kind == OperationKind.Esc }
+        assertNull(c.rereads.value["term_1"], "starting another operation clears the earlier report")
+        scope.cancel()
+    }
 }

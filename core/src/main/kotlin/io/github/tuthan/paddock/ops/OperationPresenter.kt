@@ -1,5 +1,6 @@
 package io.github.tuthan.paddock.ops
 
+import io.github.tuthan.paddock.output.OutputFeed
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -14,6 +15,10 @@ enum class ResultTone { Ok, Refused, Unknown, Problem }
  */
 data class ResultLine(val text: String, val tone: ResultTone, val opensTerminal: Boolean = false, val unknown: Boolean = false)
 
+/** The label an accepted prompt gets when no state observation follows it in [NO_PROGRESS_AFTER_MILLIS]. */
+const val NO_PROGRESS = "no progress observed"
+const val NO_PROGRESS_AFTER_MILLIS = 5_000L
+
 /** Turns operation results and journal rows into the plain sentences the screens show. Pure, with an injectable zone. */
 class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()) {
     private val seconds = DateTimeFormatter.ofPattern("HH:mm:ss", locale)
@@ -21,8 +26,12 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
     private fun at(millis: Long) = seconds.format(Instant.ofEpochMilli(millis).atZone(zone))
     private fun short(millis: Long) = minutes.format(Instant.ofEpochMilli(millis).atZone(zone))
 
-    fun line(kind: OperationKind, result: OperationResult<*>): ResultLine = when (result) {
-        is OperationResult.Acknowledged -> ResultLine(acknowledged(kind, result.record), ResultTone.Ok)
+    /**
+     * [noProgress] adds the label for an acknowledged prompt after which the agent's state has not changed for
+     * [NO_PROGRESS_AFTER_MILLIS] (see [noProgress]); it is a label, and changes nothing about what may be sent.
+     */
+    fun line(kind: OperationKind, result: OperationResult<*>, noProgress: Boolean = false): ResultLine = when (result) {
+        is OperationResult.Acknowledged -> ResultLine(acknowledged(kind, result.record) + if (noProgress && kind == OperationKind.Prompt) " · $NO_PROGRESS" else "", ResultTone.Ok)
         is OperationResult.Rejected -> rejected(kind, result)
         is OperationResult.NotSent -> notSent(kind, result)
         is OperationResult.Unknown -> ResultLine(unknownText(result.record), ResultTone.Unknown, unknown = true)
@@ -31,6 +40,43 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
         is OperationResult.Stale -> ResultLine("This screen is out of date. Re-read the agent, then try again. Nothing was sent.", ResultTone.Problem)
         is OperationResult.JournalFailed -> ResultLine("Nothing was sent: the operation record could not be written on this phone.", ResultTone.Problem)
     }
+
+    /**
+     * Five seconds after a prompt was accepted, with the agent's `state_change_seq` still the one the send began with, no
+     * state observation followed it. [currentSeq] is null when the agent is not in the installed read: nothing is claimed then.
+     * The label is only a label: it never re-enables a send.
+     */
+    fun noProgress(record: OperationRecord, currentSeq: Long?, nowMillis: Long): Boolean {
+        val sentAt = record.sentAt ?: return false
+        val seq = record.seqAtSend ?: return false
+        return record.kind == OperationKind.Prompt && record.outcome == OperationOutcome.Acknowledged &&
+            currentSeq == seq && nowMillis - sentAt >= NO_PROGRESS_AFTER_MILLIS
+    }
+
+    /**
+     * What a re-read shows: when and what herdr reports now, then what that does and does not tell about the row it freed.
+     * Facts only. A prompt's text is looked for in the output the screen holds; a key or a focus has nothing to look for.
+     */
+    fun rereadLines(report: ReReadReport, check: TextCheck): List<String> {
+        val state = "Re-read ${at(report.readAtMillis)} · herdr reports the agent as ${report.status.name.lowercase()}"
+        val freed = report.resolved.lastOrNull() ?: return listOf(state)
+        val what = when (freed.kind) {
+            OperationKind.Prompt -> when (check) {
+                TextCheck.NotKept -> "Paddock kept only a hash of this prompt, so it cannot look for its text. Check the terminal."
+                TextCheck.NoOutput -> "The output has not been read yet, so the prompt's text cannot be looked for."
+                TextCheck.Found -> "The prompt's text appears in the last ${OutputFeed.LINES} lines of output. That does not say the agent took it as a prompt."
+                TextCheck.NotFound -> "The prompt's text does not appear in the last ${OutputFeed.LINES} lines of output. That does not say it was not received."
+            }
+            OperationKind.Esc, OperationKind.CtrlC -> "Paddock cannot tell whether the key reached the agent. Look at the terminal."
+            OperationKind.Focus -> "Paddock cannot tell whether the desktop focused the agent. Look at the desktop."
+        }
+        return listOf(state, what)
+    }
+
+    /** Why a re-read did nothing: every row is still waiting. */
+    fun rereadFailure(failed: RereadOutcome.Failed): String =
+        if (failed.gone) "This agent is no longer in the session, or its pane now holds another terminal. Nothing was re-read."
+        else "Could not read the agent, so nothing was re-read (${failed.detail.take(120)})."
 
     /** "prompt sent 14:03:12 · outcome unknown · re-read before sending again", the note's own wording. */
     fun unknownText(record: OperationRecord): String {
