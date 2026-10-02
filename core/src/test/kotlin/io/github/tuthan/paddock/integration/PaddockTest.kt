@@ -45,10 +45,17 @@ class PaddockTest private constructor(val socket: String) {
 
     private fun scoped(vararg rest: String) = listOf(herdr, "--session", sessionName) + rest
 
-    suspend fun reportAgent(pane: String, state: String, message: String = "{\"kind\":\"it\"}") {
-        run(scoped("pane", "report-agent", pane, "--source", source, "--agent", "fake", "--state", state, "--message", message, "--seq", (++seq).toString()))
+    /** [agent] is `fake` unless the test runs a stand-in under a name herdr knows (Phase 06: `agent prompt` needs that). */
+    suspend fun reportAgent(pane: String, state: String, message: String = "{\"kind\":\"it\"}", agent: String = "fake") {
+        run(scoped("pane", "report-agent", pane, "--source", source, "--agent", agent, "--state", state, "--message", message, "--seq", (++seq).toString()))
     }
-    suspend fun releaseAgent(pane: String) { run(scoped("pane", "release-agent", pane, "--source", source, "--agent", "fake", "--seq", (++seq).toString())) }
+    suspend fun releaseAgent(pane: String, agent: String = "fake") { run(scoped("pane", "release-agent", pane, "--source", source, "--agent", agent, "--seq", (++seq).toString())) }
+
+    /** The pane's recent output as herdr renders it. */
+    suspend fun paneText(pane: String, lines: Int = 60): String = run(scoped("pane", "read", pane, "--source", "recent", "--lines", lines.toString()))
+
+    /** Interrupts whatever runs in a pane this test created. */
+    suspend fun sendKeys(pane: String, vararg keys: String) { run(scoped("agent", "send-keys", pane, *keys)) }
 
     suspend fun split(pane: String): String {
         val out = run(scoped("pane", "split", pane, "--direction", "right", "--no-focus"))

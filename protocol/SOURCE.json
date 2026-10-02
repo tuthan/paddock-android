@@ -1,7 +1,7 @@
 {
   "herdr": "0.9.1",
   "protocol": 22,
-  "captured": "2026-10-01",
+  "captured": "2026-10-02",
   "host": "devbox",
   "files": {
     "protocol/herdr-schema-22.json": "sha256:226d4ecbd128d2e6bc84e4c8ddcec21ba9c7e51a0aafffcf087111ead3f1fa9a",
@@ -30,6 +30,13 @@
     "fixtures/herdr-0.9.1/frames-scroll.jsonl": "sha256:64aaba546d6b99d5c9c56b24230d5c9d2eb18e948aeb895ed06ca02ed413eacb",
     "fixtures/herdr-0.9.1/frames-wide.jsonl": "sha256:f06487f220cd62b71de396002be3761e9f99b90d525cb14cc770f752b68742a2",
     "fixtures/herdr-0.9.1/message-capability.txt": "sha256:face2853b94c109f3b40b6c0a797e7aee344a03a0af6bd381cf58ef2319d774f",
+    "fixtures/herdr-0.9.1/operation-agent-focus.json": "sha256:434812dee2277cdfa3337a23dc432071b16a1d9259926d7eb4b40143ee3d2cc9",
+    "fixtures/herdr-0.9.1/operation-agent-prompt-blocked.json": "sha256:901701e54d7207be7ad9af04f2054c0ea2e3041fbedf47641c7a49be7c7bc685",
+    "fixtures/herdr-0.9.1/operation-agent-prompt-not-active.json": "sha256:c8fe6a28730c7b9e13a411a447efe3c12bbeaa6d5506b9732a763a6460e61589",
+    "fixtures/herdr-0.9.1/operation-agent-prompt-not-found.json": "sha256:ba64c63eb665b337e4ec2651868291f3a14d8d654af8a55f1713fa3caf2c54f4",
+    "fixtures/herdr-0.9.1/operation-agent-prompt.json": "sha256:0b4ce2feac5186cb902e7b3ae166b0a76c3f0d4bac357ca6ae3c542ba6291b41",
+    "fixtures/herdr-0.9.1/operation-send-keys-invalid.json": "sha256:6e3e6bb0ac1ee9fb0799a33b07037e41d6f3cdd5399b1d519de356d00dcd37c6",
+    "fixtures/herdr-0.9.1/operation-send-keys-ok.json": "sha256:edf2468b47455b037a319e2ee78139b6fab222e91d2ccc37f13b53e5a6f30511",
     "fixtures/herdr-0.9.1/pane-get.json": "sha256:7412ad8a7cf150415e2a251db9b739e1975cfbeeb639c4b6c45a2e0b18f7cb06",
     "fixtures/herdr-0.9.1/pane-read-recent.txt": "sha256:683dce259cf3c6126f6b1b7251395c7b5b1982375e007c129a84b71410de0889",
     "fixtures/herdr-0.9.1/report-agent-blocked.txt": "sha256:19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",

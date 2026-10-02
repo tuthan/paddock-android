@@ -12,6 +12,8 @@ import io.github.tuthan.paddock.output.Ansi
 import io.github.tuthan.paddock.output.AgentOutputReader
 import io.github.tuthan.paddock.output.OutputRead
 import io.github.tuthan.paddock.output.OutputFeed
+import io.github.tuthan.paddock.ops.AgentOperations
+import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.SshSession
 import io.github.tuthan.paddock.reconcile.Freshness
@@ -69,6 +71,8 @@ class MonitoredHost(
     /** The host's pinned control helper; null on a build that has none, which leaves terminals observe-only. */
     private val controlHelper: ControlHelperPort? = null,
     private val terminalOptions: TerminalOptions = TerminalOptions(),
+    /** The phone's operation journal; null leaves this host read-only (no prompt, key or focus operations). */
+    journal: OperationJournal? = null,
 ) {
     private val relay = RelayClient(session, relayPath, socketPath)
     private val readSnapshot = SessionMonitor.snapshotReader(relay)
@@ -81,6 +85,9 @@ class MonitoredHost(
         foreground, clock, beforeReconnect = beforeReconnect,
     )
     val reconciler: Reconciler get() = monitor.reconciler
+
+    /** Prompt, Esc, Ctrl+C and desktop focus for this host's agents, journaled; null when no journal was given. */
+    val operations: AgentOperations? = journal?.let { AgentOperations(relay, it, { reconciler.installed.value }, clock) }
     val freshness: StateFlow<Freshness> get() = monitor.freshness
     /** Why the monitor last went stale (a dropped stream, a failed or unreadable read), for the host's banner. */
     val lastLoss: StateFlow<Throwable?> get() = monitor.lastLoss
