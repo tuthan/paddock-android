@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
@@ -11,6 +12,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -99,6 +101,33 @@ class ActivityLogTest {
         byDesc("14:20, You marked write release notes as seen").assertIsDisplayed()
         rule.onNodeWithText("rotate the signing key", substring = true).assertDoesNotExist()
         shoot("activity-journal-rows-dark-100")
+    }
+
+    private fun reReadable(can: Boolean = true) =
+        ActivityPresenter(ZoneOffset.UTC, Locale.ENGLISH, { "Laptop" }, { _, _, t -> mapOf("term_a" to "approve edit to build.gradle")[t] }, canReread = { _, _, _ -> can })
+
+    @Test fun anUnknownRowOffersAReReadThatReportsItsOperationAndNeverAResend() {
+        var asked: Long? = null
+        val sections = reReadable().present(Activity.build(observations, actions, ActivityFilter.PhoneActions, journal), now)
+        rule.setContent { PaddockTheme(darkTheme = true) { ActivityLog(sections, ActivityFilter.PhoneActions, {}, onReread = { asked = it }) } }
+        rule.onAllNodesWithText("Re-read").assertCountEquals(1)
+        rule.onNodeWithText("Re-read").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(11L, asked)
+        for (word in listOf("Resend", "Retry", "Try again")) rule.onNodeWithText(word, substring = true, ignoreCase = true).assertDoesNotExist()
+        byDesc("14:40, You prompted approve edit to build.gradle (outcome unknown), prompt sent 14:40:07 · outcome unknown · re-read before sending again").assertIsDisplayed()
+        shoot("activity-unknown-reread-dark-100")
+    }
+
+    @Test fun noReReadForARowThatCannotBeReadOrWhenTheScreenOffersNone() {
+        val cannot = reReadable(can = false).present(Activity.build(observations, actions, ActivityFilter.PhoneActions, journal), now)
+        rule.setContent { PaddockTheme(darkTheme = true) { ActivityLog(cannot, ActivityFilter.PhoneActions, {}, onReread = {}) } }
+        rule.onNodeWithText("Re-read").assertDoesNotExist()
+    }
+
+    @Test fun noReReadButtonWithoutAnAction() {
+        val sections = reReadable().present(Activity.build(observations, actions, ActivityFilter.PhoneActions, journal), now)
+        rule.setContent { PaddockTheme(darkTheme = true) { ActivityLog(sections, ActivityFilter.PhoneActions, {}) } }
+        rule.onNodeWithText("Re-read").assertDoesNotExist()
     }
 
     @Test fun journalRowsAreNotInTheStateChangeOrConnectionViews() {

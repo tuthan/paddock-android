@@ -59,6 +59,8 @@ data class ComposerUi(
     val sending: Boolean = false,
     val outcome: ResultLine? = null,
     val snippets: List<String> = emptyList(),
+    /** What the last re-read found, as lines; empty when there is none to show. */
+    val rereadLines: List<String> = emptyList(),
 )
 
 /** The row at the foot of the Output tab that opens the composer. It looks like a field and is one button. */
@@ -103,6 +105,7 @@ fun Composer(
     escNote: String? = ESC_OFF_NOTE,
     onEsc: () -> Unit = {},
     onReread: (() -> Unit)? = null,
+    onDismissReread: () -> Unit = {},
     /** An action that clears the reason Send is off (re-read after a reconnect, or after an unknown outcome). */
     gateActionLabel: String? = null,
     onGateAction: () -> Unit = {},
@@ -142,6 +145,7 @@ fun Composer(
             if (closed != null && gateActionLabel != null) PaddockButton(gateActionLabel, onGateAction, kind = ButtonKind.Ghost, small = true, fillWidth = false)
             if (!escEnabled && escNote != null) Note(escNote)
             ui.outcome?.let { OutcomeLine(it, onOpenTerminal, onDismissOutcome, onReread) }
+            if (ui.rereadLines.isNotEmpty()) RereadReport(ui.rereadLines, onDismissReread)
             Note(COMPOSER_FACT)
             Kicker("Snippets are yours", Modifier.padding(top = 6.dp))
             Row(

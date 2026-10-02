@@ -141,6 +141,7 @@ class SendControllerTest {
         assertEquals(listOf(unknown.id), done.report.resolved.map { it.id })
         assertTrue(journal.records.value.single().resolvedAt != null)
         assertTrue(c.running.value.isEmpty())
+        assertNull(c.outcomes.value["term_1"], "the unknown card from the send is gone: it would offer a re-read for a row that is freed")
         assertEquals(1, methods.count { it == "agent.prompt" }, "a re-read writes nothing")
         c.dismissReread("term_1")
         assertNull(c.rereads.value["term_1"])

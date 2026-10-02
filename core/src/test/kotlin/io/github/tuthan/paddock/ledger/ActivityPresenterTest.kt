@@ -143,4 +143,16 @@ class ActivityPresenterTest {
         val row = opRow(op(OperationOutcome.Acknowledged, OperationKind.Esc, terminal = "term_abc123"), titles = emptyMap())
         assertEquals("You sent Esc to agent abc123", row.text)
     }
+
+
+    @Test fun anUnknownRowThatCanStillBeReReadCarriesItsOperationIdAndNothingElseDoes() {
+        fun row(item: ActivityItem.Operation, can: Boolean = true) =
+            ActivityPresenter(ZoneOffset.UTC, Locale.ENGLISH, hostName = { it }, titleOf = { _, _, _ -> "t" }, canReread = { _, _, _ -> can }).present(listOf(item), now).single().rows.single()
+        val unknown = op(OperationOutcome.Unknown)
+        assertEquals(unknown.record.id, row(unknown).rereadOperationId)
+        assertEquals(null, row(unknown, can = false).rereadOperationId, "an agent that cannot be read now offers nothing that would fail")
+        assertEquals(null, row(ActivityItem.Operation(unknown.record.copy(resolvedAt = unknown.record.sentAt!! + 60_000))).rereadOperationId, "once re-read there is nothing to do")
+        assertEquals(null, row(op(OperationOutcome.Acknowledged)).rereadOperationId)
+        assertEquals(null, row(op(OperationOutcome.Rejected, code = "agent_blocked")).rereadOperationId)
+    }
 }

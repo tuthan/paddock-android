@@ -41,9 +41,14 @@ import io.github.tuthan.paddock.ops.ManualInputRules
 import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationPresenter
 import io.github.tuthan.paddock.ops.OperationResult
+import io.github.tuthan.paddock.ops.PromptTextCheck
+import io.github.tuthan.paddock.ops.ResultLine
+import io.github.tuthan.paddock.ops.RereadOutcome
 import io.github.tuthan.paddock.ops.SendBlock
 import io.github.tuthan.paddock.ops.SendGate
+import io.github.tuthan.paddock.ops.SendOutcome
 import io.github.tuthan.paddock.ops.Snippets
+import io.github.tuthan.paddock.ops.TextCheck
 import io.github.tuthan.paddock.reconcile.Freshness
 import io.github.tuthan.paddock.ui.screens.Composer
 import io.github.tuthan.paddock.ui.screens.ComposerUi
@@ -151,7 +156,7 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
                             graph, relayDismissed, { relayDismissed = it }, { reviewKey = true },
                             onOpen = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output }, onSettings = { route = Route.Settings },
                             onSetUpKey = { editing = true; addFrom = Route.Home; route = Route.AddMachine },
-                        ) else ActivityRoute(graph)
+                        ) else ActivityRoute(graph, onOpenAgent = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output })
                     }
                     PaddockNavBar(NAV, if (effective == Route.Home) 0 else 1, { route = if (it == 0) Route.Home else Route.Activity })
                 }
@@ -287,7 +292,10 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onT
     val focus = focusView(host, terminalId)
     // The tap checks the gate again, as for the keys; the first time ever it asks what focus does.
     FocusGuard(settings.desktopFocusConfirmed, onConfirmed = graph::setDesktopFocusConfirmed, focus = { focus.key?.takeIf { focus.gate is OperationGate.Open }?.let { host.sends?.focus(it) } }) { requestFocus ->
-        val manual = rememberManualInput(graph, host, terminalId, focus.gate, onOpenTerminal = { onTab(AgentTab.Terminal) }, onFocus = requestFocus)
+        val manual = rememberManualInput(
+            graph, host, terminalId, focus.gate, now, (output as? OutputState.Showing)?.lines?.map { it.text },
+            onOpenTerminal = { onTab(AgentTab.Terminal) }, onFocus = requestFocus,
+        )
         AgentOutput(
             header, output, following, now, tab, onTab, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() },
             terminal = { TerminalRoute(graph, host, terminalId) },
@@ -338,15 +346,30 @@ private fun enterManual(graph: AppGraph, host: MonitoredHost, terminalId: String
 /** The agent screen's Manual input state and actions, or null when the host has no operations (the inert key strip stays). */
 @Composable
 private fun rememberManualInput(
-    graph: AppGraph, host: MonitoredHost, terminalId: String, focusGate: OperationGate?, onOpenTerminal: () -> Unit, onFocus: () -> Unit,
+    graph: AppGraph, host: MonitoredHost, terminalId: String, focusGate: OperationGate?, nowMillis: Long, outputLines: List<String>?,
+    onOpenTerminal: () -> Unit, onFocus: () -> Unit,
 ): Pair<ManualInputUi, ManualInputActions>? {
     val sends = host.sends ?: return null
     val view = manualView(graph, host, terminalId)
     val installed by host.reconciler.installed.collectAsState()
     val outcomes by sends.outcomes.collectAsState()
     val running by sends.running.collectAsState()
+    val rereads by sends.rereads.collectAsState()
+    val records by host.operationRecords.collectAsState()
     val presenter = remember { OperationPresenter() }
-    val ui = ManualInputUi(view.gate, terminalId in running, installed?.readAtMillis, outcomes[terminalId]?.let { presenter.line(it.kind, it.result) }, focus = focusGate)
+    val target = TargetRef(host.profile.hostId, host.sessionName, terminalId)
+    val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminalId }
+    // The journal's own row, which survives a restart, is the unknown card; the send's transient card would only say it twice.
+    val waiting = records.lastOrNull { it.sameTerminal(TerminalKey(target, 0L)) && it.awaitsReread }
+    val outcome = outcomes[terminalId]?.takeUnless { it.result is OperationResult.Unknown || it.result is OperationResult.NeedsReread }
+    val reread = rereads[terminalId]
+    val rereadLines = (reread as? RereadOutcome.Done)?.let { done ->
+        presenter.rereadLines(done.report, done.report.resolved.lastOrNull()?.let { PromptTextCheck.check(it, outputLines) } ?: TextCheck.NotKept)
+    }.orEmpty()
+    val ui = ManualInputUi(
+        view.gate, terminalId in running, installed?.readAtMillis, outcomeLine(presenter, outcome, agent?.stateChangeSeq, nowMillis), focus = focusGate,
+        unknown = waiting?.let { presenter.unknownText(it) }, rereadLines = rereadLines, rereadFailure = (reread as? RereadOutcome.Failed)?.let { presenter.rereadFailure(it) },
+    )
     val actions = ManualInputActions(
         onEnter = { enterManual(graph, host, terminalId, installed?.epoch) },
         onLeave = { graph.manualInput.leave() },
@@ -354,8 +377,17 @@ private fun rememberManualInput(
         onKey = { kind -> view.key?.takeIf { view.gate is OperationGate.Open }?.let { sends.sendKey(it, kind) } },
         onDismissOutcome = { sends.dismiss(terminalId) },
         onOpenTerminal = onOpenTerminal, onFocus = onFocus,
+        onReread = { installed?.epoch?.let { sends.reread(TerminalKey(target, it)) } },
+        onDismissReread = { sends.dismissReread(terminalId) },
     )
     return ui to actions
+}
+
+/** A send's outcome as a line, with the "no progress observed" label once an accepted prompt has seen no state change for five seconds. */
+private fun outcomeLine(presenter: OperationPresenter, outcome: SendOutcome?, currentSeq: Long?, nowMillis: Long): ResultLine? {
+    outcome ?: return null
+    val accepted = (outcome.result as? OperationResult.Acknowledged<*>)?.record
+    return presenter.line(outcome.kind, outcome.result, noProgress = accepted != null && presenter.noProgress(accepted, currentSeq, nowMillis))
 }
 
 /**
@@ -426,6 +458,7 @@ private fun ComposeRoute(graph: AppGraph, terminalId: String?, onBack: () -> Uni
     val records by host.operationRecords.collectAsState()
     val outcomes by sends.outcomes.collectAsState()
     val running by sends.running.collectAsState()
+    val rereads by sends.rereads.collectAsState()
     val home by host.home.collectAsState()
     val snippets by graph.snippets.collectAsState()
     val now = rememberNow()
@@ -448,16 +481,26 @@ private fun ComposeRoute(graph: AppGraph, terminalId: String?, onBack: () -> Uni
 
     val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
     val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
-    val stale = (gate as? SendGate.Closed)?.block == SendBlock.Stale
+    val block = (gate as? SendGate.Closed)?.block
+    val stale = block == SendBlock.Stale
     val manual = manualView(graph, host, terminalId)
     val keyGate = manual.gate
+    // A re-read looks at the agent as it is now, so it takes the epoch now installed, not the one this screen opened in.
+    val reread = { liveEpoch?.let { sends.reread(TerminalKey(key.target, it)) }; Unit }
+    // The composer shows only the first line of a re-read (when and what herdr reports); whether the text appears is on the agent screen.
+    val rereadLines = when (val r = rereads[terminalId]) {
+        is RereadOutcome.Done -> presenter.rereadLines(r.report, TextCheck.NoOutput).take(1)
+        is RereadOutcome.Failed -> listOf(presenter.rereadFailure(r))
+        null -> emptyList()
+    }
     Composer(
-        ComposerUi(header, gate, sending = terminalId in running, outcome = outcome?.let { presenter.line(it.kind, it.result) }, snippets = snippets),
+        ComposerUi(header, gate, sending = terminalId in running, outcome = outcomeLine(presenter, outcome, agent?.stateChangeSeq, now), snippets = snippets, rereadLines = rereadLines),
         now, text, { text = it }, onSnippet = { text = Snippets.insert(text, it) },
         onSend = { sends.prompt(key, text, settings.keepPromptText) },
         onBack = onBack, onEditSnippets = onEditSnippets, onOpenTerminal = onOpenTerminal, onDismissOutcome = { sends.dismiss(terminalId) },
-        gateActionLabel = if (stale) "Re-read" else null,
-        onGateAction = { openedEpoch = liveEpoch; openedAt = System.currentTimeMillis(); host.refresh() },
+        onReread = reread, onDismissReread = { sends.dismissReread(terminalId) },
+        gateActionLabel = if (stale || block == SendBlock.NeedsReread) "Re-read" else null,
+        onGateAction = { if (stale) { openedEpoch = liveEpoch; openedAt = System.currentTimeMillis(); host.refresh() } else reread() },
         // Esc is live only inside Manual input, and under the keys' own gate: it says why when the mode is on but the keys are not open.
         escEnabled = keyGate is OperationGate.Open && terminalId !in running,
         escNote = if (keyGate is OperationGate.Closed) "Esc is off. ${keyGate.sentence}" else ESC_OFF_NOTE,
@@ -472,16 +515,31 @@ private fun SnippetsRoute(graph: AppGraph, onBack: () -> Unit) {
 }
 
 @Composable
-private fun ActivityRoute(graph: AppGraph) {
+private fun ActivityRoute(graph: AppGraph, onOpenAgent: (terminalId: String) -> Unit) {
     val profile by graph.profile.collectAsState()
+    val view by graph.hostUi.view.collectAsState()
+    val host = (view.phase as? HostPhase.Monitoring)?.host
     var filter by rememberSaveable { mutableStateOf(ActivityFilter.All) }
     val now = rememberNow()
-    // Re-read each second: the ledger is small and in memory.
-    val presenter = remember(profile) {
-        ActivityPresenter(java.time.ZoneId.systemDefault(), java.util.Locale.getDefault(), hostName = { profile?.name ?: it }, titleOf = { _, _, tid -> graph.hostUi.view.value.lastHome?.rows?.firstOrNull { it.key.target.terminalId == tid }?.title })
+    // Re-read each second: the ledger is small and in memory. An unknown row offers Re-read only for an agent the connected host lists now.
+    val presenter = remember(profile, host) {
+        ActivityPresenter(
+            java.time.ZoneId.systemDefault(), java.util.Locale.getDefault(), hostName = { profile?.name ?: it },
+            titleOf = { _, _, tid -> graph.hostUi.view.value.lastHome?.rows?.firstOrNull { it.key.target.terminalId == tid }?.title },
+            canReread = { h, s, tid -> host?.sends != null && h == host.profile.hostId.value && s == host.sessionName && host.home.value?.rows?.any { it.key.target.terminalId == tid } == true },
+        )
     }
     val sections = remember(filter, now / 1_000) { presenter.present(Activity.build(graph.ledger.observations(), graph.ledger.actions(), filter, graph.journal.records.value), now) }
-    ActivityLog(sections, filter, { filter = it })
+    // Re-read, then open the agent: its screen is where the result is shown. Never a resend from here.
+    val onReread: (Long) -> Unit = { id ->
+        val record = graph.journal.get(id)
+        val epoch = host?.reconciler?.installed?.value?.epoch
+        if (record != null && host != null && epoch != null) {
+            host.sends?.reread(TerminalKey(TargetRef(host.profile.hostId, record.session, record.terminalId), epoch))
+            onOpenAgent(record.terminalId)
+        }
+    }
+    ActivityLog(sections, filter, { filter = it }, onReread = if (host?.sends != null) onReread else null)
 }
 
 @Composable

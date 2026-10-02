@@ -57,6 +57,8 @@ class SendController(private val scope: CoroutineScope, private val ops: AgentOp
                     RereadOutcome.Failed(gone = false, detail = e.message ?: e::class.simpleName.orEmpty())
                 }
                 _rereads.update { it + (id to outcome) }
+                // The row is freed: the unknown card from the send itself is out of date and would offer a re-read again.
+                if (outcome is RereadOutcome.Done) _outcomes.update { if (it[id]?.result.let { r -> r is OperationResult.Unknown || r is OperationResult.NeedsReread }) it - id else it }
             } finally {
                 _running.update { it - id }
             }

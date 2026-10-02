@@ -24,6 +24,7 @@ import io.github.tuthan.paddock.ops.OperationGate
 import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.ResultLine
 import io.github.tuthan.paddock.ops.SendBlock
+import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.ButtonPair
 import io.github.tuthan.paddock.ui.components.Kicker
@@ -44,7 +45,8 @@ const val MANUAL_KEYS_FACT = "Each key is sent once and recorded. herdr acceptin
  * whether the keys may be sent now (closed, with the sentence, while the fresh read is still coming or when the link or the
  * agent is gone). [running] is a call from this phone still on its way; [readAtMillis] is the read the mode started with;
  * [outcome] is how the last operation on this terminal ended. [focus] is the desktop-focus button's gate, or null when the
- * button is not offered.
+ * button is not offered. [unknown] is the journal's line for a row that still waits for a re-read (it survives a restart,
+ * unlike [outcome]); [rereadLines] is what the last re-read found and [rereadFailure] why one did nothing.
  */
 data class ManualInputUi(
     val gate: OperationGate?,
@@ -52,6 +54,9 @@ data class ManualInputUi(
     val readAtMillis: Long? = null,
     val outcome: ResultLine? = null,
     val focus: OperationGate? = null,
+    val unknown: String? = null,
+    val rereadLines: List<String> = emptyList(),
+    val rereadFailure: String? = null,
 ) {
     val active: Boolean get() = gate != null
 }
@@ -64,6 +69,7 @@ class ManualInputActions(
     val onOpenTerminal: () -> Unit,
     val onReread: (() -> Unit)? = null,
     val onFocus: () -> Unit = {},
+    val onDismissReread: () -> Unit = {},
 )
 
 /**
@@ -75,9 +81,17 @@ class ManualInputActions(
 @Composable
 fun ManualInput(ui: ManualInputUi, nowMillis: Long, actions: ManualInputActions, modifier: Modifier = Modifier) {
     val c = PaddockTokens.colors
-    val closed = ui.gate as? OperationGate.Closed
-    val focusClosed = ui.focus as? OperationGate.Closed
+    // The unknown row says "re-read before sending again" itself, with the button; the gates need not say it a second and third time.
+    fun OperationGate.Closed?.unlessExplainedAbove() = this?.takeUnless { ui.unknown != null && it.block == SendBlock.NeedsReread }
+    val closed = (ui.gate as? OperationGate.Closed).unlessExplainedAbove()
+    val focusClosed = (ui.focus as? OperationGate.Closed).unlessExplainedAbove()
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ui.unknown?.let { line ->
+            // Never a resend: the only action is to read the agent again, and only the user can decide what to do after it.
+            Banner(line, actionLabel = if (ui.running || actions.onReread == null) null else "Re-read", onAction = { actions.onReread?.invoke() })
+        }
+        if (ui.rereadLines.isNotEmpty()) RereadReport(ui.rereadLines, actions.onDismissReread)
+        ui.rereadFailure?.let { Banner(it, actionLabel = "Dismiss", onAction = actions.onDismissReread) }
         if (!ui.active || ui.focus != null) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!ui.active) PaddockButton("Manual input", actions.onEnter, kind = ButtonKind.Ghost, small = true, fillWidth = false)
@@ -95,7 +109,7 @@ fun ManualInput(ui: ManualInputUi, nowMillis: Long, actions: ManualInputActions,
                     Kicker("Manual input · on", Modifier.weight(1f))
                     PaddockButton("Done", actions.onLeave, kind = ButtonKind.Ghost, small = true, fillWidth = false)
                 }
-                val reading = closed?.block == SendBlock.Reading
+                val reading = (ui.gate as? OperationGate.Closed)?.block == SendBlock.Reading
                 Text(
                     if (reading || ui.readAtMillis == null) "Reading the agent's state…" else "Read ${AgeText.span(nowMillis - ui.readAtMillis)}",
                     style = PaddockTokens.type.secondary, color = c.dim, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
@@ -113,6 +127,16 @@ fun ManualInput(ui: ManualInputUi, nowMillis: Long, actions: ManualInputActions,
             }
         }
         ui.outcome?.let { OutcomeLine(it, actions.onOpenTerminal, actions.onDismissOutcome, actions.onReread) }
+    }
+}
+
+/** What a re-read found: plain lines, no verdict, and a way to put them away. Announced politely when it appears. */
+@Composable
+internal fun RereadReport(lines: List<String>, onDismiss: () -> Unit) {
+    val c = PaddockTokens.colors
+    Column(Modifier.fillMaxWidth().card(c).semantics { liveRegion = LiveRegionMode.Polite }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        lines.forEach { Text(it, style = PaddockTokens.type.secondary, color = c.text) }
+        PaddockButton("Dismiss", onDismiss, kind = ButtonKind.Ghost, small = true, fillWidth = false)
     }
 }
 

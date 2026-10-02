@@ -74,7 +74,7 @@ class ManualInputPanelTest {
     private val key = TerminalKey(TargetRef(HostProfileId("h1"), "paddock-test", "term_1"), 2)
 
     private class Calls {
-        var enter = 0; var leave = 0; var dismiss = 0; var terminal = 0; var reread = 0; var focus = 0
+        var enter = 0; var leave = 0; var dismiss = 0; var terminal = 0; var reread = 0; var focus = 0; var dismissReread = 0
         val keys = mutableListOf<OperationKind>()
     }
 
@@ -83,7 +83,7 @@ class ManualInputPanelTest {
 
     private fun actions(withReread: Boolean = false, onFocus: () -> Unit = { calls.focus++ }) = ManualInputActions(
         onEnter = { calls.enter++ }, onLeave = { calls.leave++ }, onKey = { calls.keys += it },
-        onDismissOutcome = { calls.dismiss++ }, onOpenTerminal = { calls.terminal++ }, onReread = if (withReread) ({ calls.reread++ }) else null, onFocus = onFocus,
+        onDismissOutcome = { calls.dismiss++ }, onOpenTerminal = { calls.terminal++ }, onReread = if (withReread) ({ calls.reread++ }) else null, onFocus = onFocus, onDismissReread = { calls.dismissReread++ },
     )
 
     private fun showPanel(state: ManualInputUi, dark: Boolean = true, withReread: Boolean = false) {
@@ -218,6 +218,70 @@ class ManualInputPanelTest {
 
     private val focusDialog = hasAnyAncestor(isDialog())
 
+    private val unknownLine = "prompt sent 14:03:12 · outcome unknown · re-read before sending again"
+    private val needsReread = "An earlier send's outcome is unknown. Re-read before sending again."
+
+    @Test fun anUnknownRowShowsTheNotesLineWithAReReadAndNeverAResend() {
+        showPanel(ManualInputUi(gate = null, focus = OperationGate.Open, unknown = unknownLine), withReread = true)
+        rule.onNodeWithText(unknownLine).assertIsDisplayed()
+        rule.onNodeWithText("Re-read").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.reread)
+        for (word in listOf("Resend", "Retry", "Try again", "Send again")) rule.onNodeWithText(word, substring = true, ignoreCase = true).assertDoesNotExist()
+        shoot("unknown-row-dark")
+    }
+
+    @Test fun whileAReReadRunsTheUnknownRowOffersNothingToTap() {
+        showPanel(ManualInputUi(gate = null, running = true, unknown = unknownLine), withReread = true)
+        rule.onNodeWithText(unknownLine).assertIsDisplayed()
+        rule.onNodeWithText("Re-read").assertDoesNotExist()
+    }
+
+    @Test fun withoutAReReadActionTheUnknownRowStillSaysWhatHappened() {
+        showPanel(ManualInputUi(gate = null, unknown = unknownLine), withReread = false)
+        rule.onNodeWithText(unknownLine).assertIsDisplayed()
+        rule.onNodeWithText("Re-read").assertDoesNotExist()
+    }
+
+    @Test fun theGatesDoNotRepeatWhatTheUnknownRowAlreadySays() {
+        val holding = gate(records = listOf(row(OperationOutcome.Unknown, OperationKind.Prompt))) as OperationGate.Closed
+        assertEquals(needsReread, holding.sentence)
+        val focusHolding = FocusRules.gate(agent(), now - 500, live = true, records = listOf(row(OperationOutcome.Unknown, OperationKind.Prompt)), key = key) as OperationGate.Closed
+        showPanel(ManualInputUi(holding, readAtMillis = now - 500, focus = focusHolding, unknown = unknownLine), withReread = true)
+        rule.onAllNodesWithText(needsReread).assertCountEquals(0)
+        rule.onNodeWithText("Esc").assertIsNotEnabled()
+        rule.onNodeWithText("Ctrl+C").assertIsNotEnabled()
+        rule.onNodeWithText("Focus on desktop").assertIsNotEnabled()
+        ui = ManualInputUi(holding, readAtMillis = now - 500, focus = focusHolding, unknown = null)
+        rule.waitForIdle()
+        rule.onAllNodesWithText(needsReread).assertCountEquals(2)       // with no unknown row to say it, the gates say it themselves
+    }
+
+    @Test fun aReReadShowsWhatItFoundAsPlainLinesAndCanBeDismissed() {
+        val lines = listOf("Re-read 14:05:40 · herdr reports the agent as working", "The prompt's text appears in the last 200 lines of output. That does not say the agent took it as a prompt.")
+        showPanel(ManualInputUi(gate = null, focus = OperationGate.Open, rereadLines = lines))
+        lines.forEach { rule.onNodeWithText(it).assertIsDisplayed() }
+        rule.onNodeWithText("Dismiss").assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.dismissReread)
+        shoot("reread-report-dark")
+    }
+
+    @Test fun aReReadThatDidNothingSaysWhyAndCanBeDismissed() {
+        val why = "Could not read the agent, so nothing was re-read (relay exited)."
+        showPanel(ManualInputUi(gate = null, unknown = unknownLine, rereadFailure = why), withReread = true)
+        rule.onNodeWithText(why).assertIsDisplayed()
+        rule.onNodeWithText(unknownLine).assertIsDisplayed()
+        rule.onNodeWithText("Dismiss").performClick()
+        assertEquals(1, calls.dismissReread)
+    }
+
+    @Test fun theNoProgressLabelIsOnlyALabel() {
+        val line = ResultLine("Prompt sent 14:03:12 · accepted by herdr, which is not a receipt for any turn · no progress observed", ResultTone.Ok)
+        showPanel(ManualInputUi(gate = null, focus = OperationGate.Open, outcome = line))
+        rule.onNodeWithText(line.text).assertIsDisplayed()
+        rule.onNodeWithText("Focus on desktop").assertIsEnabled()
+        rule.onNodeWithText("Re-read").assertDoesNotExist()
+    }
+
     @Test fun desktopFocusIsOneButtonBesideManualInputWhetherOrNotTheModeIsOn() {
         showPanel(ManualInputUi(gate = null, focus = OperationGate.Open))
         rule.onNodeWithText("Manual input").assertIsDisplayed()
@@ -313,14 +377,14 @@ class ManualInputPanelTest {
         rule.onNodeWithText(FOCUS_QUESTION).assertDoesNotExist()
     }
 
-    private fun screen(manual: ManualInputUi?, tab: AgentTab = AgentTab.Output, fontScale: Float? = null, dark: Boolean = true) {
+    private fun screen(manual: ManualInputUi?, tab: AgentTab = AgentTab.Output, fontScale: Float? = null, dark: Boolean = true, withReread: Boolean = false) {
         rule.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
                 PaddockTheme(darkTheme = dark) {
                     AgentOutput(
                         header, OutputState.Showing(Ansi.parse((1..30).joinToString("\n") { "line $it of the agent output" }), now - 1_000, false), true, now, tab,
-                        {}, {}, {}, {}, onCompose = {}, manualInput = manual, manualActions = manual?.let { actions() },
+                        {}, {}, {}, {}, onCompose = {}, manualInput = manual, manualActions = manual?.let { actions(withReread = withReread) },
                     )
                 }
             }
@@ -351,6 +415,19 @@ class ManualInputPanelTest {
         rule.onNodeWithText(closed.sentence).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText(MANUAL_KEYS_FACT).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Ask claude…").assertIsDisplayed()
+    }
+
+    @Test fun twoHundredPercentFontWithAnUnknownRowAndAReportStillShowsTheOutput() {
+        val holding = gate(records = listOf(row(OperationOutcome.Unknown, OperationKind.Prompt)))
+        val lines = listOf("Re-read 14:05:40 · herdr reports the agent as working", "Paddock kept only a hash of this prompt, so it cannot look for its text. Check the terminal.")
+        screen(ManualInputUi(holding, readAtMillis = now - 500, unknown = unknownLine, rereadLines = lines, focus = OperationGate.Open), fontScale = 2f, withReread = true)
+        rule.onNodeWithText("line 30", substring = true).assertIsDisplayed()
+        rule.onNodeWithText(unknownLine).assertIsDisplayed()
+        rule.onNodeWithText("Ask claude…").assertIsDisplayed()
+        shoot("unknown-row-screen-dark-200")
+        rule.onNodeWithText("Re-read").performScrollTo().assertIsDisplayed().performClick()
+        assertEquals(1, calls.reread)
+        rule.onNodeWithText("Done").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun theOpenPanelOnTheAgentScreenInLightTheme() {

@@ -21,11 +21,13 @@ import io.github.tuthan.paddock.ledger.ActivityFilter
 import io.github.tuthan.paddock.ledger.ActivityRow
 import io.github.tuthan.paddock.ledger.ActivitySection
 import io.github.tuthan.paddock.ledger.ActivityTone
+import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.Dot
 import io.github.tuthan.paddock.ui.components.FilterChips
 import io.github.tuthan.paddock.ui.components.Hairline
 import io.github.tuthan.paddock.ui.components.Kicker
 import io.github.tuthan.paddock.ui.components.Note
+import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.ScreenHeader
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 
@@ -47,6 +49,8 @@ fun ActivityLog(
     filter: ActivityFilter,
     onFilter: (ActivityFilter) -> Unit,
     modifier: Modifier = Modifier,
+    /** Re-read the unknown row with this journal id; null leaves the button out. */
+    onReread: ((operationId: Long) -> Unit)? = null,
 ) {
     val c = PaddockTokens.colors
     Column(modifier.fillMaxSize()) {
@@ -64,7 +68,7 @@ fun ActivityLog(
             }
             sections.forEach { section ->
                 item(key = "h-${section.heading}") { Kicker(section.heading, Modifier.padding(top = 4.dp)) }
-                items(section.rows, key = { it.key }) { row -> Event(row) }
+                items(section.rows, key = { it.key }) { row -> Event(row, onReread) }
             }
             item(key = "note") {
                 Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -77,7 +81,7 @@ fun ActivityLog(
 }
 
 @Composable
-private fun Event(row: ActivityRow) {
+private fun Event(row: ActivityRow, onReread: ((Long) -> Unit)?) {
     val c = PaddockTokens.colors
     val dot = when (row.tone) {
         ActivityTone.NeedsYou -> c.needsYou
@@ -86,16 +90,23 @@ private fun Event(row: ActivityRow) {
         ActivityTone.Host -> c.attention
         ActivityTone.Quiet -> c.faint
     }
-    Row(
-        Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = row.description },
-        horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top,
-    ) {
-        // The time never wraps: its column grows with the font instead of breaking 14:50 into two lines.
-        Text(row.timeLabel, style = PaddockTokens.type.monoFact, color = c.dim, softWrap = false, modifier = Modifier.widthIn(min = 44.dp).padding(top = 1.dp))
-        Dot(dot, Modifier.padding(top = 6.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(row.text, style = PaddockTokens.type.rowTitle.copy(fontSize = PaddockTokens.type.summary.fontSize), color = c.title)
-            if (row.detail != null) Text(row.detail!!, style = PaddockTokens.type.secondary, color = c.dim)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = row.description },
+            horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top,
+        ) {
+            // The time never wraps: its column grows with the font instead of breaking 14:50 into two lines.
+            Text(row.timeLabel, style = PaddockTokens.type.monoFact, color = c.dim, softWrap = false, modifier = Modifier.widthIn(min = 44.dp).padding(top = 1.dp))
+            Dot(dot, Modifier.padding(top = 6.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(row.text, style = PaddockTokens.type.rowTitle.copy(fontSize = PaddockTokens.type.summary.fontSize), color = c.title)
+                if (row.detail != null) Text(row.detail!!, style = PaddockTokens.type.secondary, color = c.dim)
+            }
+        }
+        // Outside the merged description so TalkBack finds the button on its own. Only a re-read: never a resend.
+        val id = row.rereadOperationId
+        if (id != null && onReread != null) {
+            PaddockButton("Re-read", { onReread(id) }, Modifier.padding(start = 70.dp), kind = ButtonKind.Ghost, small = true, fillWidth = false)
         }
     }
 }

@@ -65,7 +65,7 @@ class ComposerTest {
     private val open = SendGate.Open(hintsUnreported = false)
 
     private class Calls {
-        var send = 0; var back = 0; var esc = 0; var snippets = 0; var terminal = 0; var dismiss = 0; var reread = 0; var gateAction = 0
+        var send = 0; var back = 0; var esc = 0; var snippets = 0; var terminal = 0; var dismiss = 0; var reread = 0; var gateAction = 0; var dismissReread = 0
         val inserted = mutableListOf<String>()
     }
 
@@ -88,7 +88,7 @@ class ComposerTest {
                         onSend = { calls.send++ }, onBack = { calls.back++ }, onEditSnippets = { calls.snippets++ },
                         onOpenTerminal = { calls.terminal++ }, onDismissOutcome = { calls.dismiss++ },
                         escEnabled = escEnabled, onEsc = { calls.esc++ },
-                        onReread = onReread?.let { f -> { calls.reread++; f() } },
+                        onReread = onReread?.let { f -> { calls.reread++; f() } }, onDismissReread = { calls.dismissReread++ },
                         gateActionLabel = gateActionLabel, onGateAction = { calls.gateAction++ },
                     )
                 }
@@ -304,5 +304,23 @@ class ComposerTest {
         rule.onNode(hasContentDescription("Write a prompt for codex")).performClick()
         assertEquals(1, opened)
     }
-}
 
+    @Test fun aReReadReportShowsUnderTheOutcomeAndCanBeDismissed() {
+        val lines = listOf("Re-read 14:05:40 · herdr reports the agent as working")
+        val calls = show(ComposerUi(header, open, rereadLines = lines))
+        rule.onNodeWithText(lines.single()).assertIsDisplayed()
+        rule.onNodeWithText("Dismiss").performClick()
+        assertEquals(1, calls.dismissReread)
+    }
+
+    @Test fun anUnknownGateOffersAReReadAndNoResend() {
+        val holding = ComposerRules.gate(agent(), 1_000_000L - 500, 1_000_000L - 3_000, true, listOf(OperationRecord(1, "h1", "paddock-test", "term_1", 2, OperationKind.Prompt, 1, OperationOutcome.Unknown, sentAt = 2)), key, "hello")
+        assertEquals(SendBlock.NeedsReread, (holding as SendGate.Closed).block)
+        val calls = show(ComposerUi(header, holding), initialText = "hello", gateActionLabel = "Re-read")
+        rule.onNodeWithText(holding.sentence).assertIsDisplayed()
+        rule.onNodeWithText("Send prompt").assertIsNotEnabled()
+        rule.onNodeWithText("Re-read").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.gateAction)
+        for (word in listOf("Resend", "Retry", "Try again")) rule.onNodeWithText(word, substring = true, ignoreCase = true).assertDoesNotExist()
+    }
+}

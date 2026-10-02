@@ -26,6 +26,8 @@ data class ActivityRow(
     val kind: ActivityRowKind,
     val tone: ActivityTone = ActivityTone.Quiet,
     val detail: String? = null,
+    /** The journal row this line is about when its outcome is unknown and the user can still re-read it; null otherwise. */
+    val rereadOperationId: Long? = null,
 ) {
     val description: String get() = listOfNotNull(timeLabel, text, detail).joinToString(", ")
 }
@@ -43,6 +45,8 @@ class ActivityPresenter(
     locale: Locale = Locale.getDefault(),
     private val hostName: (hostId: String) -> String = { it },
     private val titleOf: (host: String, session: String, terminalId: String) -> String? = { _, _, _ -> null },
+    /** Whether the terminal can be read now (it is in the installed read of a connected host); an unknown row offers Re-read only then. */
+    private val canReread: (host: String, session: String, terminalId: String) -> Boolean = { _, _, _ -> true },
 ) {
     private val time = DateTimeFormatter.ofPattern("HH:mm", locale)
     private val operations = OperationPresenter(zone, locale)
@@ -101,7 +105,8 @@ class ActivityPresenter(
                 OperationOutcome.NotSent -> " (not sent)"
                 OperationOutcome.Unknown -> " (outcome unknown)"
             }
-            ActivityRow("op-${r.id}", clock(r.requestedAt), did + ended, ActivityRowKind.Acted, ActivityTone.Phone, operations.describe(r))
+            val reread = r.id.takeIf { r.awaitsReread && canReread(r.host, r.session, r.terminalId) }
+            ActivityRow("op-${r.id}", clock(r.requestedAt), did + ended, ActivityRowKind.Acted, ActivityTone.Phone, operations.describe(r), rereadOperationId = reread)
         }
         is ActivityItem.Gap -> {
             val host = hostName(item.host).ifEmpty { "the host" }
