@@ -16,15 +16,18 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipeLeft
@@ -41,6 +44,7 @@ import io.github.tuthan.paddock.terminal.TerminalMode
 import io.github.tuthan.paddock.terminal.TerminalNotice
 import io.github.tuthan.paddock.terminal.TerminalView
 import io.github.tuthan.paddock.terminal.VtEngine
+import io.github.tuthan.paddock.ui.screens.KEYBOARD_FIELD_TAG
 import io.github.tuthan.paddock.ui.screens.TerminalActions
 import io.github.tuthan.paddock.ui.screens.TerminalTab
 import io.github.tuthan.paddock.ui.theme.PaddockTheme
@@ -154,6 +158,74 @@ class TerminalTabTest {
         screenNode().performKeyInput { pressKey(Key.A); pressKey(Key.Enter); pressKey(Key.DirectionUp); withKeyDown(Key.CtrlLeft) { pressKey(Key.C) } }
         rule.waitForIdle()
         assertTrue("no key reached the terminal", calls.keys.isEmpty())
+    }
+
+    // ---- the Android keyboard ----
+
+    private fun keyboardField() = rule.onNodeWithTag(KEYBOARD_FIELD_TAG)
+    private fun typed(calls: Calls) = calls.keys.map { String(it, Charsets.UTF_8) }
+
+    @Test fun theKeyboardAndItsFieldAreOfferedOnlyUnderControl() {
+        show(viewOf(TerminalMode.Observing))
+        rule.onNodeWithText("Keyboard").assertDoesNotExist()
+        keyboardField().assertDoesNotExist()
+        byDesc("Control, for the next character typed").assertDoesNotExist()
+        byDesc("Page up").assertDoesNotExist()
+    }
+
+    @Test fun theKeyboardButtonFocusesTheFieldAndWhatIsTypedGoesToTheTerminal() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        rule.onNodeWithText("Keyboard").assertHasClickAction().performClick()
+        keyboardField().assertIsFocused()
+        keyboardField().performTextInput("ls")                       // what a keyboard's commit looks like to the field
+        rule.waitForIdle()
+        assertEquals(listOf("l", "s"), typed(calls))
+        keyboardField().performTextInput("-l")                       // the field was put back, so the next edit is read afresh
+        rule.waitForIdle()
+        assertEquals(listOf("l", "s", "-", "l"), typed(calls))
+    }
+
+    @Test fun enterAndBackspaceFromTheKeyboardAreTheTerminalsOwnBytes() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        rule.onNodeWithText("Keyboard").performClick()
+        keyboardField().performKeyInput { pressKey(Key.Backspace); pressKey(Key.Enter); pressKey(Key.Escape); pressKey(Key.DirectionLeft) }
+        rule.waitForIdle()
+        assertEquals(4, calls.keys.size)
+        assertArrayEquals(byteArrayOf(0x7F), calls.keys[0]); assertArrayEquals(byteArrayOf(0x0D), calls.keys[1])
+        assertArrayEquals(byteArrayOf(0x1B), calls.keys[2]); assertArrayEquals("\u001B[D".toByteArray(), calls.keys[3])
+    }
+
+    @Test fun aPlainKeyOnAHardwareKeyboardIsSentOnceNotTwice() {
+        // The field turns a printable key into an edit; the key handler leaves it alone, so exactly one byte goes out.
+        val calls = show(viewOf(TerminalMode.Controlling))
+        rule.onNodeWithText("Keyboard").performClick()
+        keyboardField().performKeyInput { pressKey(Key.A) }
+        rule.waitForIdle()
+        assertEquals(listOf("a"), typed(calls))
+    }
+
+    @Test fun stickyCtrlIsArmedByATapAndSpentOnTheNextCharacterOnly() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        rule.onNodeWithText("Keyboard").performClick()
+        val ctrl = byDesc("Control, for the next character typed")
+        fun state() = ctrl.fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription)
+        assertEquals("off", state())
+        ctrl.performScrollTo().performClick()
+        assertEquals("armed", state())
+        keyboardField().performTextInput("c")
+        rule.waitForIdle()
+        assertArrayEquals(byteArrayOf(0x03), calls.keys.single())
+        assertEquals("spent on the one character", "off", state())
+        keyboardField().performTextInput("c")
+        rule.waitForIdle()
+        assertEquals(listOf("\u0003", "c"), typed(calls))
+    }
+
+    @Test fun theStripAlsoHasTheKeysAPhoneKeyboardLacks() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        for (d in listOf("Home", "End", "Page up", "Page down")) byDesc(d).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertArrayEquals("\u001B[H".toByteArray(), calls.keys[0]); assertArrayEquals("\u001B[F".toByteArray(), calls.keys[1])
+        assertArrayEquals("\u001B[5~".toByteArray(), calls.keys[2]); assertArrayEquals("\u001B[6~".toByteArray(), calls.keys[3])
     }
 
     @Test fun nothingAsksForControlOnItsOwn() {

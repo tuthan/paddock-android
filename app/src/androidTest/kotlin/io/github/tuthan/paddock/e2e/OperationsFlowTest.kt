@@ -24,6 +24,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.tuthan.paddock.MainActivity
+import io.github.tuthan.paddock.ui.screens.ESC_ENTERS_MANUAL_NOTE
 import io.github.tuthan.paddock.ui.screens.FOCUS_QUESTION
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -43,7 +44,8 @@ import org.junit.Test
  * been delivered (the answer is lost): the app must say the outcome is unknown, keep the text, offer a Re-read and no resend,
  * and send nothing by itself when the link comes back. Stage 2, in a new process: the journal's row is still there, a Re-read
  * frees it and says what it found about the text without judging it, a deliberate prompt then goes, focus no longer asks, the
- * unknown row in Activity shows it was re-read, and Ctrl+C ends the fake agent.
+ * unknown row in Activity shows it was re-read, the composer's Esc is the way into Manual input (the first tap turns the
+ * mode on and sends nothing, the second sends one Esc), and Ctrl+C ends the fake agent.
  */
 class OperationsFlowTest {
     @get:Rule val rule: AndroidComposeTestRule<*, MainActivity> = createAndroidComposeRule<MainActivity>()
@@ -279,9 +281,25 @@ class OperationsFlowTest {
         shoot("activity-after-reread")
         rule.onNodeWithText("Herd").performClick()
 
-        // Ctrl+C last: the fake agent ends on it.
+        // The composer's Esc is the way into Manual input (this process has not turned it on): the first tap sends nothing, the
+        // second sends one Esc.
         openAgentFromHome()
-        enterManualInput()
+        openComposer()
+        val escButton = hasText("Esc · Interrupt")
+        waitFor("the composer's Esc offers Manual input") { hasNode(text(ESC_ENTERS_MANUAL_NOTE)) && hasNode(escButton and isEnabled()) }
+        shoot("composer-esc-offer")
+        rule.onNode(escButton).performClick()
+        waitFor("the keys open after the fresh read") { hasNode(escButton and isEnabled()) && !hasNode(text(ESC_ENTERS_MANUAL_NOTE)) }
+        pumpSleep(1_000)
+        checkpoint("composer-esc-on")
+        rule.onNode(escButton).performClick()
+        checkpoint("composer-esc-sent")
+        back()
+        waitFor("the Esc outcome on the agent screen") { hasNode(text("Esc sent", substring = true)) }
+        shoot("composer-esc-sent")
+
+        // Ctrl+C last: the fake agent ends on it.
+        if (!hasNode(hasText("Ctrl+C") and isEnabled())) enterManualInput()
         rule.onNode(hasText("Ctrl+C")).performClick()
         waitFor("the Ctrl+C outcome") { hasNode(text("Ctrl+C sent", substring = true)) }
         shoot("ctrl-c")

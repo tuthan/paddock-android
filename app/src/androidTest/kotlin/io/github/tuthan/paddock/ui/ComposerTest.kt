@@ -49,6 +49,8 @@ import io.github.tuthan.paddock.ui.screens.AgentHeader
 import io.github.tuthan.paddock.ui.screens.COMPOSER_FACT
 import io.github.tuthan.paddock.ui.screens.Composer
 import io.github.tuthan.paddock.ui.screens.ComposerUi
+import io.github.tuthan.paddock.ui.screens.ESC_ENTERS_MANUAL_NOTE
+import io.github.tuthan.paddock.ui.screens.ESC_OFF_NOTE
 import io.github.tuthan.paddock.ui.screens.PromptEntry
 import io.github.tuthan.paddock.ui.theme.PaddockTheme
 import java.io.File
@@ -73,6 +75,7 @@ class ComposerTest {
 
     private var ui by mutableStateOf(ComposerUi(header, SendGate.Open(false)))
     private var escEnabled by mutableStateOf(false)
+    private var escNote by mutableStateOf<String?>(ESC_OFF_NOTE)
 
     private fun show(
         state: ComposerUi, initialText: String = "", fontScale: Float? = null, dark: Boolean = true, calls: Calls = Calls(),
@@ -80,6 +83,7 @@ class ComposerTest {
     ): Calls {
         ui = state
         escEnabled = false
+        escNote = ESC_OFF_NOTE
         rule.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
@@ -89,7 +93,7 @@ class ComposerTest {
                         ui, now, text, { text = it }, onSnippet = { calls.inserted += it; text = Snippets.insert(text, it) },
                         onSend = { calls.send++ }, onBack = { calls.back++ }, onEditSnippets = { calls.snippets++ },
                         onOpenTerminal = { calls.terminal++ }, onDismissOutcome = { calls.dismiss++ },
-                        escEnabled = escEnabled, onEsc = { calls.esc++ },
+                        escEnabled = escEnabled, escNote = escNote, onEsc = { calls.esc++ },
                         onReread = onReread?.let { f -> { calls.reread++; f() } }, onDismissReread = { calls.dismissReread++ },
                         gateActionLabel = gateActionLabel, onGateAction = { calls.gateAction++ },
                     )
@@ -231,7 +235,19 @@ class ComposerTest {
 
     @Test fun inManualInputEscWorksAndNeverSends() {
         val calls = show(ComposerUi(header, open), initialText = "hello")
-        rule.runOnIdle { escEnabled = true }
+        rule.runOnIdle { escEnabled = true; escNote = null }
+        rule.onNodeWithText("Esc · Interrupt").assertIsEnabled().performClick()
+        assertEquals(1, calls.esc); assertEquals(0, calls.send)
+        rule.onNodeWithText(ESC_OFF_NOTE).assertDoesNotExist()
+        rule.onNodeWithText(ESC_ENTERS_MANUAL_NOTE).assertDoesNotExist()
+    }
+
+    @Test fun withManualInputOffEscIsTheWayInAndSaysThatItSendsNothingYet() {
+        // The route turns the mode on for this tap (and reads the agent first); here the button is live and the note says what it does.
+        val calls = show(ComposerUi(header, open), initialText = "hello")
+        rule.runOnIdle { escEnabled = true; escNote = ESC_ENTERS_MANUAL_NOTE }
+        rule.onNodeWithText(ESC_ENTERS_MANUAL_NOTE).performScrollTo().assertIsDisplayed()
+        assertTrue("it says the first tap sends nothing", "Tap Esc to turn it on" in ESC_ENTERS_MANUAL_NOTE && "tap Esc again to send it" in ESC_ENTERS_MANUAL_NOTE)
         rule.onNodeWithText("Esc · Interrupt").assertIsEnabled().performClick()
         assertEquals(1, calls.esc); assertEquals(0, calls.send)
     }

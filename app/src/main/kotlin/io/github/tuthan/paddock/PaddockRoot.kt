@@ -96,7 +96,7 @@ import io.github.tuthan.paddock.ui.screens.AddMachineState
 import io.github.tuthan.paddock.ui.screens.AgentHeader
 import io.github.tuthan.paddock.ui.screens.AgentOutput
 import io.github.tuthan.paddock.ui.screens.AgentTab
-import io.github.tuthan.paddock.ui.screens.ESC_OFF_NOTE
+import io.github.tuthan.paddock.ui.screens.ESC_ENTERS_MANUAL_NOTE
 import io.github.tuthan.paddock.ui.screens.FocusGuard
 import io.github.tuthan.paddock.ui.screens.HerdHome
 import io.github.tuthan.paddock.ui.screens.HomeUiState
@@ -524,10 +524,18 @@ private fun ComposeRoute(
         onReread = reread, onDismissReread = { sends.dismissReread(terminalId) },
         gateActionLabel = if (stale || block == SendBlock.NeedsReread) "Re-read" else null,
         onGateAction = { if (stale) { openedEpoch = liveEpoch; openedAt = System.currentTimeMillis(); host.refresh() } else reread() },
-        // Esc is live only inside Manual input, and under the keys' own gate: it says why when the mode is on but the keys are not open.
-        escEnabled = keyGate is OperationGate.Open && terminalId !in running,
-        escNote = if (keyGate is OperationGate.Closed) "Esc is off. ${keyGate.sentence}" else ESC_OFF_NOTE,
-        onEsc = { manual.key?.takeIf { keyGate is OperationGate.Open }?.let { sends.sendKey(it, OperationKind.Esc) } },
+        // A key goes only inside Manual input and under the keys' own gate. With the mode off, Esc is the way in: the tap turns the
+        // mode on (which starts with a read) and sends nothing; the keys open once that read is installed, and a second tap sends.
+        escEnabled = terminalId !in running && (if (keyGate == null) liveEpoch != null else keyGate is OperationGate.Open),
+        escNote = when (keyGate) {
+            null -> ESC_ENTERS_MANUAL_NOTE
+            is OperationGate.Closed -> "Esc is off. ${keyGate.sentence}"
+            OperationGate.Open -> null
+        },
+        onEsc = {
+            if (keyGate == null) enterManual(graph, host, terminalId, liveEpoch)
+            else manual.key?.takeIf { keyGate is OperationGate.Open }?.let { sends.sendKey(it, OperationKind.Esc) }
+        },
     )
 }
 

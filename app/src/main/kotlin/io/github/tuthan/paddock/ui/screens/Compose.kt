@@ -47,6 +47,8 @@ import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 
 const val ESC_OFF_NOTE = "Esc is available in Manual input, on the agent screen."
+/** Shown while Manual input is off and Esc is live: the first tap turns the mode on, it sends nothing. */
+const val ESC_ENTERS_MANUAL_NOTE = "Esc needs Manual input. Tap Esc to turn it on: Paddock reads the agent first, then tap Esc again to send it. Each Esc is one recorded key."
 
 const val COMPOSER_FACT =
     "Sent as one submission, Enter included. Line breaks travel inside the text; an agent that does not accept pasted text may take one as Enter. " +
@@ -100,7 +102,7 @@ fun Composer(
     onOpenTerminal: () -> Unit,
     onDismissOutcome: () -> Unit,
     modifier: Modifier = Modifier,
-    /** Esc is live only in Manual input mode; [escNote] says why it is not. */
+    /** Esc is live only in Manual input mode, or offers to turn it on; [escNote], when there is one, says which and why. */
     escEnabled: Boolean = false,
     escNote: String? = ESC_OFF_NOTE,
     onEsc: () -> Unit = {},
@@ -145,7 +147,7 @@ fun Composer(
                 Note("Ready by herdr's status. This agent reports no readiness hint, so Paddock checks the status again right before it sends.")
             }
             if (closed != null && gateActionLabel != null && !explainedBelow) PaddockButton(gateActionLabel, onGateAction, kind = ButtonKind.Ghost, small = true, fillWidth = false)
-            if (!escEnabled && escNote != null) Note(escNote)
+            if (escNote != null) Note(escNote)
             ui.outcome?.let { OutcomeLine(it, onOpenTerminal, onDismissOutcome, onReread) }
             if (ui.rereadLines.isNotEmpty()) RereadReport(ui.rereadLines, onDismissReread)
             Note(COMPOSER_FACT)

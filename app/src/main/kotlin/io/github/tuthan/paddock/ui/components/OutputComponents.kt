@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.Icon
@@ -45,6 +46,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -201,21 +203,35 @@ private val STRIP_KEYS = listOf(
     StripKey("Ctrl+C", "Control C", KeyEncoder.interrupt),
 )
 
+/** Keys only the live strip adds after the design's eight: the ones a phone keyboard has no key for. */
+private val MORE_KEYS = listOf(
+    StripKey("Home", "Home", KeyEncoder.named(NamedKey.Home)),
+    StripKey("End", "End", KeyEncoder.named(NamedKey.End)),
+    StripKey("PgUp", "Page up", KeyEncoder.named(NamedKey.PageUp)),
+    StripKey("PgDn", "Page down", KeyEncoder.named(NamedKey.PageDown)),
+)
+
 /**
  * The manual keys, in the design's order with Esc first and in red. Without [onKey] (the Output tab, which only reads) the
  * strip is drawn but inert: nothing here sends input, TalkBack says so, and a caption under the strip says why. With
  * [onKey] and [enabled] (the Terminal tab while this phone controls the terminal) each key is a 48 dp button that hands
- * its bytes to [onKey]; when [enabled] is false the same strip is inert, so observing never sends a key.
+ * its bytes to [onKey]; when [enabled] is false the same strip is inert, so observing never sends a key. A live strip also
+ * has Home, End, PgUp and PgDn, and, when [ctrlArmed] is given, a sticky Ctrl: tapping it arms it for the next character
+ * typed on the Android keyboard (which has no Ctrl of its own), and it is spent on that one character.
  */
 @Composable
-fun KeyStrip(modifier: Modifier = Modifier, note: String = KEYS_NOTE, onKey: ((ByteArray) -> Unit)? = null, enabled: Boolean = onKey != null) {
+fun KeyStrip(
+    modifier: Modifier = Modifier, note: String = KEYS_NOTE, onKey: ((ByteArray) -> Unit)? = null, enabled: Boolean = onKey != null,
+    ctrlArmed: Boolean? = null, onToggleCtrl: () -> Unit = {},
+) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.key)
     val live = onKey != null && enabled
     val group = if (live) Modifier.semantics { contentDescription = "Keys" } else Modifier.semantics(mergeDescendants = true) { disabled(); contentDescription = "Keys, unavailable. $note" }
     Column(modifier.fillMaxWidth().then(group), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth().then(if (live) Modifier else Modifier.alpha(0.5f)).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            STRIP_KEYS.forEach { key ->
+            (if (live) STRIP_KEYS + MORE_KEYS else STRIP_KEYS).forEachIndexed { index, key ->
+                if (live && ctrlArmed != null && index == STRIP_KEYS.size) CtrlToggleKey(ctrlArmed, onToggleCtrl, shape)
                 val esc = key.label == "Esc"
                 Box(
                     Modifier.heightIn(min = PaddockTokens.spacing.touchTarget).widthIn(min = PaddockTokens.spacing.touchTarget).clip(shape).background(c.field)
@@ -228,6 +244,21 @@ fun KeyStrip(modifier: Modifier = Modifier, note: String = KEYS_NOTE, onKey: ((B
         }
         Text(note, style = PaddockTokens.type.note, color = c.dim)
     }
+}
+
+/** The sticky Ctrl of the live strip: on or off, announced as a switch, spent by the next character typed on the keyboard. */
+@Composable
+private fun CtrlToggleKey(armed: Boolean, onToggle: () -> Unit, shape: RoundedCornerShape) {
+    val c = PaddockTokens.colors
+    Box(
+        Modifier.heightIn(min = PaddockTokens.spacing.touchTarget).widthIn(min = PaddockTokens.spacing.touchTarget).clip(shape)
+            .background(if (armed) c.accent.copy(alpha = 0.18f) else c.field)
+            .border(if (armed) 2.dp else 1.dp, if (armed) c.accent else c.control(), shape)
+            .toggleable(value = armed, role = Role.Switch, onValueChange = { onToggle() })
+            .semantics { contentDescription = "Control, for the next character typed"; stateDescription = if (armed) "armed" else "off" }
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text("Ctrl", style = PaddockTokens.type.monoFact.copy(fontSize = PaddockTokens.type.chip.fontSize), color = if (armed) c.accent else c.title) }
 }
 
 const val KEYS_NOTE = "Read-only for now: Paddock does not send keys or replies to agents yet."

@@ -208,10 +208,21 @@ reach focus-back
 check "AC-06.6 after a restart focus goes straight through (no question) and the pane is focused" '[ "$(focused)" = true ] && [ "$(rows Focus | jq length)" = 3 ]'
 go focus-back
 
+reach composer-esc-on
+check "the composer's first Esc turned Manual input on and sent nothing (still one Esc, no other key)" '[ "$(count esc)" = 1 ] && [ "$(count ctrl-c)" = 0 ] && [ "$(count submit)" = 3 ] && [ "$(rows Esc | jq length)" = 1 ]'
+go composer-esc-on
+
+reach composer-esc-sent
+# The tap and the checkpoint are a moment apart: give the send up to 10 s to be journalled as acknowledged before reading the row.
+for _ in $(seq 20); do [ "$(rows Esc | jq -r ".[1].outcome // \"\"")" = Acknowledged ] && break; sleep 0.5; done
+check "the composer's second Esc reached the agent once, as a recorded key" '[ "$(count esc)" = 2 ] && [ "$(count ctrl-c)" = 0 ] && [ "$(rows Esc | jq -r "length, .[1].outcome" | tr "\n" " ")" = "2 Acknowledged " ]'
+snap composer-esc
+go composer-esc-sent
+
 reach ctrl-c
 check "AC-06.5 one Ctrl+C reached the agent, and the agent ended on it" '[ "$(count ctrl-c)" = 1 ] && pane_has "\[ctrl-c\]"'
 check "the journal's Ctrl+C row is Acknowledged" '[ "$(rows CtrlC | jq -r "length, .[0].outcome" | tr "\n" " ")" = "1 Acknowledged " ]'
-check "in all: 1 Esc, 1 Ctrl+C, 3 submissions, no duplicates" '[ "$(count esc)" = 1 ] && [ "$(count ctrl-c)" = 1 ] && [ "$(count submit)" = 3 ]'
+check "in all: 2 Esc, 1 Ctrl+C, 3 submissions, no duplicates" '[ "$(count esc)" = 2 ] && [ "$(count ctrl-c)" = 1 ] && [ "$(count submit)" = 3 ]'
 snap final
 go ctrl-c
 reach done

@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,6 +41,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.tuthan.paddock.terminal.EndReason
@@ -54,12 +58,16 @@ import io.github.tuthan.paddock.ui.components.HardwareKeys
 import io.github.tuthan.paddock.ui.components.KeyStrip
 import io.github.tuthan.paddock.ui.components.Note
 import io.github.tuthan.paddock.ui.components.PaddockButton
+import io.github.tuthan.paddock.ui.components.SoftKeyboardInput
 import io.github.tuthan.paddock.ui.components.TerminalCanvas
 import io.github.tuthan.paddock.ui.components.TerminalText
 import io.github.tuthan.paddock.ui.components.terminalDescription
 import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import kotlinx.coroutines.delay
+
+/** The hidden field the Android keyboard types into; tests find it by this tag. */
+const val KEYBOARD_FIELD_TAG = "terminal-keyboard-input"
 
 /** What the Terminal tab asks of the session. The tab never talks to the host itself. */
 class TerminalActions(
@@ -119,6 +127,13 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
     val focus = remember { FocusRequester() }
     var focused by remember { mutableStateOf(false) }
     LaunchedEffect(controlling) { if (controlling) runCatching { focus.requestFocus() } }
+    // The Android keyboard talks to a hidden field (SoftKeyboardInput), which holds focus while the keyboard is up.
+    val keyboard = LocalSoftwareKeyboardController.current
+    val keyboardFocus = remember { FocusRequester() }
+    var keyboardFocused by remember { mutableStateOf(false) }
+    val keyboardShown = WindowInsets.isImeVisible && keyboardFocused
+    var ctrlArmed by remember { mutableStateOf(false) }
+    LaunchedEffect(controlling) { if (!controlling) { keyboard?.hide(); ctrlArmed = false } }
     val notice = view.notice
     if (notice is TerminalNotice.Resynced) LaunchedEffect(notice, view.frames) { delay(4_000); actions.onDismissNotice() }
 
@@ -134,6 +149,14 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
                     kind = ButtonKind.Ghost, small = true, fillWidth = false, icon = PaddockIcons.Key,
                 )
                 TerminalMode.Controlling -> {
+                    PaddockButton(
+                        if (keyboardShown) "Hide keyboard" else "Keyboard",
+                        {
+                            if (keyboardShown) { keyboard?.hide(); runCatching { focus.requestFocus() } }
+                            else { runCatching { keyboardFocus.requestFocus() }; keyboard?.show() }
+                        },
+                        kind = ButtonKind.Ghost, small = true, fillWidth = false,
+                    )
                     PaddockButton("Release", actions.onRelease, kind = ButtonKind.Secondary, small = true, fillWidth = false)
                     PaddockButton("Resize to fit", { asking = Ask.Resize(fitCells.first, fitCells.second) }, kind = ButtonKind.Ghost, small = true, fillWidth = false)
                 }
@@ -152,12 +175,19 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
         val shape = RoundedCornerShape(PaddockTokens.radii.slab)
         Box(
             Modifier.weight(1f).fillMaxWidth().clip(shape).background(c.slab)
-                .border(if (focused && controlling) 2.dp else 1.dp, if (focused && controlling) c.accent else c.line(), shape),
+                .border(if ((focused || keyboardFocused) && controlling) 2.dp else 1.dp, if ((focused || keyboardFocused) && controlling) c.accent else c.line(), shape),
         ) {
             if (view.grid == null && ended == null) {
                 Text(
                     if (view.mode is TerminalMode.Connecting || view.mode == TerminalMode.Idle) "Connecting to the terminal…" else "Waiting for the first screen…",
                     style = PaddockTokens.type.body, color = c.dim, modifier = Modifier.padding(12.dp),
+                )
+            }
+            if (controlling) {
+                SoftKeyboardInput(
+                    focusRequester = keyboardFocus, ctrlArmed = ctrlArmed, onCtrlSpent = { ctrlArmed = false },
+                    onFocus = { keyboardFocused = it }, onBytes = { bytes -> actions.onKey(bytes) },
+                    modifier = Modifier.align(Alignment.BottomStart).testTag(KEYBOARD_FIELD_TAG),
                 )
             }
             TerminalCanvas(
@@ -181,7 +211,8 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
         }
         KeyStrip(
             onKey = { bytes -> if (controlling) actions.onKey(bytes) }, enabled = controlling,
-            note = if (controlling) "Keys go to the terminal. Release to stop." else "Request control to use the keys. Observing never sends a key.",
+            note = if (controlling) "Keys and the keyboard go to the terminal. Release to stop." else "Request control to use the keys. Observing never sends a key.",
+            ctrlArmed = if (controlling) ctrlArmed else null, onToggleCtrl = { ctrlArmed = !ctrlArmed },
         )
         if (!controlling && ended == null) Note("Pinch to change the text size, drag to move, double tap to fit. None of it changes the terminal.")
     }

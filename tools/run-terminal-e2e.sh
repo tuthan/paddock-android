@@ -169,6 +169,13 @@ check "the device really rotated" 'case "$ROT_LAND" in mCurrentRotation=1|mCurre
 check "a rotation keeps the same control helper process (control was not released)" '[ -n "$HELPER_BEFORE" ] && [ "$HELPER_BEFORE" = "$HELPER_LAND" ] && [ "$HELPER_BEFORE" = "$HELPER_PORT" ]'
 go rotate
 
+reach soft-keyboard-ready
+# Keys through the system's input pipeline reach the focused hidden field the Keyboard button put the focus on: a plain line, then Enter.
+$ADB shell input text 'echo%ssoft-e2e'; $ADB shell input keyevent 66; sleep 2
+check "the Android keyboard's keys (text and Enter) reached the pane through the hidden field" 'pane_has "^soft-e2e$"'
+check "the line was typed once, not twice (one command line, one output line, and no garbled echo)" '[ "$(H pane read "$P" --source recent --lines 80 | grep -c "echo soft-e2e")" = 1 ] && [ "$(H pane read "$P" --source recent --lines 80 | grep -c "^soft-e2e$")" = 1 ] && ! pane_has "command not found"'
+go soft-keyboard-ready
+
 for n in 1 2 3 4 5; do
   reach scroll-$n
   H pane run "$P" "clear; seq 1 200" >/dev/null; sleep 3

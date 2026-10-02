@@ -22,6 +22,12 @@ object HardwareKeys {
         return KeyEncoder.text(unicode, mods.copy(shift = false, ctrl = false))
     }
 
+    /**
+     * Whether a key event is a named key or a chord (Alt or Ctrl held) rather than a plain printable key. The soft keyboard's
+     * hidden field encodes these itself and leaves the plain ones to the field, which turns them into text edits.
+     */
+    fun isRaw(keyCode: Int, alt: Boolean, ctrl: Boolean): Boolean = keyCode in NAMED || alt || ctrl
+
     private fun ctrlCodePoint(keyCode: Int): Int? = when (keyCode) {
         in AndroidKey.KEYCODE_A..AndroidKey.KEYCODE_Z -> 'a'.code + (keyCode - AndroidKey.KEYCODE_A)
         AndroidKey.KEYCODE_SPACE -> ' '.code

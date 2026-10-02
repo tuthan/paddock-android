@@ -48,7 +48,7 @@ An accepted prompt whose agent still reports the `state_change_seq` it had at th
 
 ## Manual input mode
 
-Esc and Ctrl+C exist only inside it. The user chooses it on the agent screen; it starts with a read (`host.refresh()`), and the keys stay off until a read made after entering is installed. It lives in the process (a rotation keeps it), is never restored after the app is killed, and ends when the user leaves the agent, closes the composer or opens another agent. The composer's Esc follows the same mode and gate.
+Esc and Ctrl+C exist only inside it. The user chooses it on the agent screen; it starts with a read (`host.refresh()`), and the keys stay off until a read made after entering is installed. It lives in the process (a rotation keeps it), is never restored after the app is killed, and ends when the user leaves the agent, closes the composer or opens another agent. The composer's Esc follows the same mode and gate. With the mode off, the composer's Esc is also the way in: its note says so, the first tap turns the mode on (starting the read) and sends nothing, the keys open once that read is installed, and a second tap sends one recorded Esc. That is the same mode, so it ends with the composer like any other entry. (Before this the button was disabled until Manual input had been chosen on the agent screen, which read as "Esc does not work" from the composer.)
 
 ## Desktop focus
 
@@ -64,8 +64,8 @@ Journal rows appear under **All** and **From this phone**, worded by what was as
 | --- | --- |
 | JVM | gate matrices (`ComposerRulesTest`, `ManualInputTest`, `FocusRulesTest`), the journal state machine and restart recovery, `AgentOperationsTest` (27), `SendControllerTest`, `PromptTextCheckTest`, `OperationPresenterTest`, Activity and settings |
 | JVM live | `Phase06LiveTest` against `paddock-test` with the fake agent: one submission per prompt, Esc and Ctrl+C counted outside the pane, focus, unknown outcome and re-read through the real relay |
-| Compose | `ManualInputPanelTest`, `ComposerTest`, `ActivityLogTest`, 217 cases in the `ui` package on API 26 and API 36, including 200% font |
-| Emulator, whole app | `tools/run-operations-e2e.sh <serial>`: Add machine over SSH, Manual input and Esc, the focus question, prompts, the journal read from the phone with `run-as`, a link cut after the write, an app restart, Re-read, Ctrl+C |
+| Compose | `ManualInputPanelTest`, `ComposerTest` (including Esc as the way into Manual input), `ActivityLogTest`, 231 cases in the `ui` package on API 26 and API 36 (with `TerminalTabTest` and `SoftKeyboardInputTest` from the keyboard work), including 200% font |
+| Emulator, whole app | `tools/run-operations-e2e.sh <serial>`: Add machine over SSH, Manual input and Esc, the focus question, prompts, the journal read from the phone with `run-as`, a link cut after the write, an app restart, Re-read, the composer's Esc as the way into Manual input (first tap sends nothing, second sends one Esc), Ctrl+C |
 
 ## The link cut (AC-06.3)
 

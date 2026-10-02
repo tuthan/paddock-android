@@ -32,7 +32,7 @@ import org.junit.Test
 /**
  * Phase 05 on a device, through the whole app: Add machine over SSH, the Terminal tab observing a real herdr pane, an owner
  * conflict with a desktop client, the helper install consent, take over, typing with the hardware keyboard, a 200-line scroll
- * timed five times, Resize to fit, release, control again, the app sent to the background and Back pressed while in control
+ * timed five times, the Android keyboard (keys injected by the system reach the pane), Resize to fit, release, control again, the app sent to the background and Back pressed while in control
  * (both must release at once), then control once more and the link dying under it. `tools/run-terminal-e2e.sh`
  * prepares the host, runs the checks that need the host (`pane get`, the desktop client, the proxy) at each checkpoint and
  * releases the test with a file; the test never waits for the script for more than two minutes.
@@ -164,6 +164,21 @@ class TerminalFlowTest {
         typeLine("echo after-rotation")
         waitFor("typing still works after the rotation") { screenText().lines().any { it.trim() == "after-rotation" } }
         shoot("after-rotation")
+
+        // --- the Android keyboard: Keyboard puts the focus on the hidden field the keyboard types into. The script then injects
+        // keys through the system's input pipeline (`input text`, Enter), which is what a keyboard attached to the phone does, and
+        // the host must see them. Whether the on-screen keyboard itself came up is logged, not asserted: an emulator with a hardware
+        // keyboard configured may not show one. ---
+        rule.onNodeWithText("Keyboard").performClick()
+        pumpSleep(1_500)
+        log("KEYBOARD after the tap the button reads: ${if (hasNode(hasText("Hide keyboard"))) "Hide keyboard (the IME is up)" else "Keyboard (no IME shown)"}")
+        shoot("soft-keyboard")
+        checkpoint("soft-keyboard-ready", pump = true)
+        waitFor("the soft-typed output on the screen") { screenText().lines().any { it.trim() == "soft-e2e" } }
+        shoot("soft-typed")
+        if (hasNode(hasText("Hide keyboard"))) rule.onNodeWithText("Hide keyboard").performClick()
+        pumpSleep(800)
+        assertTrue("still in control after the keyboard was used", pill() == "in control")
 
         // --- AC-05.8: a 200-line scroll. Once from the hardware keyboard (to show the keys drive it), then five times with the
         // script starting it from the host while this thread is idle, so the numbers are the app's and not the test harness's.
