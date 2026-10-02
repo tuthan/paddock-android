@@ -213,6 +213,8 @@ class ConnectionOwnerTest {
         val f = l.state.value as Connection.Failed
         assertIs<DownReason.Network>(f.reason)
         assertNotNull(f.retryAtMillis)
+        // The owner publishes Failed and then sleeps on its own thread: read the sleep only once it has happened.
+        until("the backoff sleep") { sleeps.isNotEmpty() }
         assertEquals(1_000L, sleeps.first())
         gate!!.complete(Unit); gate = null
         until("connected") { connected(l) != null }
