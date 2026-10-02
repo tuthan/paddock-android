@@ -16,6 +16,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -92,6 +93,18 @@ class SettingsTest {
         rule.onNode(hasContentDescription("Version, 0.1.0")).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("host on 0.9.1", substring = true).assertExists()
         rule.onNodeWithText("not affiliated with herdr", substring = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aboutLinksTheFontLicencesAndTheDialogShowsBothAndCloses() {
+        show()
+        rule.onNode(hasContentDescription("Fonts, IBM Plex Sans and JetBrains Mono", substring = true)).performScrollTo().assertIsDisplayed().performClick()
+        rule.onNodeWithText("Font licences").assertIsDisplayed()
+        // The text is read from the APK's assets off the main thread: wait for it rather than assume.
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("Reserved Font Name \"Plex\"", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("JetBrains Mono Project Authors", substring = true).assertExists()
+        rule.onNodeWithText("SIL OPEN FONT LICENSE Version 1.1", substring = true).assertExists()
+        rule.onNodeWithText("Close").performClick()
+        rule.onNodeWithText("Font licences").assertDoesNotExist()
     }
 
     @Test fun notificationRowsAreDisabledAndSaySo() {

@@ -12,7 +12,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -81,6 +90,8 @@ fun Settings(
     val c = PaddockTokens.colors
     var reconnectOpen by rememberSaveable { mutableStateOf(false) }
     var resetOpen by rememberSaveable { mutableStateOf(false) }
+    var fontsOpen by rememberSaveable { mutableStateOf(false) }
+    if (fontsOpen) FontLicenceDialog(onClose = { fontsOpen = false })
     if (resetOpen) {
         ConfirmDialog(
             "Reset the record of sends?",
@@ -178,6 +189,19 @@ fun Settings(
                 listOfNotNull("herdr protocol ${state.protocol}", state.herdrVersion?.let { "host on $it" }, "no analytics, no crash uploads").joinToString(" · "),
                 description = "Version, ${state.versionName}",
             )
+            Row(
+                Modifier.card(c, padded = false)
+                    .clickable(role = Role.Button, onClickLabel = "Show the font licences", onClick = { fontsOpen = true })
+                    .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
+                    .semantics(mergeDescendants = true) { contentDescription = "Fonts, IBM Plex Sans and JetBrains Mono, SIL Open Font License" },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Fonts", style = PaddockTokens.type.rowTitle, color = c.title)
+                    Text("IBM Plex Sans and JetBrains Mono · SIL Open Font License 1.1", style = PaddockTokens.type.secondary, color = c.dim)
+                }
+                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
+            }
             Note2(
                 "Paddock connects to your machine over SSH only. Agent output is shown and not kept: the Activity log holds only state changes the phone saw and what you did here. " +
                     "An independent project, not affiliated with herdr.",
@@ -185,6 +209,37 @@ fun Settings(
         }
     }
 }
+
+/** The licence text that has to travel with the bundled fonts (assets/licenses/fonts.txt), read off the main thread. */
+@Composable
+private fun FontLicenceDialog(onClose: () -> Unit) {
+    val c = PaddockTokens.colors
+    val ctx = LocalContext.current
+    val text by produceState<String?>(null) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { ctx.assets.open(FONT_LICENCES_ASSET).use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
+                ?: "The licence text could not be read from this build."
+        }
+    }
+    val shape = RoundedCornerShape(PaddockTokens.radii.dialog)
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            Modifier.padding(horizontal = 16.dp, vertical = 24.dp).fillMaxWidth().clip(shape).background(c.surface).border(1.dp, c.fieldLine(), shape).padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Font licences", style = PaddockTokens.type.headerTitle, color = c.title)
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                Text(text ?: "", style = PaddockTokens.type.monoFact, color = c.text)
+            }
+            PaddockButton("Close", onClose, Modifier.fillMaxWidth(), kind = ButtonKind.Secondary, autoFocus = true)
+        }
+    }
+}
+
+const val FONT_LICENCES_ASSET = "licenses/fonts.txt"
 
 @Composable
 private fun Section(title: String) = Kicker(title, Modifier.padding(top = 12.dp))

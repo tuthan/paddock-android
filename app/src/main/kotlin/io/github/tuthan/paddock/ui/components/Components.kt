@@ -47,6 +47,7 @@ import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.live.PreviewState
 import io.github.tuthan.paddock.ui.theme.PaddockColors
 import io.github.tuthan.paddock.ui.theme.PaddockIcons
+import io.github.tuthan.paddock.ui.theme.PaddockFonts
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 
 /**
@@ -399,7 +400,7 @@ fun withMono(text: String, vararg mono: String): androidx.compose.ui.text.Annota
         val hit = mono.mapNotNull { m -> rest.indexOf(m).takeIf { it >= 0 }?.let { it to m } }.minByOrNull { it.first }
         if (hit == null) { append(rest); break }
         append(rest.substring(0, hit.first))
-        withStyle(SpanStyle(fontFamily = PaddockTokens.type.monoFact.fontFamily, fontFeatureSettings = "tnum")) { append(hit.second) }
+        withStyle(SpanStyle(fontFamily = PaddockTokens.type.monoFact.fontFamily, fontFeatureSettings = PaddockFonts.MONO_FEATURES)) { append(hit.second) }
         rest = rest.substring(hit.first + hit.second.length)
     }
 }

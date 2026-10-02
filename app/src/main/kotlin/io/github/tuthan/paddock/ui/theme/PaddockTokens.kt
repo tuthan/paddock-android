@@ -2,6 +2,7 @@ package io.github.tuthan.paddock.ui.theme
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
@@ -9,6 +10,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import io.github.tuthan.paddock.R
 
 /** Semantic colours from the UX brainstorm. `line` and the washes are alpha derivations, kept as functions. */
 data class PaddockColors(
@@ -114,14 +116,36 @@ data class PaddockType(
     val slab: TextStyle,
 )
 
+/**
+ * IBM Plex Sans for text and JetBrains Mono for facts, bundled unmodified in `res/font` (docs/fonts.md). A weight that is not
+ * bundled is matched to the nearest one that is; nothing is synthesised for the weights the tokens use.
+ */
+object PaddockFonts {
+    /**
+     * Tabular figures, and the programming ligatures off: JetBrains Mono draws `//`, `++`, `->`, `!=` and `==` as joined shapes by
+     * default, and a fingerprint, a path or a command must show exactly the characters that are in it.
+     */
+    const val MONO_FEATURES = "tnum, calt 0, liga 0"
+
+    val sans = FontFamily(
+        Font(R.font.ibm_plex_sans_regular, FontWeight.Normal),
+        Font(R.font.ibm_plex_sans_medium, FontWeight.Medium),
+        Font(R.font.ibm_plex_sans_semibold, FontWeight.SemiBold),
+    )
+    val mono = FontFamily(
+        Font(R.font.jetbrains_mono_regular, FontWeight.Normal),
+        Font(R.font.jetbrains_mono_medium, FontWeight.Medium),
+    )
+}
+
 private val centered = LineHeightStyle(alignment = LineHeightStyle.Alignment.Center, trim = LineHeightStyle.Trim.None)
 private fun sans(size: Int, weight: FontWeight, lineHeight: Double, tracking: Double = 0.0) = TextStyle(
-    fontFamily = FontFamily.Default, fontWeight = weight, fontSize = size.sp, lineHeight = (size * lineHeight).sp,
+    fontFamily = PaddockFonts.sans, fontWeight = weight, fontSize = size.sp, lineHeight = (size * lineHeight).sp,
     letterSpacing = tracking.em, lineHeightStyle = centered,
 )
 private fun mono(size: Double, lineHeight: Double) = TextStyle(
-    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Normal, fontSize = size.sp, lineHeight = (size * lineHeight).sp,
-    fontFeatureSettings = "tnum", lineHeightStyle = centered,
+    fontFamily = PaddockFonts.mono, fontWeight = FontWeight.Normal, fontSize = size.sp, lineHeight = (size * lineHeight).sp,
+    fontFeatureSettings = PaddockFonts.MONO_FEATURES, lineHeightStyle = centered,
 )
 
 val PaddockTypeTokens = PaddockType(
