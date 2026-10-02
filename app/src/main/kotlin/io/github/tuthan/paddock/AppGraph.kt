@@ -158,7 +158,11 @@ class AppGraph(private val app: Application) {
         next.start()
     }
 
-    fun retry() { _profile.value?.let { owner.refresh(it.id) } }
+    /** "Try again": a setup problem on a healthy connection runs the setup again; anything else refreshes the connection. */
+    fun retry() {
+        if (controller?.retrySetup() == true) return
+        _profile.value?.let { owner.refresh(it.id) }
+    }
     fun installRelay() { controller?.installRelay() }
 
     suspend fun setProtectSensitive(on: Boolean) {

@@ -148,6 +148,33 @@ class HostSessionControllerTest {
         c.stop()
     }
 
+    @Test fun tryingAgainAfterASetupProblemRunsTheBringUpAgainOnTheSameConnection() = runBlocking<Unit> {
+        herdrFound = false
+        val session = host(sha256sum = { result(0, "$sha  x\n") }, other = { result(0, """{"sessions":[]}""") })
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("herdr missing") { (c.phase.value as? HostPhase.Problem)?.message?.contains("~/.local/bin") == true }
+        val discoveries = session.execs.count { (argv, _) -> argv.getOrNull(2)?.contains("for p in") == true }
+        herdrFound = true // the user installs herdr on the host and presses Try again
+        assertTrue(c.retrySetup())
+        until("the next problem") { (c.phase.value as? HostPhase.Problem)?.message == "No herdr session is running on the host." }
+        assertEquals(discoveries + 1, session.execs.count { (argv, _) -> argv.getOrNull(2)?.contains("for p in") == true }, "the setup ran again, once")
+        c.stop()
+    }
+
+    @Test fun tryingAgainOnlyActsOnASetupProblem() = runBlocking<Unit> {
+        val failed = FakeLease(Connection.Failed(DownReason.Timeout, null))
+        val c = controller(failed).also { it.start() }
+        until("failed") { c.phase.value is HostPhase.Failed }
+        assertEquals(false, c.retrySetup(), "a failed connection is refreshed by the owner, not by the setup")
+        assertIs<HostPhase.Failed>(c.phase.value)
+        c.stop()
+        val asking = controller(FakeLease(Connection.Connected(host(sha256sum = { result(1) }), 1))).also { it.start() }
+        until("ask") { asking.phase.value is HostPhase.NeedsRelayInstall }
+        assertEquals(false, asking.retrySetup(), "waiting for the user's agreement is not a problem to retry")
+        assertIs<HostPhase.NeedsRelayInstall>(asking.phase.value)
+        asking.stop()
+    }
+
     /** Leases on one shared connection, as the owner hands them out: each claim is new, the connection is the same. */
     private class Owner(initial: Connection) {
         val connection = MutableStateFlow(initial)

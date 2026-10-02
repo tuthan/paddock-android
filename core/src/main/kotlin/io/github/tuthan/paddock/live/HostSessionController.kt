@@ -25,6 +25,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -98,12 +100,14 @@ class HostSessionController(
     private val leases = MutableStateFlow<Lease?>(null)
     /** Completed by [installRelay] while the bring-up waits for the user's agreement. */
     private val consent = MutableStateFlow<CompletableDeferred<Unit>?>(null)
+    /** Counts the user's "Try again" on a setup problem: each step runs the bring-up once more on the connection already held. */
+    private val setupTries = MutableStateFlow(0)
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun start() {
         job = scope.launch {
             // Same connection, same session object: a resume within the grace re-emits an equal state and changes nothing.
-            leases.filterNotNull().flatMapLatest { it.state }.distinctUntilChanged().collectLatest { c ->
+            leases.filterNotNull().flatMapLatest { it.state }.distinctUntilChanged().combine(setupTries) { c, _ -> c }.collectLatest { c ->
                 stopHost()
                 when (c) {
                     Connection.Idle, Connection.Connecting -> _phase.value = HostPhase.Connecting
@@ -126,6 +130,18 @@ class HostSessionController(
 
     /** The app is hidden: release the claim. The owner closes the session after its grace; the monitor stops when it does. */
     fun pause() = synchronized(lock) { held?.release(); held = null }
+
+    /**
+     * "Try again" on a [HostPhase.Problem]: herdr missing or stopped, no session, a relay that did not take. The connection is
+     * healthy, so refreshing it (which leaves a healthy connection alone) would never run the setup again; this does. False,
+     * and nothing changes, in any other phase.
+     */
+    fun retrySetup(): Boolean {
+        if (_phase.value !is HostPhase.Problem) return false
+        _phase.value = HostPhase.Connecting
+        setupTries.update { it + 1 }
+        return true
+    }
 
     /** The user agreed to install the pinned relay shown in [HostPhase.NeedsRelayInstall]. */
     fun installRelay() { consent.value?.complete(Unit) }
