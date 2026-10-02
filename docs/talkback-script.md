@@ -18,5 +18,21 @@ Expected order for every agent row: **state word, title, context, observed age**
 | 10 | Connect to a new machine. | The fingerprint dialog opens with focus on **Cancel**; the title, key type, fingerprint and compare command each read as "label: value". "Trust and connect" is a separate button, never the default. |
 | 11 | Change the host key on the machine and reconnect. | Home shows the banner "The host's key changed. Nothing was signed in." with "Review the key". The dialog opens with focus on **Keep the old key**; "Replace with the new key" is a separate button. |
 | 12 | On Android 17, add a LAN address. | The reason text is read before Connect; the system dialog follows; after a denial the recovery row reads as a message with "Open settings" as a button. |
+| 12b | On Android 17, with the grant denied, tap the recovery row's **Open settings**; under Permissions > Nearby devices choose Allow; go back. | The row opens the app's own settings page; after Back the recovery row has gone without restarting the app, and Connect goes on. Then choose Don't allow on that page: the app closes, and on the next launch Home shows "Local-network access is off" with **Open settings** as a button. (The emulator run covers this on API 37; an OEM's settings pages differ.) |
 
 Also at 200% font and with the display size at maximum: nothing is cut off, and every action in the list above is still reachable by swipe.
+
+## Accessibility Scanner
+
+Stands in for the automatic checks of `enableAccessibilityChecks()` (the `ui-test-junit4-accessibility` artifact was declined on 2026-10-02, see `docs/dependency-reviews.md`). It is Google's Accessibility Scanner app on the phone, not a project dependency. Turn it on in Settings > Accessibility, then, with the Paddock build running, capture each screen below and open the result. Record per screen: the number of suggestions, and each one by kind (touch target size, text contrast, missing or duplicate label, clickable item).
+
+| # | Screen | Pass when |
+| --- | --- | --- |
+| A1 | Home with a Blocked, a Done and a Working agent; then degraded (airplane mode) | No suggestion, or each one explained in the report |
+| A2 | Agent screen, Output tab and Terminal tab (observing, then in control with the keyboard up) | Same |
+| A3 | Composer, Manual input open | Same |
+| A4 | Activity, Settings, Add machine, Import key | Same |
+| A5 | The fingerprint dialog and the changed-key dialog | Same |
+
+Check at 200% font as well as the default size. The scanner's contrast check reads rendered pixels, which the unit-tested palette ratio (4.5:1) does not: a text colour that passes in the palette can still fail on a tinted row (blocked and done rows are washed 9% and 30%).
+

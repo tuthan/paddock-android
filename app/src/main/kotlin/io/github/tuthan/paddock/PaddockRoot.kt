@@ -625,6 +625,10 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, editing: Boolea
     val scope = rememberCoroutineScope()
     var keyTick by remember { mutableIntStateOf(0) }
     var denied by rememberSaveable { mutableStateOf(false) }
+    // The refusal is the dialog's answer, not the live state: the grant can be turned on in the app's system settings, so it is
+    // read again on every return, and a banner saying "access is off" never outlives the grant.
+    val resumes = rememberResumes()
+    LaunchedEffect(resumes) { if (denied && !graph.gate.lanAccessMissing()) denied = false }
     var pending by remember { mutableStateOf<AddMachineInput?>(null) }
 
     fun finish(input: AddMachineInput) {

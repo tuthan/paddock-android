@@ -6,6 +6,13 @@ calls a removed InputManager method; see the Phase 04 evidence). Uses uiautomato
 
 Flow: clear app data, Add machine with a LAN address, press Connect, expect the system permission dialog in context,
 deny it, expect the recovery row on Add machine, then add a VPN-style machine and expect the recovery row in Settings.
+Then the other half of AC-02.10: with the grant revoked, press Connect for the throwaway sshd (tools/test-sshd.sh, loopback,
+reached from the emulator at 10.0.2.2), tap Allow in the real system dialog, and expect the same process to go on connecting,
+without a restart: the host's key is offered for trust (the app shows that only after the key exchange, so the OS let the
+socket through) and the sshd log shows the connection. The sshd is started and stopped by this script on port 2236.
+Finally the same two changes through the real system settings page (App info > Permissions > Nearby devices): deny in the
+dialog, tap the recovery row's Open settings, choose Allow there, come back, and the same process connects; then revoke on the
+page, which ends the process, and the next attempt is refused (0 new sshd connections) with the recovery row.
 """
 import re, subprocess, sys, time, xml.etree.ElementTree as ET, os
 
@@ -33,7 +40,8 @@ def find(root, text, exact=False):
     for n, c in nodes(root):
         for attr in ("text", "content-desc", "hint"):
             v = n.get(attr, "")
-            if v and (v == text if exact else text.lower() in v.lower()):
+            v, want = v.replace("\u2019", "'"), text.replace("\u2019", "'")  # the system pages write "Don’t allow"
+            if v and (v == want if exact else want.lower() in v.lower()):
                 return n, c
     return None
 
@@ -71,6 +79,9 @@ def ensure_key():
         scroll_down()
     f = find(dump(), "Create this phone's key", exact=True)
     if f: adb("shell", "input", "tap", str(f[1][0]), str(f[1][1])); time.sleep(1.0)
+
+# Gboard on an Android 17 image opens a "Try out your stylus" sheet over the first tapped text field and takes the typed text.
+adb("shell", "settings", "put", "secure", "stylus_handwriting_enabled", "0", check=False)
 
 results = []
 def check(name, ok, detail=""):
@@ -120,6 +131,136 @@ for _ in range(3):
     scroll_down()
 shot("settings-denied")
 check("denial shows the recovery row in Settings", find(dump(), "Local-network access is off") is not None and find(dump(), "Open settings") is not None)
+
+# 4. Grant from the real dialog, then connect in the same process (AC-02.10, the other half).
+HERE = os.path.dirname(os.path.abspath(__file__))
+SSHD_ENV = dict(os.environ, TEST_SSHD_RUN=os.path.abspath(os.path.join(HERE, "..", "build", "perm-sshd")), TEST_SSHD_PORT="2236")
+SSHD_LOG = os.path.join(SSHD_ENV["TEST_SSHD_RUN"], "sshd.log")
+
+def replace_into(current, value):
+    """Tap the editable field whose text is [current], clear it, type [value]."""
+    tap(current, exact=True)
+    adb("shell", "input", "keyevent", "KEYCODE_MOVE_END")
+    for _ in range(10): adb("shell", "input", "keyevent", "KEYCODE_DEL")
+    adb("shell", "input", "text", value); time.sleep(0.4)
+
+subprocess.run([os.path.join(HERE, "test-sshd.sh"), "start"], env=SSHD_ENV, check=True, capture_output=True)
+try:
+    adb("shell", "am", "force-stop", PKG)
+    adb("shell", "pm", "clear", PKG)
+    adb("shell", "pm", "revoke", PKG, "android.permission.ACCESS_LOCAL_NETWORK", check=False)
+    adb("shell", "am", "start", "-n", f"{PKG}/.MainActivity"); time.sleep(2)
+    fill_machine("10.0.2.2", os.environ.get("USER", "jdoe"))
+    replace_into("22", "2236")
+    adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    ensure_key()
+    tap("Connect", exact=True)
+    wait("nearby devices", secs=10)
+    shot("grant-dialog")
+    pid_before = adb("shell", "pidof", PKG).strip()
+    tap("Allow", exact=True)
+    seen = wait("Trust and connect", secs=25)
+    shot("grant-then-trust")
+    check("after Allow in the real dialog the same process goes on connecting: the host's key is offered for trust", seen is not None)
+    check("the app was not restarted by the grant", adb("shell", "pidof", PKG).strip() == pid_before and pid_before != "", f"pid {pid_before}")
+    log = open(SSHD_LOG).read() if os.path.exists(SSHD_LOG) else ""
+    check("the sshd saw the connection", "Connection from" in log or "Connection closed by" in log or "Failed publickey" in log or "kex" in log.lower(), log.strip().splitlines()[-1][:120] if log.strip() else "empty log")
+finally:
+    subprocess.run([os.path.join(HERE, "test-sshd.sh"), "stop"], env=SSHD_ENV, capture_output=True)
+
+# 5. The same grant and revoke through the real system settings page (AC-02.10: "granting from the recovery row ... revoking
+# in system settings produces the recovery row on the next attempt").
+def pid(): return adb("shell", "pidof", PKG, check=False).strip()  # exits 1, with no output, when there is no such process
+def fresh_settings(home=False):
+    """The permission pages are the permission controller's, in a task of their own: stop both so the app's intent opens App info."""
+    for pkg in ("com.android.settings", "com.google.android.permissioncontroller"):
+        adb("shell", "am", "force-stop", pkg, check=False)
+    if home: adb("shell", "input", "keyevent", "KEYCODE_HOME"); time.sleep(0.8)
+def connections(): return open(SSHD_LOG).read().count("Connection from") if os.path.exists(SSHD_LOG) else 0
+
+def deny_dialog():
+    for label in ("Don't allow", "Deny"):
+        f = find(dump(), label)
+        if f: adb("shell", "input", "tap", str(f[1][0]), str(f[1][1])); return True
+    return False
+
+def settings_page_set(choice):
+    """On the app's own system page pick [choice] ("Allow" or "Don't allow") under Permissions > Nearby devices."""
+    if find(dump(), "Nearby devices access for this app") is None:  # the Settings task may already be on the last page it showed
+        tap("Permissions", secs=10, exact=True)
+        tap("Nearby devices", secs=10)
+        wait("Nearby devices access for this app", secs=10)
+    tap(choice, secs=10, exact=True)
+
+def back_to_app():
+    for _ in range(6):
+        if PKG in adb("shell", "dumpsys", "activity", "activities"): 
+            top = [l for l in adb("shell", "dumpsys", "activity", "activities").splitlines() if "topResumedActivity" in l or "mResumedActivity" in l]
+            if top and PKG in top[0]: return True
+        adb("shell", "input", "keyevent", "KEYCODE_BACK"); time.sleep(1.0)
+    return False
+
+def connect_to_throwaway_sshd():
+    fill_machine("10.0.2.2", os.environ.get("USER", "jdoe"))
+    replace_into("22", "2236")
+    adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    ensure_key()
+    tap("Connect", exact=True)
+
+subprocess.run([os.path.join(HERE, "test-sshd.sh"), "start"], env=SSHD_ENV, check=True, capture_output=True)
+try:
+    adb("shell", "am", "force-stop", PKG)
+    adb("shell", "pm", "clear", PKG)
+    adb("shell", "pm", "revoke", PKG, "android.permission.ACCESS_LOCAL_NETWORK", check=False)
+    adb("shell", "am", "start", "-n", f"{PKG}/.MainActivity"); time.sleep(2)
+    connect_to_throwaway_sshd()
+    wait("nearby devices", secs=10)
+    deny_dialog(); time.sleep(1.0)
+    wait("Local-network access is off", secs=10)
+    shot("settings-path-denied")
+    before_pid = pid()
+    fresh_settings()  # a Settings or permission-controller task left on a deep page would be resumed as it is
+    tap("Open settings", exact=True)
+    wait("Permissions", secs=10, exact=True)
+    shot("settings-path-app-info")
+    check("Open settings lands on the app's own system page", find(dump(), "App info") is not None or find(dump(), "Permissions", exact=True) is not None)
+    settings_page_set("Allow")
+    shot("settings-path-allowed")
+    check("back from the settings page the app is on top again", back_to_app())
+    check("granting on the settings page did not restart the app", pid() == before_pid and before_pid != "", f"pid {before_pid} -> {pid()}")
+    gone = False
+    for _ in range(12):
+        if find(dump(), "Local-network access is off") is None: gone = True; break
+        time.sleep(0.7)
+    shot("settings-path-after-return")
+    check("the recovery row is gone once the grant is on (read again on resume)", gone)
+    seen_before = connections()
+    tap("Connect", exact=True)
+    seen = wait("Trust and connect", secs=25)
+    shot("settings-path-trust")
+    check("after granting on the settings page Connect goes on in the same process", seen is not None and pid() == before_pid)
+    check("the sshd saw a new connection", connections() > seen_before, f"{seen_before} -> {connections()}")
+    tap("Cancel", exact=True)
+
+    # Revoke through the same page: the system ends the app's process, and the next attempt is refused.
+    connections_at_revoke = connections()
+    fresh_settings(home=True)
+    adb("shell", "am", "start", "-a", "android.settings.APPLICATION_DETAILS_SETTINGS", "-d", f"package:{PKG}"); time.sleep(2)
+    settings_page_set("Don't allow")
+    ended = False
+    for _ in range(12):
+        if pid() == "": ended = True; break
+        time.sleep(0.7)
+    check("revoking on the settings page ends the app's process", ended)
+    # The machine was saved when the grant was on, so the next launch is Home and its monitor makes the next attempt.
+    adb("shell", "am", "start", "-n", f"{PKG}/.MainActivity"); time.sleep(2)
+    wait("Local-network access is off", secs=20)
+    shot("settings-path-revoked")
+    check("after the revoke the next attempt shows the recovery row on Home", find(dump(), "Open settings") is not None)
+    time.sleep(3)
+    check("and no connection reached the sshd", connections() == connections_at_revoke, f"{connections_at_revoke} -> {connections()}")
+finally:
+    subprocess.run([os.path.join(HERE, "test-sshd.sh"), "stop"], env=SSHD_ENV, capture_output=True)
 
 bad = [n for n, ok, _ in results if not ok]
 print("\nRESULT:", "all passed" if not bad else "FAILED: " + ", ".join(bad))
