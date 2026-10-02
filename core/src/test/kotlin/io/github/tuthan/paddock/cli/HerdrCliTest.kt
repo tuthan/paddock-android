@@ -29,7 +29,11 @@ class HerdrCliTest {
 
     @Test fun theTerminalBuildersCarryThePaneAndTheGeometryAndNothingElse() {
         assertEquals(listOf("/usr/bin/herdr", "--session", "paddock-test", "pane", "process-info", "--pane", "w2:p1"), cli.paneProcessInfo("w2:p1"))
-        assertEquals(listOf("/usr/bin/herdr", "--session", "paddock-test", "terminal", "session", "observe", "w2:p1", "--cols", "60", "--rows", "20"), cli.terminalObserve("w2:p1", 60, 20))
+        // Under the watcher that ends the observer with the SSH channel; herdr's own argv follows the script and its $0 untouched.
+        assertEquals(
+            listOf("/bin/sh", "-c", HerdrCli.OBSERVE_WATCH, "paddock-observe", "/usr/bin/herdr", "--session", "paddock-test", "terminal", "session", "observe", "w2:p1", "--cols", "60", "--rows", "20"),
+            cli.terminalObserve("w2:p1", 60, 20),
+        )
         val control = cli.terminalControl("python3", "/home/u/.local/share/paddock/paddock-control.py", 15, "w2:p1", 60, 20, takeover = false)
         assertEquals(listOf("python3", "/home/u/.local/share/paddock/paddock-control.py", "15", "/usr/bin/herdr", "paddock-test", "w2:p1", "60", "20"), control)
         assertEquals(control + "takeover", cli.terminalControl("python3", "/home/u/.local/share/paddock/paddock-control.py", 15, "w2:p1", 60, 20, takeover = true))

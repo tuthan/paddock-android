@@ -119,7 +119,7 @@ class TerminalSessionTest {
         val host = TestHost(stty = "20 60\n"); val s = session(host)
         s.open(40, 25)
         waitUntil("observer") { host.observers.isNotEmpty() }
-        assertEquals(listOf(herdr, "--session", "paddock-test", "terminal", "session", "observe", "w1:p1", "--cols", "60", "--rows", "20"), host.observers.single().argv)
+        assertEquals(listOf("/bin/sh", "-c", HerdrCli.OBSERVE_WATCH, "paddock-observe", herdr, "--session", "paddock-test", "terminal", "session", "observe", "w1:p1", "--cols", "60", "--rows", "20"), host.observers.single().argv)
         assertEquals(PtySize(60, 20), s.view.value.pty)
         assertTrue(host.execs.any { "process-info" in it && "w1:p1" in it }); assertTrue(host.execs.any { it.take(3) == listOf("stty", "-F", "/dev/pts/18") })
     }

@@ -40,7 +40,7 @@ class HerdrCli(private val herdr: String, private val session: String) {
      */
     fun terminalObserve(paneId: String, cols: Int, rows: Int): List<String> {
         requireGeometry(cols, rows)
-        return scoped("terminal", "session", "observe", id(paneId), "--cols", cols.toString(), "--rows", rows.toString())
+        return listOf("/bin/sh", "-c", OBSERVE_WATCH, "paddock-observe") + scoped("terminal", "session", "observe", id(paneId), "--cols", cols.toString(), "--rows", rows.toString())
     }
 
     /**
@@ -67,6 +67,14 @@ class HerdrCli(private val herdr: String, private val session: String) {
     private fun id(value: String): String { require(ID.matches(value)) { "invalid id"}; return value }
 
     companion object {
+        /**
+         * Runs its arguments (herdr's observer) and ends it when this script's stdin reaches end of file, which is what a closed
+         * or dropped SSH channel looks like on the host. The observer never reads its stdin, so without this it lives until the
+         * pane next draws and its write to the dead channel fails: one stray process per closed Terminal view on an idle pane.
+         * The ids are positional arguments ("$@"), never part of the script text. stdin is copied to fd 3 first because a
+         * background command's own stdin is /dev/null; the guard is stopped before it can signal a pid that has been reused.
+         */
+        const val OBSERVE_WATCH = "exec 3<&0; \"\$@\" 3<&- & p=\$!; { cat <&3 >/dev/null; kill \$p; } >/dev/null 2>&1 & g=\$!; wait \$p; s=\$?; kill \$g 2>/dev/null; exit \$s"
         const val MAX_READ_LINES = 500
         /** `w2:p1`, `w2:t1`, `term_65cbe353cc3172`: letters, digits, `_`, `:`, `.`, `-`, never leading `-`. */
         val ID = Regex("[A-Za-z0-9_][A-Za-z0-9_:.-]{0,63}")
