@@ -16,6 +16,7 @@ import io.github.tuthan.paddock.lifecycle.SessionFactory
 import io.github.tuthan.paddock.live.HostSessionController
 import io.github.tuthan.paddock.ops.FileJournalStore
 import io.github.tuthan.paddock.ops.FileSnippetStore
+import io.github.tuthan.paddock.ops.ManualInputMode
 import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.relay.sha256Hex
@@ -64,6 +65,8 @@ class AppGraph(private val app: Application) {
     /** What the phone asked of each terminal, written before it asks. Never deleted for an unknown outcome. */
     val journal = OperationJournal(FileJournalStore(File(files, "operations.json")), clock)
     private val snippetStore = FileSnippetStore(File(files, "snippets.json"))
+    /** Manual input (Esc and Ctrl+C) lives as long as the process and is never restored: a killed app starts with it off. */
+    val manualInput = ManualInputMode()
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
     val owner = ConnectionOwner(scope, SessionFactory { profile -> connect(profile) }, clock)

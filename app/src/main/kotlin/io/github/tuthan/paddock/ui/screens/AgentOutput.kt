@@ -7,11 +7,16 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -70,6 +75,9 @@ fun AgentOutput(
     terminal: (@Composable () -> Unit)? = null,
     /** Opens the composer; null (no journal, so no operations) leaves the entry out. */
     onCompose: (() -> Unit)? = null,
+    /** Manual input (Esc and Ctrl+C) and what it does; without both the tab keeps the inert key strip and its note. */
+    manualInput: ManualInputUi? = null,
+    manualActions: ManualInputActions? = null,
 ) {
     val c = PaddockTokens.colors
     val gone = output == OutputState.PaneGone || output == OutputState.AgentGone
@@ -102,7 +110,12 @@ fun AgentOutput(
             }
             if (tab == AgentTab.Output) {
                 if (onCompose != null) PromptEntry(header.agentKind, onCompose)
-                KeyStrip()
+                if (manualInput != null && manualActions != null) {
+                    // At most 40% of the window, scrolling inside it: a large font or a long sentence must not squeeze the output out.
+                    val density = LocalDensity.current
+                    val cap = with(density) { LocalWindowInfo.current.containerSize.height.toDp() } * 0.4f
+                    Column(Modifier.heightIn(max = cap).verticalScroll(rememberScrollState())) { ManualInput(manualInput, nowMillis, manualActions) }
+                } else KeyStrip()
             }
         }
     }

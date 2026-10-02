@@ -46,6 +46,8 @@ import io.github.tuthan.paddock.ui.components.card
 import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 
+const val ESC_OFF_NOTE = "Esc is available in Manual input, on the agent screen."
+
 const val COMPOSER_FACT =
     "Sent as one submission, Enter included. Line breaks travel inside the text; an agent that does not accept pasted text may take one as Enter. " +
         "herdr refuses a blocked agent, and an accepted send is not a receipt for any turn."
@@ -98,7 +100,7 @@ fun Composer(
     modifier: Modifier = Modifier,
     /** Esc is live only in Manual input mode; [escNote] says why it is not. */
     escEnabled: Boolean = false,
-    escNote: String? = "Esc is available in Manual input, on the agent screen.",
+    escNote: String? = ESC_OFF_NOTE,
     onEsc: () -> Unit = {},
     onReread: (() -> Unit)? = null,
     /** An action that clears the reason Send is off (re-read after a reconnect, or after an unknown outcome). */
@@ -139,7 +141,7 @@ fun Composer(
             }
             if (closed != null && gateActionLabel != null) PaddockButton(gateActionLabel, onGateAction, kind = ButtonKind.Ghost, small = true, fillWidth = false)
             if (!escEnabled && escNote != null) Note(escNote)
-            ui.outcome?.let { Outcome(it, onOpenTerminal, onDismissOutcome, onReread) }
+            ui.outcome?.let { OutcomeLine(it, onOpenTerminal, onDismissOutcome, onReread) }
             Note(COMPOSER_FACT)
             Kicker("Snippets are yours", Modifier.padding(top = 6.dp))
             Row(
@@ -155,9 +157,9 @@ fun Composer(
     }
 }
 
-/** How the last send ended, announced politely when it appears. Unknown offers a re-read and never a resend. */
+/** How the last operation ended, announced politely when it appears. Unknown offers a re-read and never a resend. */
 @Composable
-private fun Outcome(line: ResultLine, onOpenTerminal: () -> Unit, onDismiss: () -> Unit, onReread: (() -> Unit)?) {
+internal fun OutcomeLine(line: ResultLine, onOpenTerminal: () -> Unit, onDismiss: () -> Unit, onReread: (() -> Unit)?) {
     Column(Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         when {
             line.tone == ResultTone.Ok -> Note(line.text, icon = PaddockIcons.Eye)

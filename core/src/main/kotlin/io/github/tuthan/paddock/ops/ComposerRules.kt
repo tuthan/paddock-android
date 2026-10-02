@@ -38,14 +38,9 @@ object ComposerRules {
         currentEpoch: Long? = key.epoch,
     ): SendGate {
         fun closed(block: SendBlock, sentence: String, why: NotReadyReason? = null) = SendGate.Closed(block, sentence, why)
-        if (agent == null) return closed(SendBlock.AgentGone, "This agent is no longer in the session.")
-        if (!live) return closed(SendBlock.NotLive, "Not connected to the machine right now. Sending is off until the link is back.")
-        if (currentEpoch != null && currentEpoch != key.epoch) return closed(SendBlock.Stale, "The connection was re-established since this screen opened. Re-read the agent first.")
-        if (installedReadAtMillis == null || installedReadAtMillis < openedAtMillis) return closed(SendBlock.Reading, "Reading the agent's state…")
-        val mine = records.filter { it.sameTerminal(key) }
-        if (mine.any { it.inFlight }) return closed(SendBlock.InFlight, "Another send to this agent is still running.")
-        if (mine.any { it.awaitsReread }) return closed(SendBlock.NeedsReread, "An earlier send's outcome is unknown. Re-read before sending again.")
-        val ready = when (val r = isReady(agent, readAtMillis = installedReadAtMillis, nowMillis = installedReadAtMillis, requireHints = requireHints)) {
+        terminalBlock(agent, installedReadAtMillis, openedAtMillis, live, records, key, currentEpoch)?.let { return it }
+        val present = requireNotNull(agent) { "terminalBlock lets only a present agent through" }
+        val ready = when (val r = isReady(present, readAtMillis = installedReadAtMillis!!, nowMillis = installedReadAtMillis, requireHints = requireHints)) {
             is Readiness.NotReady -> return closed(SendBlock.NotReady, r.primary.sentence, r.primary)
             is Readiness.Ready -> r
         }
@@ -53,4 +48,31 @@ object ComposerRules {
         if (text.length > AgentOperations.MAX_PROMPT_CHARS) return closed(SendBlock.TooLong, "A prompt is at most ${"%,d".format(AgentOperations.MAX_PROMPT_CHARS)} characters.")
         return SendGate.Open(ready.hintsUnreported)
     }
+}
+
+/**
+ * The conditions every operation on a terminal shares, in the order that reads best: the agent, the link, whether the
+ * connection is still the one the screen opened in, whether the phone has read the agent since the screen opened, and
+ * any earlier operation on the terminal. Null means the terminal can take an operation; what each kind needs beyond
+ * that (readiness and text for a prompt, nothing for a key) is the caller's. When this returns null, [installedReadAtMillis]
+ * is not null and [agent] is present.
+ */
+internal fun terminalBlock(
+    agent: Agent?,
+    installedReadAtMillis: Long?,
+    openedAtMillis: Long,
+    live: Boolean,
+    records: List<OperationRecord>,
+    key: TerminalKey,
+    currentEpoch: Long?,
+): SendGate.Closed? {
+    fun closed(block: SendBlock, sentence: String) = SendGate.Closed(block, sentence)
+    if (agent == null) return closed(SendBlock.AgentGone, "This agent is no longer in the session.")
+    if (!live) return closed(SendBlock.NotLive, "Not connected to the machine right now. Sending is off until the link is back.")
+    if (currentEpoch != null && currentEpoch != key.epoch) return closed(SendBlock.Stale, "The connection was re-established since this screen opened. Re-read the agent first.")
+    if (installedReadAtMillis == null || installedReadAtMillis < openedAtMillis) return closed(SendBlock.Reading, "Reading the agent's state…")
+    val mine = records.filter { it.sameTerminal(key) }
+    if (mine.any { it.inFlight }) return closed(SendBlock.InFlight, "Another send to this agent is still running.")
+    if (mine.any { it.awaitsReread }) return closed(SendBlock.NeedsReread, "An earlier send's outcome is unknown. Re-read before sending again.")
+    return null
 }

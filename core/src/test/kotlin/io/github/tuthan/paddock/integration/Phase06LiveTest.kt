@@ -1,17 +1,22 @@
 package io.github.tuthan.paddock.integration
 
+import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.identity.TerminalKey
 import io.github.tuthan.paddock.ledger.InMemoryLedgerStore
 import io.github.tuthan.paddock.ledger.Ledger
 import io.github.tuthan.paddock.live.MonitoredHost
 import io.github.tuthan.paddock.ops.InMemoryJournalStore
+import io.github.tuthan.paddock.ops.KeyGate
+import io.github.tuthan.paddock.ops.ManualInputMode
+import io.github.tuthan.paddock.ops.ManualInputRules
 import io.github.tuthan.paddock.ops.NotReadyReason
 import io.github.tuthan.paddock.ops.Operation
 import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationOutcome
 import io.github.tuthan.paddock.ops.OperationResult
+import io.github.tuthan.paddock.ops.SendBlock
 import io.github.tuthan.paddock.herdr.AgentInfoResult
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.SshSession
@@ -237,6 +242,46 @@ class Phase06LiveTest {
         assertEquals(listOf(OperationKind.Esc, OperationKind.CtrlC), journal.records.value.map { it.kind })
         assertTrue(journal.records.value.all { it.outcome == OperationOutcome.Acknowledged })
         assertTrue(submissions().isEmpty(), "a key is not a submission")
+    }
+
+    @Test fun manualInputOpensTheKeysOnlyOnAReadMadeAfterEnteringAndADoubleTapIsOneWrite() = runBlocking<Unit> {
+        val h = host()
+        val sends = h.sends!!
+        val key = h.keyOfPane()
+        val terminal = key.target.terminalId
+        env.reportAgent(pane, "working", agent = "claude")                       // a working agent takes keys: a key says nothing about readiness
+        until("the working state") { h.home.value?.rows?.firstOrNull { it.paneId == pane }?.state == StateWord.Working }
+        delay(200)
+        val mode = ManualInputMode()
+        mode.enter(terminal, clock.nowMillis(), h.reconciler.installed.value!!.epoch)
+
+        fun gate(): KeyGate {
+            val session = mode.current.value!!
+            val installed = h.reconciler.installed.value
+            val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminal }
+            return ManualInputRules.gate(agent, installed?.readAtMillis, session.enteredAtMillis, h.freshness.value == Freshness.Live, h.operationRecords.value,
+                TerminalKey(key.target, session.epoch), currentEpoch = installed?.epoch)
+        }
+        assertEquals(SendBlock.Reading, assertIs<KeyGate.Closed>(gate()).block, "the read from before entering is not the fresh read")
+        h.refresh()
+        until("a read made after entering") { gate() == KeyGate.Open }
+
+        val sessionKey = TerminalKey(key.target, mode.current.value!!.epoch)
+        sends.sendKey(sessionKey, OperationKind.Esc)
+        sends.sendKey(sessionKey, OperationKind.Esc)                             // the second tap of a double tap: refused by the controller
+        until("the Esc outcome") { sends.outcomes.value[terminal]?.result is OperationResult.Acknowledged<*> }
+        assertEquals(OperationKind.Esc, sends.outcomes.value[terminal]!!.kind)
+        until("the Esc") { events("esc").size == 1 }
+        delay(1_000)
+        assertEquals(1, events("esc").size, "a double tap is one write")
+        assertEquals(listOf(OperationKind.Esc), journal.records.value.map { it.kind })
+        assertEquals(KeyGate.Open, gate(), "an acknowledged key does not hold the terminal")
+
+        sends.sendKey(sessionKey, OperationKind.CtrlC)
+        until("the Ctrl+C outcome") { sends.outcomes.value[terminal]?.let { it.kind == OperationKind.CtrlC && it.result is OperationResult.Acknowledged<*> } == true }
+        until("the Ctrl+C") { events("ctrl-c").size == 1 }
+        assertEquals(listOf(OperationKind.Esc, OperationKind.CtrlC), journal.records.value.map { it.kind })
+        assertTrue(submissions().isEmpty(), "keys are not submissions")
     }
 
     // ---- AC-06.6 (the herdr half) --------------------------------------------------------------------------------------

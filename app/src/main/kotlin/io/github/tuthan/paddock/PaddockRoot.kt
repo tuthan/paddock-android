@@ -35,6 +35,8 @@ import io.github.tuthan.paddock.ssh.ImportedKeyInfo
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
 import io.github.tuthan.paddock.ops.ComposerRules
+import io.github.tuthan.paddock.ops.KeyGate
+import io.github.tuthan.paddock.ops.ManualInputRules
 import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationPresenter
 import io.github.tuthan.paddock.ops.OperationResult
@@ -72,6 +74,7 @@ import io.github.tuthan.paddock.ledger.ActivityFilter
 import io.github.tuthan.paddock.ledger.ActivityPresenter
 import io.github.tuthan.paddock.ledger.Activity
 import io.github.tuthan.paddock.live.HostPhase
+import io.github.tuthan.paddock.live.MonitoredHost
 import io.github.tuthan.paddock.live.PreviewState
 import io.github.tuthan.paddock.net.LocalNetworkPolicy
 import io.github.tuthan.paddock.output.OutputState
@@ -85,9 +88,12 @@ import io.github.tuthan.paddock.ui.screens.AddMachineState
 import io.github.tuthan.paddock.ui.screens.AgentHeader
 import io.github.tuthan.paddock.ui.screens.AgentOutput
 import io.github.tuthan.paddock.ui.screens.AgentTab
+import io.github.tuthan.paddock.ui.screens.ESC_OFF_NOTE
 import io.github.tuthan.paddock.ui.screens.HerdHome
 import io.github.tuthan.paddock.ui.screens.HomeUiState
 import io.github.tuthan.paddock.ui.screens.LocalAccess
+import io.github.tuthan.paddock.ui.screens.ManualInputActions
+import io.github.tuthan.paddock.ui.screens.ManualInputUi
 import io.github.tuthan.paddock.ui.screens.RelayInstall
 import io.github.tuthan.paddock.ui.screens.Settings
 import io.github.tuthan.paddock.ui.screens.SettingsState
@@ -127,6 +133,9 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
     var editing by rememberSaveable { mutableStateOf(false) }
 
     val effective = if (boot == Boot.NoMachines) Route.AddMachine else route
+    // Manual input belongs to the agent screen and the composer opened from it; leaving them, or opening another agent, ends it.
+    val onAgent = (effective == Route.Output && outputTab == AgentTab.Output) || effective == Route.Compose || (effective == Route.Snippets && snippetsFrom == Route.Compose)
+    LaunchedEffect(onAgent, terminalId) { if (onAgent) graph.manualInput.leaveUnless(terminalId) else graph.manualInput.leave() }
     val backTo = when (effective) { Route.AddMachine -> addFrom; Route.Compose -> Route.Output; Route.Snippets -> snippetsFrom; else -> Route.Home }
     // Registered before the screens', so a screen's own back handling (the import screen's) is asked first.
     BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { route = backTo }
@@ -273,11 +282,57 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onT
     // "claude · api › tab 2 · main · laptop": what it is, where, which session, which machine.
     val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
     val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
+    val manual = rememberManualInput(graph, host, terminalId, onOpenTerminal = { onTab(AgentTab.Terminal) })
     AgentOutput(
         header, output, following, now, tab, onTab, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() },
         terminal = { TerminalRoute(graph, host, terminalId) },
         onCompose = if (host.sends != null) onCompose else null,
+        manualInput = manual?.first, manualActions = manual?.second,
     )
+}
+
+/** What the agent screen and the composer share about Manual input for one terminal: the session, its key and its gate. */
+private class ManualView(val session: io.github.tuthan.paddock.ops.ManualSession?, val key: TerminalKey?, val gate: KeyGate?)
+
+@Composable
+private fun manualView(graph: AppGraph, host: MonitoredHost, terminalId: String): ManualView {
+    val session by graph.manualInput.current.collectAsState()
+    val installed by host.reconciler.installed.collectAsState()
+    val freshness by host.freshness.collectAsState()
+    val records by host.operationRecords.collectAsState()
+    val mine = session?.takeIf { it.terminalId == terminalId } ?: return ManualView(null, null, null)
+    val key = TerminalKey(TargetRef(host.profile.hostId, host.sessionName, terminalId), mine.epoch)
+    val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminalId }
+    val gate = ManualInputRules.gate(agent, installed?.readAtMillis, mine.enteredAtMillis, freshness == Freshness.Live, records, key, currentEpoch = installed?.epoch)
+    return ManualView(mine, key, gate)
+}
+
+/** Entering Manual input is the user's choice and starts with a read made after it: the keys stay off until that read is installed. */
+private fun enterManual(graph: AppGraph, host: MonitoredHost, terminalId: String, epoch: Long?) {
+    if (epoch == null) return
+    graph.manualInput.enter(terminalId, System.currentTimeMillis(), epoch)
+    host.refresh()
+}
+
+/** The agent screen's Manual input state and actions, or null when the host has no operations (the inert key strip stays). */
+@Composable
+private fun rememberManualInput(graph: AppGraph, host: MonitoredHost, terminalId: String, onOpenTerminal: () -> Unit): Pair<ManualInputUi, ManualInputActions>? {
+    val sends = host.sends ?: return null
+    val view = manualView(graph, host, terminalId)
+    val installed by host.reconciler.installed.collectAsState()
+    val outcomes by sends.outcomes.collectAsState()
+    val running by sends.running.collectAsState()
+    val presenter = remember { OperationPresenter() }
+    val ui = ManualInputUi(view.gate, terminalId in running, installed?.readAtMillis, outcomes[terminalId]?.let { presenter.line(it.kind, it.result) })
+    val actions = ManualInputActions(
+        onEnter = { enterManual(graph, host, terminalId, installed?.epoch) },
+        onLeave = { graph.manualInput.leave() },
+        // The buttons are off unless the gate is open; the tap checks it again, so a key never goes out outside the mode or before its read.
+        onKey = { kind -> view.key?.takeIf { view.gate is KeyGate.Open }?.let { sends.sendKey(it, kind) } },
+        onDismissOutcome = { sends.dismiss(terminalId) },
+        onOpenTerminal = onOpenTerminal,
+    )
+    return ui to actions
 }
 
 /**
@@ -371,6 +426,8 @@ private fun ComposeRoute(graph: AppGraph, terminalId: String?, onBack: () -> Uni
     val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
     val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
     val stale = (gate as? SendGate.Closed)?.block == SendBlock.Stale
+    val manual = manualView(graph, host, terminalId)
+    val keyGate = manual.gate
     Composer(
         ComposerUi(header, gate, sending = terminalId in running, outcome = outcome?.let { presenter.line(it.kind, it.result) }, snippets = snippets),
         now, text, { text = it }, onSnippet = { text = Snippets.insert(text, it) },
@@ -378,6 +435,10 @@ private fun ComposeRoute(graph: AppGraph, terminalId: String?, onBack: () -> Uni
         onBack = onBack, onEditSnippets = onEditSnippets, onOpenTerminal = onOpenTerminal, onDismissOutcome = { sends.dismiss(terminalId) },
         gateActionLabel = if (stale) "Re-read" else null,
         onGateAction = { openedEpoch = liveEpoch; openedAt = System.currentTimeMillis(); host.refresh() },
+        // Esc is live only inside Manual input, and under the keys' own gate: it says why when the mode is on but the keys are not open.
+        escEnabled = keyGate is KeyGate.Open && terminalId !in running,
+        escNote = if (keyGate is KeyGate.Closed) "Esc is off. ${keyGate.sentence}" else ESC_OFF_NOTE,
+        onEsc = { manual.key?.takeIf { keyGate is KeyGate.Open }?.let { sends.sendKey(it, OperationKind.Esc) } },
     )
 }
 
