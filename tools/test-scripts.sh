@@ -185,7 +185,9 @@ rm "$P/protocol/notes.txt"; printf 'x' >> "$P/fixtures/herdr-0.9.1/status.txt"
 pins --pins-only; expect "check-pins --pins-only with a tampered fixture" 1 $?
 
 P="$(pins_repo)"
-"$P/tools/pin-source.sh" 2026-10-01 devbox >"$T/pin.out" 2>&1; expect "pin-source on the committed corpus" 0 $?
+# The date and host are inputs, not something pin-source derives; take them from the committed file so a re-pin on a later
+# day does not fail this test, while the versions, file list and hashes are still checked byte for byte.
+"$P/tools/pin-source.sh" "$(jq -r .captured "$REPO/protocol/SOURCE.json")" "$(jq -r .host "$REPO/protocol/SOURCE.json")" >"$T/pin.out" 2>&1; expect "pin-source on the committed corpus" 0 $?
 cmp -s "$P/protocol/SOURCE.json" "$REPO/protocol/SOURCE.json" && ok "pin-source reproduces the committed SOURCE.json byte for byte" || bad "pin-source output differs from the committed SOURCE.json"
 # A herdr bump half done: a new corpus and schema beside the old ones.
 mkdir -p "$P/fixtures/herdr-0.9.2"
