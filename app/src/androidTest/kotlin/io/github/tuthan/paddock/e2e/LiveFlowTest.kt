@@ -115,6 +115,17 @@ class LiveFlowTest {
         val secureOnHomeWithPrompt = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
         assertTrue("Home is FLAG_SECURE while a captured prompt is on it", secureOnHomeWithPrompt)
 
+        // --- Review prompt: the agent's live terminal, observing; taking control is a separate tap ---
+        rule.onNodeWithText("Review prompt").performClick()
+        waitFor("the agent's Terminal tab, observing") { hasNode(text("Request control")) }
+        assertTrue("Review prompt only observes: nothing was released because nothing was taken", !hasNode(text("Release")))
+        val secureOnTerminal = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
+        assertTrue("the terminal reached from Review prompt is FLAG_SECURE like Output", secureOnTerminal)
+        shoot("review-terminal")
+        rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        waitFor("back on home after Review prompt") { hasNode(text("Activity")) }
+        rule.waitForIdle()
+
         // --- Activity: the phone's own record of what it saw ---
         rule.onNodeWithText("Activity").performClick()
         waitFor("an activity entry") { hasNode(text("Connected", substring = true)) || hasNode(text("→", substring = true)) || hasNode(text("appeared", substring = true)) }
@@ -157,7 +168,8 @@ class LiveFlowTest {
             rule.onNodeWithText("Import key").performClick()
 
             waitFor("back on the form with the key stored") { hasNode(hasContentDescription("Imported key: ssh-ed25519", substring = true)) }
-            rule.onNodeWithText(host).assertIsDisplayed()
+            // The form comes back scrolled to where it was left (down at the key choice), so scroll to the field before asserting what it holds.
+            rule.onNodeWithText(host).performScrollTo().assertIsDisplayed()
             assertTrue("the key text is nowhere on the form", rule.onAllNodes(hasText("PRIVATE KEY", substring = true)).fetchSemanticsNodes().isEmpty())
             shoot("import-key-stored")
             rule.onNodeWithText("Connect").performClick()

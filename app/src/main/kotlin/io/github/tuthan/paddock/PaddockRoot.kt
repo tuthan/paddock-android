@@ -158,7 +158,10 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
                     Box(Modifier.weight(1f)) {
                         if (effective == Route.Home) HomeRoute(
                             graph, relayDismissed, { relayDismissed = it }, { reviewKey = true },
-                            onOpen = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output }, onSettings = { route = Route.Settings },
+                            onOpen = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output },
+                            // Review prompt goes to the agent's Terminal tab, observing: answering is a deliberate Request control from there.
+                            onReviewPrompt = { terminalId = it; outputTab = AgentTab.Terminal; route = Route.Output },
+                            onSettings = { route = Route.Settings },
                             onSetUpKey = { editing = true; addFrom = Route.Home; route = Route.AddMachine },
                         ) else ActivityRoute(graph, onOpenAgent = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output })
                     }
@@ -208,7 +211,7 @@ private fun rememberResumes(): Int {
 @Composable
 private fun HomeRoute(
     graph: AppGraph, relayDismissed: Boolean, setRelayDismissed: (Boolean) -> Unit, onReviewKey: () -> Unit,
-    onOpen: (terminalId: String) -> Unit, onSettings: () -> Unit, onSetUpKey: () -> Unit,
+    onOpen: (terminalId: String) -> Unit, onReviewPrompt: (terminalId: String) -> Unit, onSettings: () -> Unit, onSetUpKey: () -> Unit,
 ) {
     val profile by graph.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
@@ -233,11 +236,8 @@ private fun HomeRoute(
     HerdHome(
         screen.state, now, preview = view.blockedPreview, onSettings = onSettings,
         onRefresh = if (host != null) ({ refreshing = true; host.refresh() }) else null, refreshing = refreshing,
-        onReview = { row ->
-            // Review prompt: read the prompt again, then open the output for that agent (the terminal replaces this later).
-            host?.refreshPreview()
-            onOpen(row.key.target.terminalId)
-        },
+        // Review prompt opens the live terminal for that agent, observing only; the captured prompt on Home is not read again, since the terminal shows it as it is.
+        onReview = { row -> onReviewPrompt(row.key.target.terminalId) },
         onOpenAgent = { row ->
             // A Done tap is the user acknowledging it: local only, then the agent's output opens.
             if (row.state == StateWord.Done) host?.markSeen(row)

@@ -9,14 +9,20 @@ SERIAL="${1:-emulator-5572}"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
 PKG=io.github.tuthan.paddock; RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
 OUT="$ROOT/build/e2e-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
-export TEST_SSHD_RUN="$ROOT/build/e2e-sshd" TEST_SSHD_PORT=2233 TEST_SSHD_HOME="$ROOT/build/e2e-home"
+export TEST_SSHD_RUN="$ROOT/build/e2e-sshd" TEST_SSHD_PORT=2233 TEST_SSHD_HOME="$HOME/.cache/pdk-e2e-home"
 rm -rf "$TEST_SSHD_RUN" "$TEST_SSHD_HOME"; mkdir -p "$TEST_SSHD_HOME/.config"
-# herdr finds its sessions under $HOME/.config/herdr, so the isolated home links to the real config dir (read only for this test);
+# herdr finds its sessions under $HOME/.config/herdr, so the isolated home links to the real config dir (read only for this test). The
+# home is short on purpose, as in the terminal and operations flows: under build/ the terminal stream failed with "local socket name
+# length exceeds capacity of sun_path", because herdr's client socket name is longer than the API socket's;
 # everything the relay install writes goes under .local/share inside the isolated home.
 ln -s "$HOME/.config/herdr" "$TEST_SSHD_HOME/.config/herdr"
 HERDR="${PADDOCK_HERDR:-/usr/bin/herdr} --session paddock-test"
 SOCK="$HOME/.config/herdr/sessions/paddock-test/herdr.sock"
 [ -S "$SOCK" ] || { echo "paddock-test herdr session is not running ($SOCK)"; exit 1; }
+
+# Android 17 (API 37) asks before an app reaches a LAN address (the emulator reaches the host at 10.0.2.2), and the dialog hides the
+# app from the test; grant it up front. Older versions do not know the permission, and the error is ignored.
+grant_lan() { $ADB shell pm grant $PKG android.permission.ACCESS_LOCAL_NETWORK >/dev/null 2>&1 || true; }
 
 SRC="e2e-$(date +%s)"
 BASE=$($HERDR pane list | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['panes'][0]['pane_id'])")
@@ -37,7 +43,7 @@ export JAVA_HOME=$HOME/.local/share/mise/installs/java/temurin-17.0.20+8; export
 (cd "$ROOT" && ./gradlew --no-daemon --console=plain :app:assembleDebug :app:assembleDebugAndroidTest >"$OUT/build.log" 2>&1) || { echo "build failed: $OUT/build.log"; exit 1; }
 $ADB install -r "$ROOT/app/build/outputs/apk/debug/app-debug.apk" >/dev/null
 $ADB install -r "$ROOT/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk" >/dev/null
-$ADB shell pm clear $PKG >/dev/null
+$ADB shell pm clear $PKG >/dev/null; grant_lan
 $ADB shell am instrument -w -e class "$PKG.e2e.LiveFlowTest#t0_exportAppKey" "$RUNNER" >"$OUT/t0.txt" 2>&1
 $ADB pull "/sdcard/Android/data/$PKG/files/app-phone.pub" "$OUT/transport.pub" >/dev/null 2>&1 \
   && "$HERE/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
@@ -62,7 +68,7 @@ $ADB logcat -d -s E2E:I >"$OUT/e2e-log.txt"
 # only, pushed for the test to read (the test deletes it), and removed from build/ afterwards.
 IMPORT_KEY="$OUT/import-key"; ssh-keygen -q -t ed25519 -N '' -C paddock-e2e-import -f "$IMPORT_KEY"
 "$HERE/test-sshd.sh" authorize "$IMPORT_KEY.pub" >/dev/null
-$ADB shell pm clear $PKG >/dev/null
+$ADB shell pm clear $PKG >/dev/null; grant_lan
 $ADB push "$IMPORT_KEY" "/sdcard/Android/data/$PKG/files/e2e-import-key" >/dev/null 2>&1
 $ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" -e port 2233 -e home "$TEST_SSHD_HOME" -e session paddock-test -e class "$PKG.e2e.LiveFlowTest#importAKeyThenConnectWithIt" "$RUNNER" >"$OUT/import.txt" 2>&1
 rm -f "$IMPORT_KEY" "$IMPORT_KEY.pub"; $ADB shell rm -f "/sdcard/Android/data/$PKG/files/e2e-import-key"
