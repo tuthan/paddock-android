@@ -493,7 +493,7 @@ class TerminalSessionTest {
             s.open(40, 25)
             waitUntil("observer opened") { host.observers.isNotEmpty() }
             val o = host.observers.last()
-            repeat(200) { o.feed(frame(it + 1L, full = it == 0, text = if (it == 0) "${ESC}[2J${ESC}[1;1Hhello" else "${ESC}[1;1Hx")) }
+            repeat(2_000) { o.feed(frame(it + 1L, full = it == 0, text = if (it == 0) "${ESC}[2J${ESC}[1;1Hhello" else "${ESC}[1;1Hx")) }
             Thread.sleep(200)
             s.suspend()
         } finally { engine.open.countDown() }
