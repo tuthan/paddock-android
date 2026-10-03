@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import io.github.tuthan.paddock.terminal.Mods
 import io.github.tuthan.paddock.ui.components.SoftKeyboardInput
 import java.util.concurrent.CopyOnWriteArrayList
 import org.junit.Assert.assertEquals
@@ -29,14 +30,14 @@ class SoftKeyboardInputTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
     private val sent = CopyOnWriteArrayList<String>()
-    private var armed by mutableStateOf(false)
+    private var armed by mutableStateOf(Mods.None)
     private var spent = 0
 
-    private fun start(ctrl: Boolean = false): InputConnection {
-        armed = ctrl
+    private fun start(mods: Mods = Mods.None): InputConnection {
+        armed = mods
         rule.setContent {
             val focus = remember { FocusRequester() }
-            SoftKeyboardInput(focus, ctrlArmed = armed, onCtrlSpent = { spent++; armed = false }, onFocus = {}, onBytes = { sent += String(it, Charsets.UTF_8) })
+            SoftKeyboardInput(focus, armed = armed, onArmedSpent = { spent++; armed = Mods.None }, onFocus = {}, onBytes = { sent += String(it, Charsets.UTF_8) })
             LaunchedEffect(Unit) { focus.requestFocus() }
         }
         rule.waitForIdle()
@@ -87,9 +88,40 @@ class SoftKeyboardInputTest {
     }
 
     @Test fun stickyCtrlIsSpentOnTheFirstCharacterOfABurstOnly() {
-        val ic = start(ctrl = true)
+        val ic = start(Mods(ctrl = true))
         onUi { ic.commitText("c", 1); ic.commitText("c", 1) }
         assertEquals(listOf("\u0003", "c"), sent.toList())
+        assertEquals(1, spent)
+    }
+
+    @Test fun stickyAltIsSpentOnTheFirstCharacterOfABurstOnly() {
+        val ic = start(Mods(alt = true))
+        onUi { ic.commitText("b", 1); ic.commitText("b", 1) }
+        assertEquals(listOf("\u001Bb", "b"), sent.toList())
+        assertEquals(1, spent)
+    }
+
+    @Test fun stickyShiftIsSpentOnTheFirstCharacterOfABurstOnly() {
+        val ic = start(Mods(shift = true))
+        onUi { ic.commitText("a", 1); ic.commitText("a", 1) }
+        assertEquals(listOf("A", "a"), sent.toList())
+        assertEquals(1, spent)
+    }
+
+    @Test fun anArmedModifierAppliesToEnterAndBackspaceKeyEventsAndIsSpentOnce() {
+        val ic = start(Mods(alt = true))
+        onUi {
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL)); ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL)); ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+        }
+        assertEquals(listOf("\u001B\u007F", "\u007F"), sent.toList())
+        assertEquals(1, spent)
+    }
+
+    @Test fun anArmedCtrlMakesAKeyEventForALetterItsControlCodeOnceNotAlsoText() {
+        val ic = start(Mods(ctrl = true))
+        onUi { ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_C)); ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_C)) }
+        assertEquals(listOf("\u0003"), sent.toList())
         assertEquals(1, spent)
     }
 }

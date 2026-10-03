@@ -16,17 +16,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -40,11 +44,13 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.attention.AgeText
+import io.github.tuthan.paddock.attention.AgentGlyph
+import io.github.tuthan.paddock.attention.AgentMarks
 import io.github.tuthan.paddock.attention.AgentRowModel
-import io.github.tuthan.paddock.attention.Monogram
 import io.github.tuthan.paddock.attention.Section
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.live.PreviewState
+import io.github.tuthan.paddock.ui.theme.PaddockAgentGlyphs
 import io.github.tuthan.paddock.ui.theme.PaddockColors
 import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockFonts
@@ -143,26 +149,58 @@ fun StateWord(state: StateWord, modifier: Modifier = Modifier) {
     }
 }
 
-/** Two letters for the agent kind on a 32 dp tile, in mono, as the design's monograms. */
+const val AGENT_GLYPH_TAG = "agent-glyph"
+const val AGENT_CODE_TAG = "agent-code"
+
+/** Whether agent tiles draw a glyph for the common agents (Settings > Appearance > Agent icons). Provided once at the root; on until told otherwise. */
+val LocalAgentGlyphs = compositionLocalOf { true }
+
+/**
+ * The mark for an agent kind on a 32 dp tile: a one-colour glyph for the ten common kinds when [LocalAgentGlyphs] is on,
+ * otherwise (and for every other kind) its two-letter code in mono. Decorative: the row's spoken text names the agent,
+ * so the tile adds nothing to what TalkBack says. Colour is for state only, so the mark is tinted like the row's title and
+ * never by kind. A shell keeps a dashed outline.
+ */
 @Composable
-fun MonogramTile(kind: String?, modifier: Modifier = Modifier) {
+fun AgentMarkTile(kind: String?, modifier: Modifier = Modifier, glyphs: Boolean = LocalAgentGlyphs.current) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(8.dp)
-    // Decorative (the row says the same in words), so it grows with the font only a little and always fits its tile.
+    // Decorative, so it grows with the font only a little and always fits its tile.
     val density = LocalDensity.current
     val scale = density.fontScale.coerceAtMost(1.3f)
     val tile = 32.dp * scale
     val size = with(density) { (12.dp * scale).toSp() }
-    Box(modifier.size(tile).clearAndSetSemantics { }.background(c.field, shape), contentAlignment = Alignment.Center) {
-        Text(Monogram.of(kind), style = PaddockTokens.type.monoFact.copy(fontWeight = FontWeight.Medium, fontSize = size, lineHeight = size), color = c.title, maxLines = 1)
+    val mark = AgentMarks.of(kind)
+    val glyph = if (glyphs) mark.glyph else null
+    val outline = c.fieldLine()
+    Box(
+        modifier.size(tile).clearAndSetSemantics { }.background(c.field, shape)
+            .then(
+                if (mark.glyph != AgentGlyph.Shell) Modifier
+                else Modifier.drawBehind {
+                    val w = 1.dp.toPx()
+                    drawRoundRect(
+                        outline, topLeft = Offset(w / 2, w / 2), size = Size(this.size.width - w, this.size.height - w), cornerRadius = CornerRadius(8.dp.toPx() - w / 2),
+                        style = Stroke(w, pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 2.dp.toPx()))),
+                    )
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        // The tags are for tests only: the tile's own semantics are cleared, so neither is ever in what TalkBack reads.
+        if (glyph != null) Icon(PaddockAgentGlyphs.of(glyph), contentDescription = null, tint = c.title, modifier = Modifier.size(20.dp * scale).testTag(AGENT_GLYPH_TAG))
+        else Text(
+            mark.code, style = PaddockTokens.type.monoFact.copy(fontWeight = FontWeight.Medium, fontSize = size, lineHeight = size), color = c.title, maxLines = 1,
+            modifier = Modifier.testTag(AGENT_CODE_TAG),
+        )
     }
 }
 
-/** What TalkBack reads for a row: state word, title, context, then how long ago the phone saw it. */
+/** What TalkBack reads for a row: state word, which agent it is, title, context, then how long ago the phone saw it. The tile says none of this, so the agent is named here. */
 internal fun rowDescription(model: AgentRowModel, nowMillis: Long, stale: Boolean = false): String {
     val observed = AgeText.observed(nowMillis - model.observedAtMillis)
     val state = if (stale) "Last seen ${model.state.word.lowercase()}" else model.state.word
-    return listOfNotNull(state, model.title, model.context.ifEmpty { null }, observed).joinToString(", ")
+    return listOfNotNull(state, model.agentKind?.ifBlank { null }, model.title, model.context.ifEmpty { null }, observed).joinToString(", ")
 }
 
 /** The row's second line: where it is, then what the phone saw and when. */
@@ -203,7 +241,7 @@ fun AgentRow(model: AgentRowModel, nowMillis: Long, enabled: Boolean, modifier: 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        MonogramTile(model.agentKind)
+        AgentMarkTile(model.agentKind)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             // One line as designed; two once the font is large, so a title is still recognisable.
             val lines = if (LocalDensity.current.fontScale >= 1.3f) 2 else 1
@@ -236,7 +274,7 @@ fun ExpandedAgentRow(model: AgentRowModel, nowMillis: Long, preview: PreviewStat
                 .semantics(mergeDescendants = true) { contentDescription = rowDescription(model, nowMillis) },
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            MonogramTile(model.agentKind)
+            AgentMarkTile(model.agentKind)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(model.title, style = PaddockTokens.type.rowTitle, color = c.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(rowDetail(model, nowMillis, stale = false), style = PaddockTokens.type.secondary, color = c.dim, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -350,7 +388,10 @@ fun HostChip(name: String, status: String, modifier: Modifier = Modifier, health
  * and when there is one, the action as an outlined button in the same colour (below the sentence at large font sizes).
  */
 @Composable
-fun Banner(text: String, modifier: Modifier = Modifier, actionLabel: String? = null, onAction: () -> Unit = {}) {
+fun Banner(
+    text: String, modifier: Modifier = Modifier, actionLabel: String? = null, onAction: () -> Unit = {},
+    tint: Color = PaddockTokens.colors.attention, icon: androidx.compose.ui.graphics.vector.ImageVector = PaddockIcons.Warning,
+) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.row)
     // Side by side only when there is room: on a narrow phone or at a large font the action goes under the sentence.
@@ -359,14 +400,14 @@ fun Banner(text: String, modifier: Modifier = Modifier, actionLabel: String? = n
     val stacked = density.fontScale >= 1.3f || width < 400.dp
     val body: @Composable (Modifier) -> Unit = { m ->
         Row(m, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Icon(PaddockIcons.Warning, contentDescription = null, tint = c.attention, modifier = Modifier.size(20.dp))
-            Text(text, style = PaddockTokens.type.secondary, color = c.attention, modifier = Modifier.weight(1f))
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+            Text(text, style = PaddockTokens.type.secondary, color = tint, modifier = Modifier.weight(1f))
         }
     }
     val action: @Composable () -> Unit = {
-        if (actionLabel != null) PaddockButton(actionLabel, onAction, Modifier.padding(start = if (stacked) 30.dp else 0.dp), kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = c.attention)
+        if (actionLabel != null) PaddockButton(actionLabel, onAction, Modifier.padding(start = if (stacked) 30.dp else 0.dp), kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
     }
-    val frame = modifier.fillMaxWidth().clip(shape).background(c.bannerWash(c.attention)).border(1.dp, c.bannerBorder(c.attention), shape)
+    val frame = modifier.fillMaxWidth().clip(shape).background(c.bannerWash(tint)).border(1.dp, c.bannerBorder(tint), shape)
         .padding(horizontal = 12.dp, vertical = 10.dp)
     if (stacked || actionLabel == null) {
         Column(frame, verticalArrangement = Arrangement.spacedBy(10.dp)) { body(Modifier.fillMaxWidth()); action() }
@@ -377,6 +418,14 @@ fun Banner(text: String, modifier: Modifier = Modifier, actionLabel: String? = n
         }
     }
 }
+
+/**
+ * What an alert's tap found, in the accent colour (information, not a fault): "State changed since the alert", "No longer
+ * observed". Dismissed by the user; it stays across screens until then.
+ */
+@Composable
+fun NoticeBar(text: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) =
+    Banner(text, modifier, actionLabel = "Dismiss", onAction = onDismiss, tint = PaddockTokens.colors.accent, icon = PaddockIcons.Bell)
 
 /** A short explanatory note under a control, 12 sp dim, with an optional leading icon. */
 @Composable

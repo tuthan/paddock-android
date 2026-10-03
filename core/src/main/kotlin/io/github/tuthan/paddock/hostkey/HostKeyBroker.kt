@@ -14,8 +14,18 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** A first-contact key waiting for the user. [id] names this question; an answer must name the question it answers. */
-data class FirstTrustRequest(val id: Long, val profileId: String, val endpoint: String, val presented: PresentedHostKey)
+/**
+ * A first-contact key waiting for the user. [id] names this question; an answer must name the question it answers.
+ * [linkFingerprints] is set when the machine was added from a pairing link and the presented key is one of the link's: the
+ * dialog then says so. It never answers the question: the user still chooses.
+ */
+data class FirstTrustRequest(val id: Long, val profileId: String, val endpoint: String, val presented: PresentedHostKey, val linkFingerprints: List<String>? = null)
+
+/**
+ * A machine added from a pairing link presented a key that is none of the link's fingerprints. Nothing was trusted and the
+ * connect failed; [expected] is what the link said and [presented] what the machine offered, for the dialog to show side by side.
+ */
+data class PairingRefusal(val profileId: String, val endpoint: String, val expected: List<String>, val presented: PresentedHostKey)
 
 /**
  * A pinned machine that presented a different key. Nothing was authenticated. [id] names the failed attempt that recorded
@@ -43,17 +53,43 @@ class HostKeyBroker {
     private val _firstTrust = MutableStateFlow<FirstTrustRequest?>(null)
     val firstTrust: StateFlow<FirstTrustRequest?> = _firstTrust.asStateFlow()
 
+    private val expectations = HashMap<String, List<String>>()
+    private val _pairingRefused = MutableStateFlow<PairingRefusal?>(null)
+
+    /** The latest refusal of a key that did not match a pairing link, until the user closes it ([clearPairingRefusal]). */
+    val pairingRefused: StateFlow<PairingRefusal?> = _pairingRefused.asStateFlow()
+
     private val _changed = MutableStateFlow<Map<String, ChangedKey>>(emptyMap())
     val changed: StateFlow<Map<String, ChangedKey>> = _changed.asStateFlow()
 
-    /** One question at a time: a second connect waits its turn instead of replacing the first dialog. */
+    /**
+     * Records what a pairing link said about [profileId]'s host key, or forgets it when [fingerprints] is null or empty. Every
+     * Connect from Add machine sets or clears it, so a link's fingerprints never outlive the form that carried them. It is a
+     * comparison, not a trust decision: a match only adds a line to the dialog, and the user still taps Trust.
+     */
+    fun expectPairing(profileId: String, fingerprints: List<String>?) {
+        synchronized(pendingLock) { if (fingerprints.isNullOrEmpty()) expectations.remove(profileId) else expectations[profileId] = fingerprints.toList() }
+    }
+
+    fun clearPairingRefusal() { _pairingRefused.value = null }
+
+    /**
+     * One question at a time: a second connect waits its turn instead of replacing the first dialog. A machine that has a
+     * pairing link's fingerprints on record and presents none of them is refused here, before any dialog: the link said what
+     * this machine's key is, and a different one is not something to ask a person to wave through.
+     */
     suspend fun askFirstTrust(profileId: String, endpoint: String, presented: PresentedHostKey): Boolean = askLock.withLock {
-        val request = FirstTrustRequest(ids.incrementAndGet(), profileId, endpoint, presented)
+        val expected = synchronized(pendingLock) { expectations[profileId] }
+        if (expected != null && presented.fingerprint !in expected) {
+            _pairingRefused.value = PairingRefusal(profileId, endpoint, expected, presented)
+            return@withLock false
+        }
+        val request = FirstTrustRequest(ids.incrementAndGet(), profileId, endpoint, presented, linkFingerprints = expected)
         val answer = CompletableDeferred<Boolean>()
         synchronized(pendingLock) { pending = Pending(request.id, answer) }
         _firstTrust.value = request
         try {
-            answer.await()
+            answer.await().also { accepted -> if (accepted) synchronized(pendingLock) { expectations.remove(profileId) } }
         } finally {
             synchronized(pendingLock) { if (pending?.id == request.id) pending = null }
             _firstTrust.compareAndSet(request, null)

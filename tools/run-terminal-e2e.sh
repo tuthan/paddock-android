@@ -170,11 +170,20 @@ check "a rotation keeps the same control helper process (control was not release
 go rotate
 
 reach soft-keyboard-ready
+$ADB exec-out screencap -p > "$OUT/soft-keyboard-ime.png" 2>/dev/null   # the real screen with the Android keyboard up
 # Keys through the system's input pipeline reach the focused hidden field the Keyboard button put the focus on: a plain line, then Enter.
 $ADB shell input text 'echo%ssoft-e2e'; $ADB shell input keyevent 66; sleep 2
 check "the Android keyboard's keys (text and Enter) reached the pane through the hidden field" 'pane_has "^soft-e2e$"'
 check "the line was typed once, not twice (one command line, one output line, and no garbled echo)" '[ "$(H pane read "$P" --source recent --lines 80 | grep -c "echo soft-e2e")" = 1 ] && [ "$(H pane read "$P" --source recent --lines 80 | grep -c "^soft-e2e$")" = 1 ] && ! pane_has "command not found"'
 go soft-keyboard-ready
+
+# The key strip's modifiers and extra keys: the test ran `stty -echo` and `cat -v` in the pane and tapped Shift+Tab, Ctrl+Right, Insert,
+# Delete, F1, F12, Shift+PgUp and Alt+Enter; `cat -v` shows ESC as ^[, so each line is the xterm sequences the pane received.
+reach strip-keys
+pane_line() { H pane read "$P" --source recent --lines 80 | grep -cxF -- "$1"; }
+check "the strip's Shift+Tab, Ctrl+Right, Insert and Delete reached the pane as xterm sends them, once" '[ "$(pane_line "^[[Z^[[1;5C^[[2~^[[3~")" = 1 ]'
+check "the strip's F1, F12, Shift+PgUp and Alt+Enter (ESC then CR) reached the pane as xterm sends them, once" '[ "$(pane_line "^[OP^[[24~^[[5;2~^[")" = 1 ]'
+go strip-keys
 
 for n in 1 2 3 4 5; do
   reach scroll-$n

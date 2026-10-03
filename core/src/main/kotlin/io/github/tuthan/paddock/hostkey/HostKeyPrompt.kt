@@ -10,6 +10,16 @@ sealed interface HostKeyPrompt {
     /** First contact: nothing is trusted yet and nothing has been authenticated. */
     data class FirstTrust(
         override val endpoint: String, val algorithm: String, val fingerprint: String, val compareCommand: String,
+        /** True when the machine was added from a pairing link and this fingerprint is one the link named. The user still decides. */
+        val matchesPairingLink: Boolean = false,
+    ) : HostKeyPrompt
+
+    /**
+     * The machine was added from a pairing link and presented a key the link does not name. Nothing was trusted and the connect
+     * has already failed; the dialog only shows both and offers no way to trust.
+     */
+    data class PairingMismatch(
+        override val endpoint: String, val algorithm: String, val presentedFingerprint: String, val linkFingerprints: List<String>, val compareCommand: String,
     ) : HostKeyPrompt
 
     /** The host presented a key different from the pin. Nothing was authenticated; the pin stays unless the user replaces it. */
@@ -21,8 +31,14 @@ sealed interface HostKeyPrompt {
 }
 
 object HostKeyPrompts {
-    fun firstTrust(endpoint: String, presented: PresentedHostKey) =
-        HostKeyPrompt.FirstTrust(endpoint, displayAlgorithm(presented.algorithm), presented.fingerprint, compareCommand(presented.algorithm))
+    fun firstTrust(endpoint: String, presented: PresentedHostKey, linkFingerprints: List<String>? = null) = HostKeyPrompt.FirstTrust(
+        endpoint, displayAlgorithm(presented.algorithm), presented.fingerprint, compareCommand(presented.algorithm),
+        matchesPairingLink = linkFingerprints != null && presented.fingerprint in linkFingerprints,
+    )
+
+    fun pairingMismatch(refusal: PairingRefusal) = HostKeyPrompt.PairingMismatch(
+        refusal.endpoint, displayAlgorithm(refusal.presented.algorithm), refusal.presented.fingerprint, refusal.expected, compareCommand(refusal.presented.algorithm),
+    )
 
     fun changed(endpoint: String, state: HostKeyState.Changed) = HostKeyPrompt.Changed(
         endpoint, displayAlgorithm(state.pin.algorithm), state.pin.fingerprint, state.pin.firstSeenMillis,

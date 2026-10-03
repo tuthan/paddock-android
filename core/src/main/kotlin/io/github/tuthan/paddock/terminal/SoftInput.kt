@@ -46,19 +46,25 @@ object SoftInput {
     }
 
     /**
-     * The bytes for [key]. [ctrl] is the sticky Ctrl: it applies to one character key, the first one, and [Encoded.usedCtrl]
-     * says whether it did, so the caller can disarm it. A character Ctrl has no meaning for (a digit) is sent as it is.
+     * The bytes for [key] with the key strip's armed modifiers. They apply to one key, the first, and [Encoded.spent] says
+     * whether they did, so the caller can disarm them: any key spends them, including one they mean nothing to (a digit
+     * under Ctrl, Shift on Enter). Ctrl and Alt are encoded as [KeyEncoder] does for a hardware key (Alt+Backspace is ESC
+     * DEL, the readline "delete word"); Shift upper-cases a letter, because the keyboard has already chosen the case of
+     * anything else. A character Ctrl has no meaning for is sent as it is.
      */
-    fun encode(key: SoftKey, ctrl: Boolean): Encoded = when (key) {
-        SoftKey.Enter -> Encoded(KeyEncoder.named(NamedKey.Enter), usedCtrl = false)
-        SoftKey.Backspace -> Encoded(KeyEncoder.named(NamedKey.Backspace), usedCtrl = false)
-        is SoftKey.Char -> {
-            val chord = if (ctrl) KeyEncoder.text(key.codePoint, Mods(ctrl = true)) else null
-            if (chord != null) Encoded(chord, usedCtrl = true)
-            else Encoded(KeyEncoder.text(key.codePoint), usedCtrl = ctrl)
+    fun encode(key: SoftKey, mods: Mods): Encoded {
+        val spent = !mods.none
+        return when (key) {
+            SoftKey.Enter -> Encoded(KeyEncoder.named(NamedKey.Enter, mods), spent)
+            SoftKey.Backspace -> Encoded(KeyEncoder.named(NamedKey.Backspace, mods), spent)
+            is SoftKey.Char -> {
+                val cp = if (mods.shift && !mods.ctrl) Character.toUpperCase(key.codePoint) else key.codePoint
+                val chord = if (mods.ctrl) KeyEncoder.text(cp, Mods(alt = mods.alt, ctrl = true)) else null
+                Encoded(chord ?: KeyEncoder.text(cp, Mods(alt = mods.alt)), spent)
+            }
         }
     }
 
-    /** The bytes to send ([bytes] is null for a code point a terminal cannot take) and whether the sticky Ctrl was spent on it. */
-    class Encoded(val bytes: ByteArray?, val usedCtrl: Boolean)
+    /** The bytes to send ([bytes] is null for a code point a terminal cannot take) and whether the armed modifiers were spent on it. */
+    class Encoded(val bytes: ByteArray?, val spent: Boolean)
 }

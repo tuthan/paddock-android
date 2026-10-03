@@ -10,6 +10,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isEnabled
@@ -24,6 +25,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.tuthan.paddock.MainActivity
+import io.github.tuthan.paddock.ui.components.AGENT_CODE_TAG
+import io.github.tuthan.paddock.ui.components.AGENT_GLYPH_TAG
 import io.github.tuthan.paddock.ui.screens.ESC_ENTERS_MANUAL_NOTE
 import io.github.tuthan.paddock.ui.screens.FOCUS_QUESTION
 import java.io.File
@@ -103,6 +106,21 @@ class OperationsFlowTest {
 
     private fun hasClickAction() = androidx.compose.ui.test.hasClickAction()
 
+    private fun agentGlyphs() = rule.onAllNodes(hasTestTag(AGENT_GLYPH_TAG), useUnmergedTree = true).fetchSemanticsNodes().size
+    private fun agentCodes() = rule.onAllNodes(hasTestTag(AGENT_CODE_TAG), useUnmergedTree = true).fetchSemanticsNodes().map { it.config.getOrNull(SemanticsProperties.Text)?.joinToString("") }
+
+    /** Settings > Agent icons, through the real navigation, then back to the live herd. A no-op tap is not made when it is already [on]. */
+    private fun setAgentIcons(on: Boolean) {
+        rule.onNode(desc("Settings", substring = false)).performClick()
+        waitFor("Settings") { hasNode(text("Agent icons")) }
+        rule.onNodeWithText("Agent icons").performScrollTo()
+        fun state() = rule.onAllNodes(hasText("Agent icons")).fetchSemanticsNodes().firstOrNull()?.config?.getOrNull(SemanticsProperties.StateDescription)
+        if ((state() == "On") != on) rule.onNodeWithText("Agent icons").performClick()
+        waitFor("the toggle ${if (on) "on" else "off"}") { state() == if (on) "On" else "Off" }
+        back()
+        waitFor("Home again") { hasNode(desc("Ready")) && hasNode(desc("live")) }
+    }
+
     private fun openComposer(initial: String? = null) {
         rule.onNode(desc("Write a prompt for claude")).performClick()
         waitFor("the composer") { hasNode(hasSetTextAction()) }
@@ -135,6 +153,19 @@ class OperationsFlowTest {
         rule.onNodeWithText("Trust and connect").performClick()
         waitFor("the relay prompt or the home") { hasNode(text("Install the relay on $host?")) || hasNode(desc("Ready")) }
         if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()
+
+        // --- Phase 12, through the real app: the claude row draws its glyph and says "claude" in words; Settings > Agent icons turns the
+        // glyph into letters on the herd at once, and back. The default (on) is left in place for the stages after this one. ---
+        waitFor("the fake agent on Home, ready and live", 90_000) { hasNode(desc("Ready, claude,")) && hasNode(desc("live")) }
+        assertEquals("on by default: the claude row draws a glyph", 1, agentGlyphs()); assertEquals(emptyList<String?>(), agentCodes())
+        shoot("herd-glyph")
+        setAgentIcons(on = false)
+        assertEquals("off: no glyph on the herd", 0, agentGlyphs()); assertEquals(listOf<String?>("cl"), agentCodes())
+        assertTrue("the spoken text is the same with the icons off", hasNode(desc("Ready, claude,")))
+        shoot("herd-letters")
+        setAgentIcons(on = true)
+        assertEquals("on again: the glyph is back", 1, agentGlyphs())
+
         openAgentFromHome()
         shoot("output-manual-off")
 

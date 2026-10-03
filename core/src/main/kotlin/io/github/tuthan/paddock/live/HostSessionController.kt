@@ -15,6 +15,9 @@ import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.ports.DownReason
 import io.github.tuthan.paddock.ports.SshSession
+import io.github.tuthan.paddock.relay.PluginLocation
+import io.github.tuthan.paddock.relay.PluginLocator
+import io.github.tuthan.paddock.relay.PluginNotes
 import io.github.tuthan.paddock.relay.RelayInstaller
 import io.github.tuthan.paddock.relay.RelayRefused
 import io.github.tuthan.paddock.relay.RelayState
@@ -39,7 +42,11 @@ sealed interface HostPhase {
     data object Connecting : HostPhase
 
     /** The pinned relay script is not on the host (or a different file is). Nothing is written until the user agrees. */
-    data class NeedsRelayInstall(val destination: String, val expectedSha256: String, val replacing: Boolean) : HostPhase
+    data class NeedsRelayInstall(
+        val destination: String, val expectedSha256: String, val replacing: Boolean,
+        /** Set when the Paddock herdr plugin is installed on the host but carries a relay that is not the pinned one: what was found and how to fix it. */
+        val pluginNote: String? = null,
+    ) : HostPhase
 
     data object InstallingRelay : HostPhase
 
@@ -87,6 +94,14 @@ class HostSessionController(
     private val controlSha256: String? = null,
     /** The phone's operation journal; without one the host is read-only (no prompt, key or focus operations). */
     private val journal: OperationJournal? = null,
+    /** The pinned `paddock-alert-relay.py` and its hash (Phase 07); installed only when the user asks on the alert relay screen. */
+    private val alertScript: ByteArray? = null,
+    private val alertSha256: String? = null,
+    /** The pinned `paddock-decide.py` and `paddock-claude-permission-hook.py` with their hashes (Phase 08); installed only when the user asks on the answers screen. */
+    private val decideScript: ByteArray? = null,
+    private val decideSha256: String? = null,
+    private val hookScript: ByteArray? = null,
+    private val hookSha256: String? = null,
 ) {
     private val _phase = MutableStateFlow<HostPhase>(HostPhase.Connecting)
     val phase: StateFlow<HostPhase> = _phase.asStateFlow()
@@ -166,14 +181,21 @@ class HostSessionController(
     private suspend fun bringUp(session: SshSession) {
         val installer: RelayInstaller
         val home: String
+        val herdrPath: String?
+        val plugin: PluginLocation?
         try {
-            installer = RelayInstaller(session, relayScript, relaySha256)
+            herdrPath = herdr ?: discoverHerdr(session)
+            plugin = herdrPath?.let { PluginLocator.find(session, it) }
+            installer = RelayInstaller(session, relayScript, relaySha256, plugin = plugin)
             home = installer.homeDirectory()
             val state = installer.state(home)
             if (state != RelayState.Current) {
                 val asked = CompletableDeferred<Unit>()
                 consent.value = asked
-                _phase.value = HostPhase.NeedsRelayInstall(installer.destination(home), relaySha256, replacing = state is RelayState.Mismatch)
+                _phase.value = HostPhase.NeedsRelayInstall(
+                    installer.destination(home), relaySha256, replacing = state is RelayState.Mismatch,
+                    pluginNote = installer.pluginMismatch?.let { PluginNotes.mismatch(it) },
+                )
                 try { asked.await() } finally { consent.compareAndSet(asked, null) }
                 _phase.value = HostPhase.InstallingRelay
                 try {
@@ -195,7 +217,7 @@ class HostSessionController(
             return
         }
         try {
-            proceed(session, installer, home)
+            proceed(session, installer, home, herdrPath, plugin)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -203,9 +225,8 @@ class HostSessionController(
         }
     }
 
-    private suspend fun proceed(session: SshSession, installer: RelayInstaller, home: String) {
+    private suspend fun proceed(session: SshSession, installer: RelayInstaller, home: String, herdr: String?, plugin: PluginLocation?) {
         val path = installer.verifiedPath(home)
-        val herdr = herdr ?: discoverHerdr(session)
         if (herdr == null) {
             _phase.value = HostPhase.Problem("herdr was not found on the host (looked in ~/.local/bin, ~/.cargo/bin, /usr/local/bin and /usr/bin).")
             return
@@ -226,8 +247,14 @@ class HostSessionController(
         val host = MonitoredHost(
             scope, profile, chosen.name, session, path, chosen.socketPath, ledger, clock, foreground, herdr,
             beforeReconnect = { installer.verifiedPath(home) },
-            controlHelper = controlScript?.let { SshControlHelper(RelayInstaller(session, it, controlSha256!!, fileName = "paddock-control.py")) },
+            controlHelper = controlScript?.let { SshControlHelper(RelayInstaller(session, it, controlSha256!!, fileName = "paddock-control.py", plugin = plugin)) },
             journal = journal,
+            alertRelay = alertScript?.let { io.github.tuthan.paddock.alerts.AlertRelayHost(session, RelayInstaller(session, it, alertSha256!!, fileName = "paddock-alert-relay.py")) },
+            answerHost = if (decideScript != null && hookScript != null) io.github.tuthan.paddock.answers.AnswerHost(
+                session, RelayInstaller(session, decideScript, decideSha256!!, fileName = "paddock-decide.py"),
+                RelayInstaller(session, hookScript, hookSha256!!, fileName = "paddock-claude-permission-hook.py"), clock,
+                herdrSession = chosen.name, phoneLabel = profile.name.take(64),
+            ) else null,
         )
         synchronized(lock) {
             if (stopped) return

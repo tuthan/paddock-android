@@ -63,4 +63,31 @@ class AppSettingsTest {
         file.writeText("""{"protectSensitiveScreens": true, "desktopFocusConfirmed": "yes"}""")
         assertEquals(false, FileAppSettingsStore(file).load().desktopFocusConfirmed, "a damaged value asks again")
     }
+
+    @Test fun agentIconsAreOnByDefaultAndTheChoiceSurvivesANewStore() = runBlocking {
+        assertEquals(true, AppSettings().agentGlyphs)
+        assertEquals(true, FileAppSettingsStore(file).load().agentGlyphs)
+        FileAppSettingsStore(file).save(AppSettings(agentGlyphs = false))
+        assertEquals(false, FileAppSettingsStore(file).load().agentGlyphs, "it survives a restart")
+        assertEquals(AppSettings(agentGlyphs = false), FileAppSettingsStore(file).load(), "and nothing else changed with it")
+    }
+
+    @Test fun aSettingsFileFromBeforeAgentIconsLoadsWithThemOnAndKeepsTheOtherChoices() = runBlocking {
+        file.writeText("""{"protectSensitiveScreens": false, "keepPromptText": true, "watchedProfileId": "laptop"}""")
+        val loaded = FileAppSettingsStore(file).load()
+        assertEquals(true, loaded.agentGlyphs)
+        assertEquals(AppSettings(protectSensitiveScreens = false, keepPromptText = true, watchedProfileId = "laptop"), loaded)
+    }
+
+    @Test fun aWrongTypedAgentIconsValueLoadsAsOnAndLoadingLeavesTheFileAlone() = runBlocking {
+        val damaged = """{"protectSensitiveScreens": true, "agentGlyphs": "maybe"}"""
+        file.writeText(damaged)
+        assertEquals(true, FileAppSettingsStore(file).load().agentGlyphs)
+        assertEquals(damaged, file.readText(), "a load never rewrites or removes the file")
+        assertEquals(listOf("settings.json"), dir.list()!!.toList())
+        file.writeText("""{"agentGlyphs": 0}""")
+        assertEquals(true, FileAppSettingsStore(file).load().agentGlyphs)
+        file.writeText("""{"agentGlyphs": null}""")
+        assertEquals(true, FileAppSettingsStore(file).load().agentGlyphs)
+    }
 }

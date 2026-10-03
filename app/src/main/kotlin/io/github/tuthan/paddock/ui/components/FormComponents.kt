@@ -230,6 +230,8 @@ enum class ButtonKind { Primary, Secondary, Ghost, Danger }
 fun PaddockButton(
     text: String, onClick: () -> Unit, modifier: Modifier = Modifier, kind: ButtonKind = ButtonKind.Primary, enabled: Boolean = true,
     autoFocus: Boolean = false, small: Boolean = false, icon: ImageVector? = null, fillWidth: Boolean = true, tint: Color? = null,
+    /** A 36 dp bar for a row that has to stay one line (the Terminal tab's controls while the Android keyboard is up). */
+    dense: Boolean = false,
 ) {
     val c = PaddockTokens.colors
     val radius = PaddockTokens.radii.button
@@ -268,7 +270,7 @@ fun PaddockButton(
                     }
                 else Modifier,
             )
-            .heightIn(min = PaddockTokens.spacing.touchTarget)
+            .heightIn(min = if (dense) 36.dp else PaddockTokens.spacing.touchTarget)
             .clip(shape).background(bg).border(1.dp, border, shape)
             .then(
                 if (autoFocus) Modifier
@@ -276,7 +278,7 @@ fun PaddockButton(
                     .semantics(mergeDescendants = true) { role = Role.Button; this.focused = focused; onClick { if (enabled) onClick(); true } }
                 else Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick),
             )
-            .padding(horizontal = if (small) 12.dp else 16.dp, vertical = 10.dp),
+            .padding(horizontal = if (small) 12.dp else 16.dp, vertical = if (dense) 4.dp else 10.dp),
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
@@ -307,11 +309,12 @@ fun FingerprintDialog(prompt: HostKeyPrompt, onTrust: () -> Unit, onCancel: () -
     val c = PaddockTokens.colors
     val first = prompt as? HostKeyPrompt.FirstTrust
     val changed = prompt as? HostKeyPrompt.Changed
+    val mismatch = prompt as? HostKeyPrompt.PairingMismatch
     val shape = RoundedCornerShape(PaddockTokens.radii.dialog)
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(dismissOnClickOutside = false, usePlatformDefaultWidth = false)) {
         Column(
             Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(shape).background(c.surface)
-                .border(1.dp, if (changed != null) c.attention.copy(alpha = 0.45f) else c.fieldLine(), shape)
+                .border(1.dp, if (changed != null || mismatch != null) c.attention.copy(alpha = 0.45f) else c.fieldLine(), shape)
                 .verticalScroll(rememberScrollState()).padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -324,6 +327,8 @@ fun FingerprintDialog(prompt: HostKeyPrompt, onTrust: () -> Unit, onCancel: () -
                 Slab {
                     Text(first.algorithm, style = PaddockTokens.type.monoFact, color = c.dim)
                     Text(first.fingerprint, style = PaddockTokens.type.monoFact, color = c.title)
+                    // The pairing link named this fingerprint. It is one more thing to compare, not a decision: Trust is still the user's tap.
+                    if (first.matchesPairingLink) Text("Same as the fingerprint in the pairing link.", style = PaddockTokens.type.monoFact, color = c.dim)
                 }
                 Kicker("Run on the machine to compare")
                 Slab { Text(first.compareCommand, style = PaddockTokens.type.monoFact, color = c.text) }
@@ -331,6 +336,25 @@ fun FingerprintDialog(prompt: HostKeyPrompt, onTrust: () -> Unit, onCancel: () -
                     { m -> PaddockButton("Cancel", onCancel, m, kind = ButtonKind.Secondary, autoFocus = true) },
                     { m -> PaddockButton("Trust and connect", onTrust, m, kind = ButtonKind.Ghost) },
                 )
+            } else if (mismatch != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(PaddockIcons.Warning, contentDescription = null, tint = c.attention, modifier = Modifier.size(20.dp))
+                    Text("${prompt.endpoint} is not the machine in the pairing link", style = PaddockTokens.type.headerTitle, color = c.attention)
+                }
+                Text(
+                    "Paddock did not sign in and trusted nothing. The key this address offered is not one the pairing link names. Either the link is for another machine, or something else is answering at this address.",
+                    style = PaddockTokens.type.body.copy(fontSize = PaddockTokens.type.summary.fontSize), color = c.text,
+                )
+                Slab {
+                    Text(if (mismatch.linkFingerprints.size == 1) "in the pairing link" else "in the pairing link · any of", style = PaddockTokens.type.monoFact, color = c.dim)
+                    mismatch.linkFingerprints.forEach { Text(it, style = PaddockTokens.type.monoFact, color = c.text) }
+                    Box(Modifier.size(6.dp))
+                    Text("offered now · ${mismatch.algorithm}", style = PaddockTokens.type.monoFact.copy(fontWeight = FontWeight.Medium), color = c.attention)
+                    Text(mismatch.presentedFingerprint, style = PaddockTokens.type.monoFact, color = c.title)
+                }
+                Kicker("Run on the machine to compare")
+                Slab { Text(mismatch.compareCommand, style = PaddockTokens.type.monoFact, color = c.text) }
+                PaddockButton("Close", onCancel, Modifier.fillMaxWidth(), kind = ButtonKind.Secondary, autoFocus = true)
             } else if (changed != null) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(PaddockIcons.Warning, contentDescription = null, tint = c.attention, modifier = Modifier.size(20.dp))

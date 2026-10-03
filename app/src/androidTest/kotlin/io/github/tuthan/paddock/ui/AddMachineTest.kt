@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
@@ -30,11 +31,14 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.github.tuthan.paddock.hostkey.HostKeyPrompt
 import io.github.tuthan.paddock.hostprofile.AddMachineForm
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
+import io.github.tuthan.paddock.hostprofile.AuthorizeCommand
+import io.github.tuthan.paddock.hostprofile.PairingLink
 import io.github.tuthan.paddock.hostprofile.KeyKind
 import io.github.tuthan.paddock.hostprofile.RouteNote
 import io.github.tuthan.paddock.net.EndpointClass
 import io.github.tuthan.paddock.net.GateDecision
 import io.github.tuthan.paddock.ssh.KeyBacking
+import io.github.tuthan.paddock.ssh.OpenSshKeys
 import io.github.tuthan.paddock.ui.components.FingerprintDialog
 import io.github.tuthan.paddock.ui.screens.AddMachine
 import io.github.tuthan.paddock.ui.screens.AddMachineState
@@ -51,8 +55,16 @@ import org.junit.Test
 class AddMachineTest {
     @get:Rule val rule = createComposeRule()
 
-    private val line = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHt paddock@phone"
-    private class Calls { var importKey = 0; var connect: AddMachineInput? = null; var generate = 0; var copied: String? = null; var settings = 0; var back = 0 }
+    /** A real P-256 line, as the phone's key makes it: the copy command exists only for a line the key parser accepts. */
+    private val line = OpenSshKeys.publicLine(
+        java.security.KeyPairGenerator.getInstance("EC").apply { initialize(java.security.spec.ECGenParameterSpec("secp256r1")) }.generateKeyPair().public as java.security.interfaces.ECPublicKey,
+        "paddock@phone",
+    )
+    private val command = AuthorizeCommand.forText(line)!!
+    private class Calls {
+        var importKey = 0; var connect: AddMachineInput? = null; var generate = 0; var copied: String? = null; var settings = 0; var back = 0
+        var commandCopied: String? = null; var shared: String? = null; var pasted = 0
+    }
 
     private fun state(grant: GateDecision = GateDecision.NotRequired, key: String? = null, backing: KeyBacking? = null, denied: Boolean = false, imported: String? = null, connecting: Boolean = false, summary: String? = null) =
         AddMachineState({ AddMachineForm.route(it, grant) }, key, backing, imported, denied, connecting, importedKeySummary = summary)
@@ -81,21 +93,23 @@ class AddMachineTest {
         rule.waitForIdle()
     }
 
-    private fun show(state: AddMachineState = state(), fontScale: Float? = null, calls: Calls = Calls(), dark: Boolean = true): Calls {
+    private fun show(state: AddMachineState = state(), fontScale: Float? = null, calls: Calls = Calls(), dark: Boolean = true, initial: AddMachineInput = AddMachineInput(), paste: Boolean = false): Calls {
         rule.setContent {
             keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
-                PaddockTheme(darkTheme = dark) { Screen(state, calls) }
+                PaddockTheme(darkTheme = dark) { Screen(state, calls, initial, paste) }
             }
         }
         return calls
     }
 
     @androidx.compose.runtime.Composable
-    private fun Screen(state: AddMachineState, calls: Calls) = AddMachine(
+    private fun Screen(state: AddMachineState, calls: Calls, initial: AddMachineInput = AddMachineInput(), paste: Boolean = false) = AddMachine(
         state, onConnect = { calls.connect = it }, onGenerateKey = { calls.generate++ }, onCopyPublicKey = { calls.copied = it },
         onOpenSettings = { calls.settings++ }, onBack = { calls.back++ }, onImportKey = { calls.importKey++ },
+        onCopyCommand = { calls.commandCopied = it }, onShareCommand = { calls.shared = it }, onPastePairingLink = if (paste) ({ calls.pasted++ }) else null,
+        initial = initial,
     )
 
     private fun fill(host: String = "192.168.1.20", user: String = "jdoe", port: String? = null) {
@@ -140,10 +154,88 @@ class AddMachineTest {
         rule.onNode(hasContentDescription("Public key to authorize: $line")).performScrollTo().assertIsDisplayed()
     }
 
-    @Test fun copyHandsOverTheExactPublicKeyLine() {
+    @Test fun copyKeyOnlyHandsOverTheExactPublicKeyLine() {
         val calls = show(state(key = line, backing = KeyBacking.StrongBox))
-        rule.onNodeWithText("Copy").performScrollTo().performClick()
+        rule.onNodeWithText("Copy key only").performScrollTo().performClick()
         assertEquals(line, calls.copied)
+        assertNull("the bare line is not the command", calls.commandCopied)
+    }
+
+    @Test fun theCommandIsShownInFullBeforeItIsCopiedAndCopyHandsOverExactlyThatText() {
+        val calls = show(state(key = line, backing = KeyBacking.Tee))
+        rule.onNode(hasContentDescription("Command to run on the machine: $command")).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText(command).assertExists()
+        rule.onNodeWithText("Copy").performScrollTo().performClick()
+        assertEquals(command, calls.commandCopied)
+        rule.onNodeWithText("Copied").performScrollTo().assertIsDisplayed()
+        assertNull("copying the command does not copy the bare line", calls.copied)
+        shoot("add-machine-command")
+    }
+
+    @Test fun shareHandsTheSameCommandTextToTheShareSheetAndNothingElse() {
+        val calls = show(state(key = line, backing = KeyBacking.Tee))
+        rule.onNodeWithText("Share").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(command, calls.shared)
+        assertNull(calls.copied); assertNull(calls.commandCopied)
+        assertNull("sharing is not connecting", calls.connect)
+    }
+
+    @Test fun theKeyFingerprintIsShownSoItCanBeComparedWithWhatTheMachinePrints() {
+        show(state(key = line, backing = KeyBacking.Tee))
+        val fp = io.github.tuthan.paddock.ssh.AuthorizedKey.parse(line)!!.fingerprint
+        rule.onNode(hasContentDescription("Key fingerprint: $fp")).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aKeyLineTheParserDoesNotAcceptGetsNoCommandAndNoShare() {
+        val calls = show(state(key = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHt paddock@phone", backing = KeyBacking.Tee))
+        rule.onNodeWithText("Copy key only").performScrollTo().assertIsDisplayed()
+        rule.onAllNodesWithText("Share").assertCountEquals(0)
+        rule.onAllNodesWithText("Copy").assertCountEquals(0)
+        rule.onAllNodes(hasContentDescription("Command to run on the machine", substring = true)).assertCountEquals(0)
+        rule.onNodeWithText("Append it to", substring = true).performScrollTo().assertIsDisplayed()
+        assertNull(calls.shared)
+    }
+
+    // --- a pairing link ---
+
+    private val fpLink = "SHA256:" + "A".repeat(43)
+    private val link = PairingLink("box.example.ts.net", 2222, "jdoe", listOf(fpLink), "dev")
+
+    @Test fun aPairingLinkPreFillsTheMachineAndShowsTheFingerprintItWillCompare() {
+        val calls = show(state(key = line, backing = KeyBacking.Tee), initial = link.toInput())
+        rule.onNodeWithText("box.example.ts.net").assertIsDisplayed()
+        rule.onNodeWithText("jdoe").assertIsDisplayed()
+        rule.onNode(hasContentDescription("Host key fingerprint in the link: $fpLink")).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Filled in from a pairing link", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Connect").performClick()
+        assertEquals(AddMachineInput("box.example.ts.net", "2222", "jdoe", KeyKind.Phone, null, "dev", listOf(fpLink)), calls.connect)
+        shoot("add-machine-pairing")
+    }
+
+    @Test fun changingTheHostOrPortAwayFromTheLinkStopsTheComparisonAndSaysSo() {
+        val calls = show(state(key = line, backing = KeyBacking.Tee), initial = link.toInput())
+        rule.onNodeWithText("Host or IP address").performTextInput("2")   // typed at the start: "2box.example.ts.net", no longer the link's machine
+        rule.onNodeWithText("The host or port no longer match the pairing link", substring = true).assertIsDisplayed()
+        rule.onAllNodesWithText("Filled in from a pairing link", substring = true).assertCountEquals(0)
+        hideKeyboard()
+        rule.onNodeWithText("Connect").performClick()
+        assertEquals("2box.example.ts.net", calls.connect!!.host)
+        assertNull("the link's fingerprints are not carried to another host", calls.connect!!.pairedFingerprints)
+    }
+
+    @Test fun aMachineTypedInCarriesNoLinkAndOffersToPasteOne() {
+        val calls = show(state(key = line, backing = KeyBacking.Tee), paste = true)
+        rule.onNodeWithText("Paste a pairing link").assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.pasted)
+        fill()
+        hideKeyboard()
+        rule.onNodeWithText("Connect").performClick()
+        assertNull(calls.connect!!.pairedFingerprints)
+    }
+
+    @Test fun theWordsOfARefusedPasteAreShownWithoutTheLink() {
+        show(state(key = line).copy(pairingNotice = "That is not a Paddock pairing link. Nothing was filled in."), paste = true)
+        rule.onNodeWithText("That is not a Paddock pairing link", substring = true).assertIsDisplayed()
     }
 
     @Test fun showAsQrDrawsTheCodeAndHideRemovesIt() {
@@ -256,7 +348,7 @@ class AddMachineTest {
     @Test fun everyInteractiveElementIsAtLeastFortyEightDpTall() {
         show(state(key = line, backing = KeyBacking.Tee))
         rule.onNodeWithText("Connect").assertHeightIsAtLeast(48.dp)
-        for (t in listOf("Copy", "Show as QR", "This phone's key", "An imported key")) {
+        for (t in listOf("Copy", "Share", "Copy key only", "Show as QR", "This phone's key", "An imported key")) {
             rule.onNodeWithText(t).performScrollTo().assertHeightIsAtLeast(48.dp)
         }
         rule.onNode(hasContentDescription("Back")).assertHeightIsAtLeast(48.dp)
@@ -359,5 +451,47 @@ class AddMachineTest {
         button("Keep the old key").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         button("Replace with the new key").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         shootDialog("hostkey-changed-200")
+    }
+
+    // --- host-key dialog with a pairing link ---
+
+    private val linked = first.copy(matchesPairingLink = true)
+    private val mismatch = HostKeyPrompt.PairingMismatch(
+        "192.168.1.20:22", "ED25519", "SHA256:OFFEREDOFFEREDOFFEREDOFFEREDOFFEREDOFFEREDO", listOf("SHA256:LINKLINKLINKLINKLINKLINKLINKLINKLINKLINKLIN"), "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
+    )
+
+    @Test fun aFingerprintTheLinkNamedSaysSoButTrustIsStillTheUsersTap() {
+        val c = dialog(linked)
+        rule.onNodeWithText("Same as the fingerprint in the pairing link.").assertIsDisplayed()
+        rule.waitUntil(3_000) { runCatching { button("Cancel").assertIsFocused() }.isSuccess }
+        button("Trust and connect").assertIsNotFocused()
+        assertEquals("nothing is trusted until the tap", 0, c.trust)
+        button("Trust and connect").performClick()
+        assertEquals(1, c.trust)
+        shootDialog("hostkey-first-trust-linked")
+    }
+
+    @Test fun withoutALinkTheDialogDoesNotMentionOne() {
+        dialog(first)
+        rule.onAllNodesWithText("pairing link", substring = true).assertCountEquals(0)
+    }
+
+    @Test fun aKeyTheLinkDoesNotNameShowsBothFingerprintsAndOffersNoWayToTrustIt() {
+        val c = dialog(mismatch)
+        rule.onNodeWithText("192.168.1.20:22 is not the machine in the pairing link").assertIsDisplayed()
+        rule.onNodeWithText(mismatch.presentedFingerprint).assertIsDisplayed()
+        rule.onNodeWithText(mismatch.linkFingerprints.single()).assertIsDisplayed()
+        rule.onAllNodesWithText("Trust and connect").assertCountEquals(0)
+        rule.onAllNodesWithText("Replace with the new key").assertCountEquals(0)
+        rule.waitUntil(3_000) { runCatching { button("Close").assertIsFocused() }.isSuccess }
+        button("Close").assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, c.cancel); assertEquals(0, c.trust)
+        shootDialog("hostkey-pairing-mismatch")
+    }
+
+    @Test fun theMismatchDialogFitsAtTwoHundredPercentFont() {
+        dialog(mismatch, fontScale = 2f)
+        rule.onNodeWithText(mismatch.presentedFingerprint).assertIsDisplayed()
+        button("Close").assertIsDisplayed()
     }
 }

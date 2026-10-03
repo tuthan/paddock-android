@@ -147,4 +147,42 @@ class OperationPresenterTest {
         assertEquals("This agent is no longer in the session, or its pane now holds another terminal. Nothing was re-read.", p.rereadFailure(RereadOutcome.Failed(gone = true, detail = "x")))
         assertEquals("Could not read the agent, so nothing was re-read (relay exited).", p.rereadFailure(RereadOutcome.Failed(gone = false, detail = "relay exited")))
     }
+
+
+    // ---- Phase 08: the phone's Yes and No
+
+    @Test fun anAnswerWrittenIsNeverCalledAReceiptThatClaudeCodeAppliedIt() {
+        val yes = p.line(OperationKind.Allow, OperationResult.Acknowledged(record(OperationKind.Allow, OperationOutcome.Acknowledged), Unit))
+        assertEquals("Yes written 14:03:12 · for the hook to hand to Claude Code, which this does not prove", yes.text)
+        val no = p.line(OperationKind.Deny, OperationResult.Acknowledged(record(OperationKind.Deny, OperationOutcome.Acknowledged), Unit))
+        assertTrue(no.text.startsWith("No written 14:03:12"))
+        assertEquals(ResultTone.Ok, yes.tone)
+    }
+
+    @Test fun theWritersRefusalsAreSaidInTheirOwnWordsAndOfferTheTerminal() {
+        for (code in listOf("request_gone", "request_expired", "request_too_large", "request_mismatch", "request_host_io")) {
+            val line = p.line(OperationKind.Allow, OperationResult.Rejected(record(OperationKind.Allow, OperationOutcome.Rejected, code), code, "x"))
+            assertEquals(io.github.tuthan.paddock.answers.AnswerCodes.sentence(code), line.text, code)
+            assertTrue(line.opensTerminal)
+            assertEquals(ResultTone.Refused, line.tone)
+        }
+        assertTrue("Lost" in p.line(OperationKind.Deny, OperationResult.Rejected(record(OperationKind.Deny, OperationOutcome.Rejected, "request_gone"), "request_gone", "x")).text)
+    }
+
+    @Test fun anAnswerRefusedBeforeAnythingWasSentSaysWhy() {
+        for (why in io.github.tuthan.paddock.answers.NotAnswerable.entries) {
+            val line = p.line(OperationKind.Allow, OperationResult.NotSent(record(OperationKind.Allow, OperationOutcome.NotSent, why.code), why.code, "x"))
+            assertEquals("${why.sentence} Nothing was sent.", line.text, why.code)
+            assertTrue(line.opensTerminal)
+        }
+    }
+
+    @Test fun anUnknownAnswerAndItsJournalLineSpeakOfTheRequestNotOfHerdr() {
+        val u = record(OperationKind.Allow, OperationOutcome.Unknown)
+        assertEquals("Yes sent 14:03:12 · outcome unknown · re-read before sending again", p.unknownText(u))
+        assertEquals("Yes sent 14:03:12, waiting for the host's answer", p.describe(record(OperationKind.Allow, OperationOutcome.Sent)))
+        assertEquals("No refused by the host (request_gone)", p.describe(record(OperationKind.Deny, OperationOutcome.Rejected, "request_gone")))
+        val freed = ReReadReport("term_1", reread, io.github.tuthan.paddock.herdr.AgentStatus.Working, listOf(u.copy(resolvedAt = reread)))
+        assertTrue("Claude Code applied the answer" in p.rereadLines(freed, TextCheck.NotKept).last())
+    }
 }

@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.tuthan.paddock.live.HostPhase
+import io.github.tuthan.paddock.relay.PluginMismatch
+import io.github.tuthan.paddock.relay.PluginNotes
 import io.github.tuthan.paddock.ui.screens.RelayInstall
 import io.github.tuthan.paddock.ui.theme.PaddockTheme
 import java.io.File
@@ -67,6 +69,14 @@ class RelayInstallTest {
     @Test fun aReplacementSaysSoPlainly() {
         show(ask.copy(replacing = true))
         rule.onNodeWithText("A different file is already there", substring = true).assertIsDisplayed()
+    }
+
+    @Test fun aPluginWhoseRelayIsNotThePinSaysSoAndStillOffersTheInstall() {
+        val note = PluginNotes.mismatch(PluginMismatch("0".repeat(64), "0.0.9"))
+        val c = show(ask.copy(pluginNote = note))
+        rule.onNodeWithText("The Paddock herdr plugin", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Install the relay").performClick()
+        assertEquals(1, c.install)
     }
 
     @Test fun whileInstallingBothButtonsAreInertAndTheLabelSaysWhy() {

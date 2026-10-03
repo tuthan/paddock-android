@@ -55,9 +55,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.output.AnsiLine
 import io.github.tuthan.paddock.terminal.KeyEncoder
+import io.github.tuthan.paddock.terminal.ModKey
+import io.github.tuthan.paddock.terminal.Mods
 import io.github.tuthan.paddock.terminal.NamedKey
 import io.github.tuthan.paddock.ui.theme.AnsiPalette
 import io.github.tuthan.paddock.ui.theme.PaddockColors
@@ -189,76 +192,117 @@ fun SegmentedTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, 
     }
 }
 
-/** One key of the strip: what it says, what TalkBack says, and the bytes it sends. */
-private class StripKey(val label: String, val description: String, val bytes: ByteArray)
+/** One key of the strip: what it says, what TalkBack says, and the bytes it sends under the modifiers armed when it is tapped. */
+private class StripKey(val label: String, val description: String, val encode: (Mods) -> ByteArray) {
+    constructor(label: String, description: String, key: NamedKey) : this(label, description, { KeyEncoder.named(key, it) })
+}
 
 private val STRIP_KEYS = listOf(
-    StripKey("Esc", "Escape", KeyEncoder.named(NamedKey.Escape)),
-    StripKey("Enter", "Enter", KeyEncoder.named(NamedKey.Enter)),
-    StripKey("↑", "Up arrow", KeyEncoder.named(NamedKey.Up)),
-    StripKey("↓", "Down arrow", KeyEncoder.named(NamedKey.Down)),
-    StripKey("←", "Left arrow", KeyEncoder.named(NamedKey.Left)),
-    StripKey("→", "Right arrow", KeyEncoder.named(NamedKey.Right)),
-    StripKey("Tab", "Tab", KeyEncoder.named(NamedKey.Tab)),
-    StripKey("Ctrl+C", "Control C", KeyEncoder.interrupt),
+    StripKey("Esc", "Escape", NamedKey.Escape),
+    StripKey("Enter", "Enter", NamedKey.Enter),
+    StripKey("↑", "Up arrow", NamedKey.Up),
+    StripKey("↓", "Down arrow", NamedKey.Down),
+    StripKey("←", "Left arrow", NamedKey.Left),
+    StripKey("→", "Right arrow", NamedKey.Right),
+    StripKey("Tab", "Tab", NamedKey.Tab),
+    // A chord of its own: the armed modifiers do not change it, but it spends them like any other key.
+    StripKey("Ctrl+C", "Control C") { KeyEncoder.interrupt },
 )
 
-/** Keys only the live strip adds after the design's eight: the ones a phone keyboard has no key for. */
+/** Keys only the live strip adds after the design's eight, in its second row: the ones a phone keyboard has no key for. */
 private val MORE_KEYS = listOf(
-    StripKey("Home", "Home", KeyEncoder.named(NamedKey.Home)),
-    StripKey("End", "End", KeyEncoder.named(NamedKey.End)),
-    StripKey("PgUp", "Page up", KeyEncoder.named(NamedKey.PageUp)),
-    StripKey("PgDn", "Page down", KeyEncoder.named(NamedKey.PageDown)),
+    StripKey("Home", "Home", NamedKey.Home),
+    StripKey("End", "End", NamedKey.End),
+    StripKey("PgUp", "Page up", NamedKey.PageUp),
+    StripKey("PgDn", "Page down", NamedKey.PageDown),
+    StripKey("Ins", "Insert", NamedKey.Insert),
+    StripKey("Del", "Delete forward", NamedKey.Delete),
+) + listOf(
+    NamedKey.F1, NamedKey.F2, NamedKey.F3, NamedKey.F4, NamedKey.F5, NamedKey.F6,
+    NamedKey.F7, NamedKey.F8, NamedKey.F9, NamedKey.F10, NamedKey.F11, NamedKey.F12,
+).mapIndexed { i, k -> StripKey("F${i + 1}", "F${i + 1}", k) }
+
+private val MOD_KEYS = listOf(
+    ModKey.Ctrl to ("Ctrl" to "Control"), ModKey.Alt to ("Alt" to "Alt"), ModKey.Shift to ("Shift" to "Shift"),
 )
 
 /**
  * The manual keys, in the design's order with Esc first and in red. Without [onKey] (the Output tab, which only reads) the
  * strip is drawn but inert: nothing here sends input, TalkBack says so, and a caption under the strip says why. With
  * [onKey] and [enabled] (the Terminal tab while this phone controls the terminal) each key is a 48 dp button that hands
- * its bytes to [onKey]; when [enabled] is false the same strip is inert, so observing never sends a key. A live strip also
- * has Home, End, PgUp and PgDn, and, when [ctrlArmed] is given, a sticky Ctrl: tapping it arms it for the next character
- * typed on the Android keyboard (which has no Ctrl of its own), and it is spent on that one character.
+ * its bytes to [onKey]; when [enabled] is false the same strip is inert, so observing never sends a key.
+ *
+ * A live strip has a second row of what a phone keyboard has no key for: Home, End, PgUp, PgDn, Ins, Del and F1 to F12,
+ * and, when [armed] is given, sticky Ctrl, Alt and Shift. Tapping a modifier arms it ([onToggleMod]); the next key spends
+ * it ([onModsSpent]), whether that key is on the strip (encoded with the armed modifiers: Shift+Tab, Ctrl+Right, Alt+Enter)
+ * or typed on the Android keyboard (see [io.github.tuthan.paddock.terminal.SoftInput.encode]).
  */
 @Composable
 fun KeyStrip(
     modifier: Modifier = Modifier, note: String = KEYS_NOTE, onKey: ((ByteArray) -> Unit)? = null, enabled: Boolean = onKey != null,
-    ctrlArmed: Boolean? = null, onToggleCtrl: () -> Unit = {},
+    armed: Mods? = null, onToggleMod: (ModKey) -> Unit = {}, onModsSpent: () -> Unit = {},
+    /** Two 40 dp rows with no note, for the screen the Android keyboard shares. Same keys, same spoken text. */
+    dense: Boolean = false,
 ) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.key)
+    val keyHeight = if (dense) STRIP_DENSE_HEIGHT else PaddockTokens.spacing.touchTarget
+    val gap = if (dense) 4.dp else 6.dp
     val live = onKey != null && enabled
     val group = if (live) Modifier.semantics { contentDescription = "Keys" } else Modifier.semantics(mergeDescendants = true) { disabled(); contentDescription = "Keys, unavailable. $note" }
-    Column(modifier.fillMaxWidth().then(group), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth().then(if (live) Modifier else Modifier.alpha(0.5f)).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            (if (live) STRIP_KEYS + MORE_KEYS else STRIP_KEYS).forEachIndexed { index, key ->
-                if (live && ctrlArmed != null && index == STRIP_KEYS.size) CtrlToggleKey(ctrlArmed, onToggleCtrl, shape)
-                val esc = key.label == "Esc"
-                Box(
-                    Modifier.heightIn(min = PaddockTokens.spacing.touchTarget).widthIn(min = PaddockTokens.spacing.touchTarget).clip(shape).background(c.field)
-                        .border(1.dp, if (esc) c.needsYou.copy(alpha = 0.4f) else c.control(), shape)
-                        .then(if (live) Modifier.clickable(role = Role.Button, onClickLabel = key.description) { onKey!!(key.bytes) }.semantics { contentDescription = key.description } else Modifier)
-                        .padding(horizontal = 10.dp),
-                    contentAlignment = Alignment.Center,
-                ) { Text(key.label, style = PaddockTokens.type.monoFact.copy(fontSize = PaddockTokens.type.chip.fontSize), color = if (esc) c.needsYou else c.title) }
-            }
+    val look = if (live) Modifier else Modifier.alpha(0.5f)
+    val press: (StripKey) -> Unit = { key ->
+        val mods = armed ?: Mods.None
+        onKey!!(key.encode(mods))
+        if (!mods.none) onModsSpent()
+    }
+    Column(modifier.fillMaxWidth().then(group), verticalArrangement = Arrangement.spacedBy(gap)) {
+        StripRow(look, gap) { STRIP_KEYS.forEach { StripKeyButton(it, live, shape, keyHeight, press) } }
+        if (live) StripRow(look, gap) {
+            if (armed != null) MOD_KEYS.forEach { (mod, names) -> ModToggleKey(names.first, names.second, armed.has(mod), shape, keyHeight) { onToggleMod(mod) } }
+            MORE_KEYS.forEach { StripKeyButton(it, live, shape, keyHeight, press) }
         }
-        Text(note, style = PaddockTokens.type.note, color = c.dim)
+        if (!dense) Text(note, style = PaddockTokens.type.note, color = c.dim)
     }
 }
 
-/** The sticky Ctrl of the live strip: on or off, announced as a switch, spent by the next character typed on the keyboard. */
 @Composable
-private fun CtrlToggleKey(armed: Boolean, onToggle: () -> Unit, shape: RoundedCornerShape) {
+private fun StripRow(modifier: Modifier, gap: Dp, content: @Composable () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().then(modifier).horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(gap), verticalAlignment = Alignment.CenterVertically,
+    ) { content() }
+}
+
+@Composable
+private fun StripKeyButton(key: StripKey, live: Boolean, shape: RoundedCornerShape, height: Dp, onPress: (StripKey) -> Unit) {
+    val c = PaddockTokens.colors
+    val esc = key.label == "Esc"
+    Box(
+        Modifier.heightIn(min = height).widthIn(min = PaddockTokens.spacing.touchTarget).clip(shape).background(c.field)
+            .border(1.dp, if (esc) c.needsYou.copy(alpha = 0.4f) else c.control(), shape)
+            .then(if (live) Modifier.clickable(role = Role.Button, onClickLabel = key.description) { onPress(key) }.semantics { contentDescription = key.description } else Modifier)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(key.label, style = PaddockTokens.type.monoFact.copy(fontSize = PaddockTokens.type.chip.fontSize), color = if (esc) c.needsYou else c.title) }
+}
+
+/** A sticky modifier of the live strip: on or off, announced as a switch, spent by the next key, on the strip or on the keyboard. */
+@Composable
+private fun ModToggleKey(label: String, name: String, armed: Boolean, shape: RoundedCornerShape, height: Dp, onToggle: () -> Unit) {
     val c = PaddockTokens.colors
     Box(
-        Modifier.heightIn(min = PaddockTokens.spacing.touchTarget).widthIn(min = PaddockTokens.spacing.touchTarget).clip(shape)
+        Modifier.heightIn(min = height).widthIn(min = PaddockTokens.spacing.touchTarget).clip(shape)
             .background(if (armed) c.accent.copy(alpha = 0.18f) else c.field)
             .border(if (armed) 2.dp else 1.dp, if (armed) c.accent else c.control(), shape)
             .toggleable(value = armed, role = Role.Switch, onValueChange = { onToggle() })
-            .semantics { contentDescription = "Control, for the next character typed"; stateDescription = if (armed) "armed" else "off" }
+            .semantics { contentDescription = "$name, for the next key"; stateDescription = if (armed) "armed" else "off" }
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
-    ) { Text("Ctrl", style = PaddockTokens.type.monoFact.copy(fontSize = PaddockTokens.type.chip.fontSize), color = if (armed) c.accent else c.title) }
+    ) { Text(label, style = PaddockTokens.type.monoFact.copy(fontSize = PaddockTokens.type.chip.fontSize), color = if (armed) c.accent else c.title) }
 }
+
+/** The key height when the Android keyboard shares the screen; Gboard's own keys are about 46 dp. */
+val STRIP_DENSE_HEIGHT = 40.dp
 
 const val KEYS_NOTE = "Read-only for now: Paddock does not send keys or replies to agents yet."

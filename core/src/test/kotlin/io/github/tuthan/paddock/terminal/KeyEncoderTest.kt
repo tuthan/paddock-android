@@ -3,6 +3,7 @@ package io.github.tuthan.paddock.terminal
 import org.junit.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -80,5 +81,23 @@ class KeyEncoderTest {
     @Test fun everyBytePathFitsOneInputRecord() {
         assertTrue(KeyEncoder.named(NamedKey.F12, Mods(true, true, true)).size <= TerminalLimits.INPUT_BYTES)
         assertEquals(8, Mods(true, true, true).param)
+    }
+
+    @Test fun modsToggleOneKeyAtATimeAndReportWhichAreOn() {
+        var m = Mods.None
+        for (k in ModKey.entries) assertFalse(m.has(k))
+        m = m.toggled(ModKey.Alt).toggled(ModKey.Ctrl)
+        assertEquals(Mods(alt = true, ctrl = true), m)
+        assertTrue(m.has(ModKey.Alt) && m.has(ModKey.Ctrl) && !m.has(ModKey.Shift))
+        assertEquals(Mods(ctrl = true), m.toggled(ModKey.Alt))
+        assertEquals(Mods.None, Mods.None.toggled(ModKey.Shift).toggled(ModKey.Shift))
+    }
+
+    @Test fun theStripsOwnKeysUnderEachModifier() {
+        assertEquals("\\e[Z", named(NamedKey.Tab, shift = true))
+        assertEquals("\\e[1;2A", named(NamedKey.Up, shift = true)); assertEquals("\\e[1;3D", named(NamedKey.Left, alt = true))
+        assertEquals("\\e[2~", named(NamedKey.Insert)); assertEquals("\\e[3~", named(NamedKey.Delete)); assertEquals("\\e[3;2~", named(NamedKey.Delete, shift = true))
+        assertEquals("\\eOP", named(NamedKey.F1)); assertEquals("\\e[24~", named(NamedKey.F12)); assertEquals("\\e[24;5~", named(NamedKey.F12, ctrl = true))
+        assertEquals("\\e\\e", named(NamedKey.Escape, alt = true))
     }
 }

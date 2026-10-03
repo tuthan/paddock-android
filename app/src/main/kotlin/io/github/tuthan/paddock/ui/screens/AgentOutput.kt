@@ -4,6 +4,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,9 +21,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.attention.AgeText
+import io.github.tuthan.paddock.answers.DecisionEntryModel
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.output.OutputState
 import io.github.tuthan.paddock.ui.components.Banner
@@ -29,6 +35,7 @@ import io.github.tuthan.paddock.ui.components.Chip
 import io.github.tuthan.paddock.ui.components.KeyStrip
 import io.github.tuthan.paddock.ui.components.Note
 import io.github.tuthan.paddock.ui.components.OutputSlab
+import io.github.tuthan.paddock.ui.components.PaddockIconButton
 import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.ScreenHeader
 import io.github.tuthan.paddock.ui.components.SegmentedTabs
@@ -85,27 +92,42 @@ fun AgentOutput(
     /** Manual input (Esc and Ctrl+C) and what it does; without both the tab keeps the inert key strip and its note. */
     manualInput: ManualInputUi? = null,
     manualActions: ManualInputActions? = null,
+    /** The newest permission request the hook published for this blocked agent (Phase 8); its entry sits above the output and opens the sheet. */
+    decision: DecisionEntryModel? = null,
+    onOpenDecision: (() -> Unit)? = null,
+    /**
+     * The Terminal tab with the Android keyboard up: the title shrinks to one line and the state chip and the tabs go, so the
+     * terminal gets the room (Hide keyboard brings them back). Follows the keyboard itself; a test sets it.
+     */
+    terminalFocus: Boolean = tab == AgentTab.Terminal && terminal != null && WindowInsets.isImeVisible,
 ) {
     val c = PaddockTokens.colors
     val gone = output == OutputState.PaneGone || output == OutputState.AgentGone
+    val focus = terminalFocus && tab == AgentTab.Terminal && !gone
     Column(modifier.fillMaxSize()) {
-        ScreenHeader(header.title, onBack = onBack, subtitle = header.context.ifEmpty { null }, compact = true, backDescription = "Back")
+        if (focus) TerminalFocusBar(header, onBack)
+        else ScreenHeader(header.title, onBack = onBack, subtitle = header.context.ifEmpty { null }, compact = true, backDescription = "Back")
         Column(
-            Modifier.weight(1f).fillMaxWidth().padding(start = PaddockTokens.spacing.gutter, end = PaddockTokens.spacing.gutter, bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.weight(1f).fillMaxWidth().padding(start = PaddockTokens.spacing.gutter, end = PaddockTokens.spacing.gutter, bottom = if (focus) 4.dp else 12.dp),
+            verticalArrangement = Arrangement.spacedBy(if (focus) 6.dp else 10.dp),
         ) {
             if (gone) {
                 Gone(output, onBack)
                 return@Column
             }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
-                StateChip(header, nowMillis)
-                if (tab == AgentTab.Output && output is OutputState.Showing) {
-                    if (following) Chip("Following", icon = PaddockIcons.Eye, description = "Following the newest output")
-                    else Chip("Paused · tap to follow", icon = PaddockIcons.Pause, tone = c.accent, onClick = onResumeFollowing, description = "Output is paused. Tap to follow the newest output")
+            if (!focus) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                    StateChip(header, nowMillis)
+                    if (tab == AgentTab.Output && output is OutputState.Showing) {
+                        if (following) Chip("Following", icon = PaddockIcons.Eye, description = "Following the newest output")
+                        else Chip("Paused · tap to follow", icon = PaddockIcons.Pause, tone = c.accent, onClick = onResumeFollowing, description = "Output is paused. Tap to follow the newest output")
+                    }
                 }
+                SegmentedTabs(AgentTab.entries.map { it.label }, tab.ordinal, { onTab(AgentTab.entries[it]) })
             }
-            SegmentedTabs(AgentTab.entries.map { it.label }, tab.ordinal, { onTab(AgentTab.entries[it]) })
+            if (tab == AgentTab.Output && decision != null && onOpenDecision != null && header.state == StateWord.Blocked) {
+                DecisionEntry(decision, onOpenDecision)
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when (tab) {
                     AgentTab.Terminal -> terminal?.invoke() ?: Text(
@@ -124,6 +146,33 @@ fun AgentOutput(
                     Column(Modifier.heightIn(max = cap).verticalScroll(rememberScrollState())) { ManualInput(manualInput, nowMillis, manualActions) }
                 } else KeyStrip()
             }
+        }
+    }
+}
+
+/**
+ * The agent screen's top while the keyboard shares the Terminal tab: back, the title on one line, and the state as a dot and a
+ * word. The title stays, because it says which terminal the keys go to; the context line, the age of the observation and the tabs
+ * are what Hide keyboard brings back.
+ */
+@Composable
+private fun TerminalFocusBar(header: AgentHeader, onBack: () -> Unit) {
+    val c = PaddockTokens.colors
+    Row(
+        Modifier.fillMaxWidth().padding(start = 4.dp, end = PaddockTokens.spacing.gutter),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        PaddockIconButton(PaddockIcons.Back, "Back", onBack)
+        Text(
+            header.title, style = PaddockTokens.type.rowTitle, color = c.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).semantics { heading() },
+        )
+        Row(
+            Modifier.semantics(mergeDescendants = true) { contentDescription = header.state.word },
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            StateDot(header.state)
+            Text(header.state.word, style = PaddockTokens.type.chip, color = c.dim, maxLines = 1)
         }
     }
 }

@@ -25,8 +25,14 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+/**
+ * A host component refused one request after it was sent: certain, not unknown. [code] names why. [HerdrError] is herdr's refusal
+ * and `DecisionRefused` is the permission-request writer's; an operation settles either as Rejected.
+ */
+open class HostRefusal(val code: String, message: String) : Exception(message)
+
 /** herdr answered with an error. [code] is herdr's (`agent_not_found`, `invalid_request`, …). */
-class HerdrError(val code: String, message: String) : Exception("herdr error $code: $message")
+class HerdrError(code: String, message: String) : HostRefusal(code, "herdr error $code: $message")
 
 /** The relay produced no line: the script is missing, the socket is gone, or the host dropped the stream. */
 class RelayUnavailable(val exit: Int?) : Exception("relay ended without a response (exit ${exit ?: "unknown"})")

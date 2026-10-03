@@ -45,6 +45,22 @@ data class CellMetrics(val cellWidth: Float, val cellHeight: Float, val baseline
     fun rows(viewHeight: Float) = max(1, floor(viewHeight / cellHeight).toInt())
 }
 
+/** [o] held inside the range where the grid still covers the view: never past the top left, never past the bottom right. */
+internal fun clampOffset(o: Offset, cols: Int, rows: Int, cell: CellMetrics, size: IntSize): Offset {
+    val minX = min(0f, size.width - cols * cell.cellWidth)
+    val minY = min(0f, size.height - rows * cell.cellHeight)
+    return Offset(o.x.coerceIn(minX, 0f), o.y.coerceIn(minY, 0f))
+}
+
+/** The least movement of the grid that brings the cursor's cell ([row], [col]) into the view; [current] when it is already in. */
+internal fun followCursorOffset(current: Offset, row: Int, col: Int, cols: Int, rows: Int, cell: CellMetrics, view: IntSize): Offset {
+    val top = row * cell.cellHeight; val left = col * cell.cellWidth
+    var y = current.y; var x = current.x
+    if (y + top < 0f) y = -top else if (y + top + cell.cellHeight > view.height) y = view.height - top - cell.cellHeight
+    if (x + left < 0f) x = -left else if (x + left + cell.cellWidth > view.width) x = view.width - left - cell.cellWidth
+    return clampOffset(Offset(x, y), cols, rows, cell, view)
+}
+
 /** Text sizes the pinch can reach, in sp. Below the smallest a cell is too small to read; above the largest it is a few characters wide. */
 object TerminalText {
     const val MIN_SP = 6f
@@ -81,6 +97,10 @@ private class Gesture(var sp: Float) {
     var rows = 0
     var cell = CellMetrics(1f, 1f, 1f)
     var view = IntSize.Zero
+    /** The finger moved the grid, so it stays where it was left until the cursor is asked for again (a key, the keyboard, a double tap). */
+    var panned = false
+    var viewHeight = 0
+    var refollowSeen = 0
 }
 
 /** The faces and paints for one text size; made once per size, never per frame. */
@@ -123,6 +143,13 @@ fun TerminalCanvas(
     /** Which frame [grid] is and when its line arrived (`System.nanoTime()`), for [TerminalTiming]. */
     frame: Long = 0,
     arrivedNanos: Long = 0,
+    /**
+     * Keep the cursor's cell in view: a terminal larger than the view (79 rows on a phone with the keyboard up) shows the top rows
+     * and the person types where the cursor is, at the bottom. Moving the grid by hand stops it until [refollow] changes (a key was
+     * sent), the view's height changes (the keyboard came or went) or the text size is reset.
+     */
+    followCursor: Boolean = false,
+    refollow: Int = 0,
 ) {
     val colors = PaddockTokens.colors
     val density = LocalDensity.current
@@ -132,11 +159,7 @@ fun TerminalCanvas(
     var offset by remember { mutableStateOf(Offset.Zero) }
     val m = pens.metrics
 
-    fun clamp(o: Offset, cols: Int, rows: Int, cell: CellMetrics, size: IntSize): Offset {
-        val minX = min(0f, size.width - cols * cell.cellWidth)
-        val minY = min(0f, size.height - rows * cell.cellHeight)
-        return Offset(o.x.coerceIn(minX, 0f), o.y.coerceIn(minY, 0f))
-    }
+    fun clamp(o: Offset, cols: Int, rows: Int, cell: CellMetrics, size: IntSize) = clampOffset(o, cols, rows, cell, size)
 
     val cols = grid?.cols ?: 0
     val rows = grid?.rows ?: 0
@@ -153,6 +176,14 @@ fun TerminalCanvas(
             onViewSize(view.width.toFloat())
             onViewportCells(m.cols(view.width.toFloat()), m.rows(view.height.toFloat()))
         }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(followCursor, refollow, view, m, cursor?.row, cursor?.col, cols, rows) {
+        if (!followCursor || cursor == null || view.width <= 0 || view.height <= 0) return@LaunchedEffect
+        if (g.refollowSeen != refollow || g.viewHeight != view.height) { g.refollowSeen = refollow; g.viewHeight = view.height; g.panned = false }
+        if (g.panned) return@LaunchedEffect
+        val next = followCursorOffset(g.offset, cursor.row, cursor.col, cols, rows, m, view)
+        if (next != g.offset) { g.offset = next; offset = next }
     }
 
     fun zoomTo(newSp: Float, around: Offset) {
@@ -173,11 +204,12 @@ fun TerminalCanvas(
             .pointerInput(Unit) {
                 detectTransformGestures { centroid, pan, zoom, _ ->
                     if (zoom != 1f) zoomTo(g.sp * zoom, centroid)
+                    if (pan != Offset.Zero) g.panned = true
                     g.offset = clamp(g.offset + pan, g.cols, g.rows, g.cell, g.view)
                     offset = g.offset
                 }
             }
-            .pointerInput(Unit) { detectTapGestures(onDoubleTap = { g.offset = Offset.Zero; offset = Offset.Zero; onResetTextSize() }) }
+            .pointerInput(Unit) { detectTapGestures(onDoubleTap = { g.offset = Offset.Zero; offset = Offset.Zero; g.panned = false; onResetTextSize() }) }
             .semantics {
                 contentDescription = description
                 stateDescription = "Text size ${textSizeSp.roundToInt()}"

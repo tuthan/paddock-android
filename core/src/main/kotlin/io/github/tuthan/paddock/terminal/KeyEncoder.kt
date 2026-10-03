@@ -6,11 +6,17 @@ enum class NamedKey {
     F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
 }
 
+/** The three modifier keys the key strip arms. */
+enum class ModKey { Shift, Alt, Ctrl }
+
 /** Modifiers held with a key. */
 data class Mods(val shift: Boolean = false, val alt: Boolean = false, val ctrl: Boolean = false) {
     val none: Boolean get() = !shift && !alt && !ctrl
     /** xterm's modifier parameter: 1 plus shift 1, alt 2, ctrl 4. */
     val param: Int get() = 1 + (if (shift) 1 else 0) + (if (alt) 2 else 0) + (if (ctrl) 4 else 0)
+    fun has(key: ModKey): Boolean = when (key) { ModKey.Shift -> shift; ModKey.Alt -> alt; ModKey.Ctrl -> ctrl }
+    /** These modifiers with [key] switched on if it was off, off if it was on. */
+    fun toggled(key: ModKey): Mods = when (key) { ModKey.Shift -> copy(shift = !shift); ModKey.Alt -> copy(alt = !alt); ModKey.Ctrl -> copy(ctrl = !ctrl) }
     companion object { val None = Mods() }
 }
 

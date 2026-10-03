@@ -32,9 +32,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.hostprofile.AddMachineForm
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
+import io.github.tuthan.paddock.hostprofile.AuthorizeCommand
+import io.github.tuthan.paddock.hostprofile.PairingCopy
 import io.github.tuthan.paddock.hostprofile.KeyKind
 import io.github.tuthan.paddock.hostprofile.RouteNote
 import io.github.tuthan.paddock.qr.QrCode
+import io.github.tuthan.paddock.ssh.AuthorizedKey
 import io.github.tuthan.paddock.ssh.KeyBacking
 import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.ButtonKind
@@ -69,6 +72,8 @@ data class AddMachineState(
     val importedKeySummary: String? = null,
     /** The route hint from where the host resolves, asked once typing settles; null keeps the text-only hint. */
     val resolveRoute: (suspend (String) -> RouteNote)? = null,
+    /** Why the pasted text could not be used as a pairing link, or null. Never the text itself. */
+    val pairingNotice: String? = null,
 )
 
 /** Where the phone's key is held, in words. Shown after generation, from what the platform reported, never assumed. */
@@ -94,6 +99,12 @@ fun AddMachine(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onImportKey: () -> Unit = {},
+    /** Copies the whole command that authorizes this phone (see [AuthorizeCommand]); the bare key line goes through [onCopyPublicKey]. */
+    onCopyCommand: (String) -> Unit = {},
+    /** Offers the same command text to the Android share sheet, and nothing else. */
+    onShareCommand: (String) -> Unit = {},
+    /** Reads a pairing link from the clipboard; null hides the button. */
+    onPastePairingLink: (() -> Unit)? = null,
     initial: AddMachineInput = AddMachineInput(),
     title: String = "Add a machine",
     intro: String = ADD_MACHINE_INTRO,
@@ -106,7 +117,10 @@ fun AddMachine(
     var key by rememberSaveable { mutableStateOf(initial.key) }
     var showErrors by rememberSaveable { mutableStateOf(false) }
     var showQr by rememberSaveable { mutableStateOf(false) }
-    val input = AddMachineInput(host, port, user, key, if (key == KeyKind.Imported) state.importedKeyId else null, session)
+    // A pairing link's fingerprints apply to the host and port the link named; once either is changed they are not compared.
+    val linked = initial.pairedFingerprints
+    val linkApplies = linked != null && host.trim() == initial.host && port.trim() == initial.port
+    val input = AddMachineInput(host, port, user, key, if (key == KeyKind.Imported) state.importedKeyId else null, session, if (linkApplies) linked else null)
     val errors = AddMachineForm.errors(input)
     val typed = state.route(host)
     // The text-only hint shows while typing; the resolved one replaces it once the host has been still for a moment.
@@ -127,6 +141,15 @@ fun AddMachine(
         ScreenHeader(title, onBack = onBack)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = PaddockTokens.spacing.gutter).padding(top = 8.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(intro, style = PaddockTokens.type.body, color = c.dim)
+            if (linked != null) {
+                if (linkApplies) {
+                    Note(PairingCopy.FILLED_IN, icon = PaddockIcons.Key)
+                    Fact(if (linked.size == 1) "Host key fingerprint in the link" else "Host key fingerprints in the link", linked.joinToString("\n"))
+                } else Note(PairingCopy.FIELDS_CHANGED, icon = PaddockIcons.Warning)
+            } else if (onPastePairingLink != null) {
+                PaddockButton("Paste a pairing link", onPastePairingLink, kind = ButtonKind.Ghost, icon = PaddockIcons.Copy)
+            }
+            if (state.pairingNotice != null) Banner(state.pairingNotice)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Field("Host or IP address", host, { host = it }, error = if (showErrors) errors.host else null, keyboardType = KeyboardType.Uri, placeholder = "192.168.1.20 or box.example.ts.net", mono = true)
                 RouteHint(route, state.permissionDenied, onOpenSettings)
@@ -149,7 +172,7 @@ fun AddMachine(
                 if (state.importedKeyId != null) "Your own key, stored encrypted on this phone." else "Your own private key, stored encrypted on this phone. None imported yet.",
                 key == KeyKind.Imported, { key = KeyKind.Imported },
             )
-            if (key == KeyKind.Phone) PhoneKeySection(state, showQr, { showQr = it }, onGenerateKey, onCopyPublicKey)
+            if (key == KeyKind.Phone) PhoneKeySection(state, showQr, { showQr = it }, onGenerateKey, onCopyPublicKey, onCopyCommand, onShareCommand)
             if (key == KeyKind.Imported) ImportedKeySection(state, onImportKey)
             if (key == KeyKind.Imported && state.importedKeyId == null && showErrors) Banner("Import a key before connecting, or use this phone's key.")
             if (key == KeyKind.Phone && state.publicKeyLine == null && showErrors) Banner("Create this phone's key first, then authorize it on the machine and press Connect.")
@@ -202,25 +225,41 @@ private fun ImportedKeySection(state: AddMachineState, onImport: () -> Unit) {
 }
 
 @Composable
-private fun PhoneKeySection(state: AddMachineState, showQr: Boolean, onShowQr: (Boolean) -> Unit, onGenerate: () -> Unit, onCopy: (String) -> Unit) {
+private fun PhoneKeySection(
+    state: AddMachineState, showQr: Boolean, onShowQr: (Boolean) -> Unit, onGenerate: () -> Unit, onCopy: (String) -> Unit,
+    onCopyCommand: (String) -> Unit, onShareCommand: (String) -> Unit,
+) {
     val c = PaddockTokens.colors
     val line = state.publicKeyLine
     if (line == null) {
         PaddockButton("Create this phone's key", onGenerate, kind = ButtonKind.Secondary, icon = PaddockIcons.Key)
         return
     }
+    // A command exists only for a line the key parser accepts; for anything else the bare line is all there is.
+    val key = remember(line) { AuthorizedKey.parse(line) }
+    val command = remember(key) { key?.let(AuthorizeCommand::forKey) }
+    var copied by remember(line) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (state.keyBacking != null) Text(backingText(state.keyBacking), style = PaddockTokens.type.secondary, color = c.dim)
+        if (command != null) {
+            Fact("Command to run on the machine", command)
+            ButtonPair(
+                { m -> PaddockButton(if (copied) "Copied" else "Copy", { onCopyCommand(command); copied = true }, m, kind = ButtonKind.Secondary, small = true, icon = PaddockIcons.Copy) },
+                { m -> PaddockButton("Share", { onShareCommand(command) }, m, kind = ButtonKind.Secondary, small = true, icon = PaddockIcons.Send) },
+            )
+            Note(withMono("Run it once, in a shell you already trust on the machine. It creates ~/.ssh if needed and adds this key to ~/.ssh/authorized_keys unless it is already there.", "~/.ssh/authorized_keys", "~/.ssh"))
+            if (key != null) Fact("Key fingerprint", key.fingerprint)
+        }
         Fact("Public key to authorize", line)
         ButtonPair(
-            { m -> PaddockButton("Copy", { onCopy(line) }, m, kind = ButtonKind.Secondary, small = true, icon = PaddockIcons.Copy) },
+            { m -> PaddockButton("Copy key only", { onCopy(line) }, m, kind = ButtonKind.Ghost, small = true, icon = PaddockIcons.Copy) },
             { m -> PaddockButton(if (showQr) "Hide QR" else "Show as QR", { onShowQr(!showQr) }, m, kind = ButtonKind.Ghost, small = true, icon = PaddockIcons.Qr) },
         )
-        Note(withMono("Append it to ~/.ssh/authorized_keys on the machine, from a shell you already trust.", "~/.ssh/authorized_keys"))
+        if (command == null) Note(withMono("Append it to ~/.ssh/authorized_keys on the machine, from a shell you already trust.", "~/.ssh/authorized_keys"))
         if (showQr) {
             val qr = remember(line) { runCatching { QrCode.encodeText(line) }.getOrNull() }
             if (qr != null) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { QrView(qr, "QR code of this phone's public key") }
-            else Text("This key is too long for a QR code. Use Copy.", style = PaddockTokens.type.secondary, color = c.dim)
+            else Text("This key is too long for a QR code. Use Copy key only.", style = PaddockTokens.type.secondary, color = c.dim)
         }
     }
 }

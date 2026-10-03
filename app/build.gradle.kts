@@ -61,19 +61,20 @@ kotlin {
 // The host scripts the app offers to install are the ones pinned in host/SOURCE.json. The build copies each script into
 // assets and writes its pinned hash beside it; the app refuses to use a script whose hash is not that pin.
 abstract class GenerateRelayAssets : DefaultTask() {
-    @get:InputFile abstract val relay: RegularFileProperty
-    @get:InputFile abstract val control: RegularFileProperty
+    @get:InputFiles abstract val scripts: ConfigurableFileCollection
     @get:InputFile abstract val source: RegularFileProperty
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @TaskAction fun generate() {
         val manifest = source.get().asFile.readText()
         val out = outputDir.get().asFile.apply { deleteRecursively(); mkdirs() }
-        for ((script, file) in listOf("paddock-relay" to relay, "paddock-control" to control)) {
-            val pin = Regex("\"host/$script.py\"\\s*:\\s*\"sha256:([0-9a-f]{64})\"").find(manifest)
-                ?.groupValues?.get(1) ?: throw GradleException("host/SOURCE.json has no sha256 pin for host/$script.py")
-            file.get().asFile.copyTo(File(out, "$script.py"))
-            File(out, "$script.sha256").writeText(pin)
+        for (file in scripts.files.sortedBy { it.name }) {
+            val name = file.name
+            val pin = Regex("\"host/${Regex.escape(name)}\"\\s*:\\s*\"sha256:([0-9a-f]{64})\"").find(manifest)
+                ?.groupValues?.get(1) ?: throw GradleException("host/SOURCE.json has no sha256 pin for host/$name")
+            file.copyTo(File(out, name))
+            // The first two scripts keep their original pin names (paddock-relay.sha256); every later file's pin is its full name plus .sha256.
+            File(out, if (name == "paddock-relay.py" || name == "paddock-control.py") name.removeSuffix(".py") + ".sha256" else "$name.sha256").writeText(pin)
         }
     }
 }
@@ -81,8 +82,10 @@ abstract class GenerateRelayAssets : DefaultTask() {
 androidComponents {
     onVariants { variant ->
         val task = tasks.register<GenerateRelayAssets>("generate${variant.name.replaceFirstChar { it.uppercase() }}RelayAssets") {
-            relay.set(rootProject.layout.projectDirectory.file("host/paddock-relay.py"))
-            control.set(rootProject.layout.projectDirectory.file("host/paddock-control.py"))
+            scripts.from(
+                listOf("paddock-relay.py", "paddock-control.py", "paddock-alert-relay.py", "paddock-alert-relay.service", "alert-relay.example.toml", "paddock-decide.py", "paddock-claude-permission-hook.py")
+                    .map { rootProject.layout.projectDirectory.file("host/$it") },
+            )
             source.set(rootProject.layout.projectDirectory.file("host/SOURCE.json"))
         }
         variant.sources.assets?.addGeneratedSourceDirectory(task, GenerateRelayAssets::outputDir)

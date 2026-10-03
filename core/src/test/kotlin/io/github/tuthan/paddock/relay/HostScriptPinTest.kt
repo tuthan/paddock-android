@@ -23,7 +23,7 @@ class HostScriptPinTest {
 
     @Test fun everyScriptInHostIsPinnedAndNothingElseIs() {
         val scripts = host.listFiles { f -> f.isFile && f.name != "SOURCE.json" }!!.map { it.name }.sorted()
-        assertEquals(listOf("paddock-control.py", "paddock-relay.py"), scripts)
+        assertEquals(listOf("alert-relay.example.toml", "paddock-alert-relay.py", "paddock-alert-relay.service", "paddock-claude-permission-hook.py", "paddock-control.py", "paddock-decide.py", "paddock-relay.py"), scripts)
         for (name in scripts) assertEquals(pinOf(name), sha256Hex(host.resolve(name).readBytes()), "$name differs from its pin in host/SOURCE.json")
         assertEquals(scripts.size, Regex("\"host/[^\"]+\"\\s*:").findAll(source).count(), "a pin for a file that is not there")
     }
@@ -37,11 +37,59 @@ class HostScriptPinTest {
         assertEquals(1, Regex("subprocess\\.Popen\\(").findAll(text).count(), "the script starts exactly one process")
     }
 
+    @Test fun theAlertRelayUsesTheStandardLibraryAsksHerdrForTwoThingsAndRunsNoShell() {
+        val text = host.resolve("paddock-alert-relay.py").readText()
+        val modules = text.lines().mapNotNull { Regex("^\\s*(?:import|from)\\s+([a-zA-Z_.]+)").find(it)?.groupValues?.get(1) }.toSet()
+        val stdlib = setOf("asyncio", "json", "os", "random", "re", "secrets", "signal", "socket", "stat", "sys", "time", "tomllib", "urllib.error", "urllib.parse", "urllib.request", "collections", "dataclasses")
+        assertEquals(emptySet(), modules - stdlib, "the alert relay imports only the standard library")
+        for (banned in listOf("shell=True", "os.system", "eval(", "exec(", "os.popen", "subprocess", "pickle", "marshal")) assertFalse(banned in text, "$banned in paddock-alert-relay.py")
+        // It never reads pane text: the only requests it makes are a snapshot and the two kinds of subscription.
+        assertEquals(setOf("session.snapshot", "events.subscribe"), Regex("_request\\(\"([a-z._]+)\"").findAll(text).map { it.groupValues[1] }.toSet())
+        for (banned in listOf("pane.read", "agent.read", "agent.get", "pane.get", "send_keys", "agent.prompt", "\"terminal.")) assertFalse(banned in text, "$banned in paddock-alert-relay.py")
+        assertTrue(text.startsWith("#!/usr/bin/env python3"))
+        val version = Regex("\"alert_relay_version\"\\s*:\\s*(\\d+)").find(source)!!.groupValues[1]
+        assertEquals(version, Regex("(?m)^VERSION = (\\d+)$").find(text)!!.groupValues[1], "the script's VERSION and host/SOURCE.json disagree")
+    }
+
+    /** The script without its module docstring, which says in words what the code must never do. */
+    private fun codeOf(text: String) = text.substringAfter("\"\"\"").substringAfter("\"\"\"")
+
+    private fun modulesOf(text: String) = text.lines().mapNotNull { Regex("^\\s*(?:import|from)\\s+([a-zA-Z_.]+)").find(it)?.groupValues?.get(1) }.toSet()
+
+    @Test fun thePermissionHookUsesTheStandardLibraryOnlyAsksHerdrForOneStatusAndRunsNoShellNorHerdrBinary() {
+        val text = codeOf(host.resolve("paddock-claude-permission-hook.py").readText())
+        val stdlib = setOf("json", "os", "sys", "time", "re", "socket", "signal", "stat", "tomllib")
+        assertEquals(emptySet(), modulesOf(text) - stdlib, "the hook imports only the standard library")
+        for (banned in listOf("shell=True", "os.system", "eval(", "exec(", "os.popen", "subprocess", "pickle", "marshal", "urllib", "http")) assertFalse(banned in text, "$banned in the hook")
+        // The only thing it asks herdr is one agent's status; it never reports a state, reads pane text or sends a key.
+        assertEquals(setOf("agent.get"), Regex("\"method\": \"([a-z._]+)\"").findAll(text).map { it.groupValues[1] }.toSet())
+        for (banned in listOf("pane.read", "agent.read", "send_keys", "agent.prompt", "report_agent", "report-agent", "\"terminal.", "updatedInput", "updatedPermissions")) assertFalse(banned in text, "$banned in the hook")
+        assertTrue(host.resolve("paddock-claude-permission-hook.py").readText().startsWith("#!/usr/bin/env python3"))
+        assertTrue("os._exit(0)" in text && "sys.exit(2)" !in text, "it never ends with Claude Code's blocking status")
+        val version = Regex("\"permission_hook_version\"\\s*:\\s*(\\d+)").find(source)!!.groupValues[1]
+        assertEquals(version, Regex("(?m)^VERSION = (\\d+)$").find(text)!!.groupValues[1], "the script's VERSION and host/SOURCE.json disagree")
+    }
+
+    @Test fun theDecisionWriterUsesTheStandardLibraryOnlyAndTouchesNothingButRequestFiles() {
+        val text = codeOf(host.resolve("paddock-decide.py").readText())
+        val stdlib = setOf("json", "os", "re", "stat", "sys", "time")
+        assertEquals(emptySet(), modulesOf(text) - stdlib, "the writer imports only the standard library")
+        for (banned in listOf("shell=True", "os.system", "eval(", "exec(", "os.popen", "subprocess", "socket", "pickle", "marshal", "urllib", "send_keys")) assertFalse(banned in text, "$banned in paddock-decide.py")
+        assertTrue(host.resolve("paddock-decide.py").readText().startsWith("#!/usr/bin/env python3"))
+        val version = Regex("\"decide_version\"\\s*:\\s*(\\d+)").find(source)!!.groupValues[1]
+        assertEquals(version, Regex("(?m)^VERSION = (\\d+)$").find(text)!!.groupValues[1], "the script's VERSION and host/SOURCE.json disagree")
+        // The hook and the writer agree on the file layout: the same name pattern, the same states.
+        val hook = codeOf(host.resolve("paddock-claude-permission-hook.py").readText())
+        for (state in listOf("pending", "claimed", "decision", "consumed", "expired")) { assertTrue(state in text && state in hook, state) }
+        val namePattern = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+        assertTrue(namePattern in text && namePattern in hook)
+    }
+
     @Test fun theInstallerRefusesAScriptThatIsNotItsPin() {
         val pin = pinOf("paddock-control.py")!!
         RelayInstaller(FakeSession(), control, pin, fileName = "paddock-control.py")
         assertFailsWith<IllegalArgumentException> { RelayInstaller(FakeSession(), control + "#".toByteArray(), pin, fileName = "paddock-control.py") }
-        for (bad in listOf("../x.py", "paddock-control.sh", "paddock-.py", "other.py", "paddock-control.py ", "paddock-Control.py"))
+        for (bad in listOf("../x.py", "paddock-control.sh", "paddock-.py", "paddock--x.py", "paddock-x-.py", "other.py", "paddock-control.py ", "paddock-Control.py"))
             assertFailsWith<IllegalArgumentException>(bad) { RelayInstaller(FakeSession(), control, pin, fileName = bad) }
     }
 

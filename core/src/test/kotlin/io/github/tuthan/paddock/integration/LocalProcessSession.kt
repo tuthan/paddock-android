@@ -34,6 +34,8 @@ class LocalProcessSession(private val env: Map<String, String> = emptyMap()) : S
     override val link: StateFlow<LinkState> = MutableStateFlow(LinkState.Up(0))
 
     override suspend fun exec(argv: List<String>, stdin: ByteArray?, limits: ExecLimits): ExecResult = withContext(Dispatchers.IO) {
+        // The real session sends one quoted command line, which refuses an argument no login shell would read the same way; so does this one.
+        io.github.tuthan.paddock.cli.argvToCommand(argv)
         commands += argv
         val started = System.nanoTime()
         val p = builder(argv).start()
@@ -46,6 +48,7 @@ class LocalProcessSession(private val env: Map<String, String> = emptyMap()) : S
     }
 
     override suspend fun openStream(argv: List<String>): StreamChannel {
+        io.github.tuthan.paddock.cli.argvToCommand(argv)
         commands += argv
         val p = builder(argv).start()
         streams += argv to p

@@ -14,6 +14,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -59,6 +60,7 @@ class AgentOutputTest {
     private fun show(
         output: OutputState, following: Boolean = true, tab: AgentTab = AgentTab.Output, dark: Boolean = true,
         fontScale: Float? = null, header: AgentHeader = this.header, calls: Calls = Calls(), terminal: (@androidx.compose.runtime.Composable () -> Unit)? = null,
+    terminalFocus: Boolean = false,
     ): Calls {
         rule.setContent {
             val base = LocalDensity.current
@@ -67,7 +69,7 @@ class AgentOutputTest {
                     AgentOutput(
                         header, output, following, now, tab,
                         onTab = { calls.tab = it }, onBack = { calls.back++ }, onUserScrolledUp = { calls.up++ }, onResumeFollowing = { calls.resume++ },
-                        terminal = terminal,
+                        terminal = terminal, terminalFocus = terminalFocus,
                     )
                 }
             }
@@ -159,6 +161,39 @@ class AgentOutputTest {
         show(showing(), tab = AgentTab.Terminal, terminal = { androidx.compose.material3.Text("terminal slot content") })
         rule.onNodeWithText("terminal slot content").assertIsDisplayed()
         rule.onNode(hasContentDescription("Keys, unavailable.", substring = true)).assertDoesNotExist()
+    }
+
+    @Test fun withTheKeyboardUpTheTerminalTabKeepsOnlyOneLineOfTitleAndTheStateAndGivesTheRestToTheTerminal() {
+        val long = header.copy(title = "Approve scoped TLS adapter review | blindpass with a title that is much too long for one line on a phone screen")
+        val calls = show(showing(), tab = AgentTab.Terminal, header = long, terminal = { androidx.compose.material3.Text("terminal slot content") }, terminalFocus = true)
+        rule.onNodeWithText("terminal slot content").assertIsDisplayed()
+        rule.onNodeWithText("Output").assertDoesNotExist()
+        rule.onNodeWithText("api · claude").assertDoesNotExist()
+        rule.onNode(hasContentDescription("Blocked, observed", substring = true)).assertDoesNotExist()
+        val bar = rule.onNodeWithText(long.title, substring = true).fetchSemanticsNode()
+        assertTrue("the title is one line (${bar.size.height} px)", bar.size.height < 2 * with(rule.density) { 22.dp.toPx() })
+        rule.onNode(hasContentDescription("Blocked")).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Back").assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, calls.back)
+    }
+
+    @Test fun theFocusLayoutIsOnlyForTheTerminalTab() {
+        show(showing(), tab = AgentTab.Output, terminalFocus = true)
+        rule.onNodeWithText("Terminal").assertIsDisplayed() // the tabs are still there on Output
+        rule.onNodeWithText("api · claude").assertIsDisplayed()
+    }
+
+    @Test fun anAgentThatIsGoneKeepsItsFullHeaderEvenWithTheKeyboardUp() {
+        show(OutputState.PaneGone, tab = AgentTab.Terminal, terminalFocus = true)
+        rule.onNodeWithText("This terminal is no longer in the session.").assertIsDisplayed()
+        rule.onNodeWithText("api · claude").assertIsDisplayed()
+    }
+
+    @Test fun withoutTheKeyboardTheTabsAndTheStateChipAreBack() {
+        show(showing(), tab = AgentTab.Terminal, terminal = { androidx.compose.material3.Text("terminal slot content") }, terminalFocus = false)
+        rule.onNodeWithText("Output").assertIsDisplayed()
+        rule.onNodeWithText("Terminal").assertIsDisplayed()
+        rule.onNodeWithText("api · claude").assertIsDisplayed()
     }
 
     @Test fun withoutATerminalTheTabSaysSo() {

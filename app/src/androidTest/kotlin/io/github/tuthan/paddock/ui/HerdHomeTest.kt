@@ -116,8 +116,8 @@ class HerdHomeTest {
 
     @Test fun rowsReadStateThenTitleThenContextAndAge() {
         show(live(busy))
-        byDesc("Blocked, approve edit to build.gradle, api, observed 40 s ago").assertIsDisplayed().assertHasClickAction()
-        byDesc("Ready, claude · w1:p4, proj, observed 40 s ago").assertIsDisplayed()
+        byDesc("Blocked, claude, approve edit to build.gradle, api, observed 40 s ago").assertIsDisplayed().assertHasClickAction()
+        byDesc("Ready, claude, claude · w1:p4, proj, observed 40 s ago").assertIsDisplayed()
     }
 
     @Test fun everyRowMeetsTheMinimumTouchTarget() {
@@ -133,7 +133,7 @@ class HerdHomeTest {
     @Test fun tappingARowOpensThatAgent() {
         var opened: String? = null
         show(live(busy), onOpen = { opened = it })
-        byDesc("Blocked, approve edit to build.gradle, api, observed 40 s ago").performClick()
+        byDesc("Blocked, claude, approve edit to build.gradle, api, observed 40 s ago").performClick()
         assertEquals("w1:p2", opened)
     }
 
@@ -142,7 +142,7 @@ class HerdHomeTest {
         rule.onNodeWithText(notAnswering).assertIsDisplayed()
         rule.onNodeWithText("Retry").assertHasClickAction().assertHeightIsAtLeast(48.dp)
         val asOf = io.github.tuthan.paddock.ui.screens.clockLabel(now - 125_000)
-        byDesc("Last seen blocked, approve edit to build.gradle, api, observed 40 s ago").assertHasNoClickAction()
+        byDesc("Last seen blocked, claude, approve edit to build.gradle, api, observed 40 s ago").assertHasNoClickAction()
         rule.onNodeWithText("was blocked", substring = true).assertExists()
         rule.onNode(hasContentDescription("laptop, not live, as of $asOf")).assertIsDisplayed()
         rule.onNodeWithText("LAPTOP · AS OF $asOf").assertExists()
@@ -162,13 +162,13 @@ class HerdHomeTest {
         )
         show(live(m))
         byDesc("2 agents ready — docs, web").assertIsDisplayed().assertHasClickAction().performClick()
-        byDesc("Ready, notes, docs, observed 40 s ago").assertIsDisplayed()
-        byDesc("Ready, cleanup, web, observed 40 s ago").assertIsDisplayed()
+        byDesc("Ready, claude, notes, docs, observed 40 s ago").assertIsDisplayed()
+        byDesc("Ready, claude, cleanup, web, observed 40 s ago").assertIsDisplayed()
     }
 
     @Test fun whenTheHerdIsQuietReadyAgentsAreListedNotFolded() {
         show(live(home(agent("w1:p2", AgentStatus.Idle, 2, "notes", "/home/u/docs"), agent("w1:p3", AgentStatus.Idle, 1, "cleanup", "/home/u/web"))))
-        byDesc("Ready, notes, docs, observed 40 s ago").assertIsDisplayed()
+        byDesc("Ready, claude, notes, docs, observed 40 s ago").assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithContentDescription("agents ready", substring = true).fetchSemanticsNodes().size)
     }
 
@@ -198,7 +198,7 @@ class HerdHomeTest {
 
     @Test fun unknownStateIsAWordWithAnOutlineNotJustAColour() {
         show(live(home(agent("w1:p1", AgentStatus.Unknown, 0, "mystery"))))
-        byDesc("Unknown, mystery, proj, observed 40 s ago").assertIsDisplayed()
+        byDesc("Unknown, claude, mystery, proj, observed 40 s ago").assertIsDisplayed()
     }
 
     @Test fun anOversizedTitleIsBoundedAndDoesNotPushTheRowOffScreen() {
@@ -215,7 +215,7 @@ class HerdHomeTest {
         show(live(busy), fontScale = 2f)
         byDesc(busySummary).assertIsDisplayed()
         val root = rule.onRoot().getUnclippedBoundsInRoot()
-        val row = byDesc("Blocked, approve edit to build.gradle, api, observed 40 s ago").getUnclippedBoundsInRoot()
+        val row = byDesc("Blocked, claude, approve edit to build.gradle, api, observed 40 s ago").getUnclippedBoundsInRoot()
         assertTrue(row.left >= root.left && row.right <= root.right + 0.5.dp)
         shoot("home-busy-dark-200")
     }
@@ -242,7 +242,7 @@ class HerdHomeTest {
     @Test fun theHeaderOfTheExpandedRowStillReadsStateTitleContextAndOpensTheAgent() {
         var opened: String? = null
         show(live(busy), preview = prompt, onOpen = { opened = it })
-        byDesc("Blocked, approve edit to build.gradle, api, observed 40 s ago").assertHasClickAction().performClick()
+        byDesc("Blocked, claude, approve edit to build.gradle, api, observed 40 s ago").assertHasClickAction().performClick()
         assertEquals("w1:p2", opened)
     }
 
@@ -253,7 +253,7 @@ class HerdHomeTest {
         )
         show(live(two), preview = prompt, tall = true)
         assertEquals(1, rule.onAllNodesWithText("Review prompt").fetchSemanticsNodes().size)
-        byDesc("Blocked, run the migration, db, observed 40 s ago").assertHasClickAction()
+        byDesc("Blocked, claude, run the migration, db, observed 40 s ago").assertHasClickAction()
     }
 
     @Test fun aPreviewForAnotherTerminalNeverExpandsThisRow() {

@@ -1,5 +1,6 @@
 package io.github.tuthan.paddock.relay
 
+import io.github.tuthan.paddock.cli.argvToCommand
 import io.github.tuthan.paddock.ports.ExecLimits
 import io.github.tuthan.paddock.ports.ExecResult
 import io.github.tuthan.paddock.ports.LinkState
@@ -44,8 +45,10 @@ class FakeSession(
     val streams = CopyOnWriteArrayList<FakeStream>()
     val execs = CopyOnWriteArrayList<Pair<List<String>, ByteArray?>>()
     override val link: StateFlow<LinkState> = MutableStateFlow(LinkState.Up(0))
-    override suspend fun exec(argv: List<String>, stdin: ByteArray?, limits: ExecLimits): ExecResult { execs += argv to stdin; return onExec(argv, stdin) }
-    override suspend fun openStream(argv: List<String>): StreamChannel = FakeStream(argv).also { streams += it; onStream(it) }
+    // The real session turns argv into one command line with argvToCommand, which refuses an argument no login shell would read the same
+    // way (a single quote, a backslash, a line break). The fake does the same, so a command that cannot be sent fails here and not on a device.
+    override suspend fun exec(argv: List<String>, stdin: ByteArray?, limits: ExecLimits): ExecResult { argvToCommand(argv); execs += argv to stdin; return onExec(argv, stdin) }
+    override suspend fun openStream(argv: List<String>): StreamChannel { argvToCommand(argv); return FakeStream(argv).also { streams += it; onStream(it) } }
     override suspend fun close() = Unit
 
     companion object {

@@ -3,6 +3,7 @@ package io.github.tuthan.paddock
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -31,8 +33,25 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import io.github.tuthan.paddock.alerts.AlertCopy
+import io.github.tuthan.paddock.alerts.AlertEvent
+import io.github.tuthan.paddock.alerts.AlertOutcome
+import io.github.tuthan.paddock.alerts.AlertState
 import io.github.tuthan.paddock.ssh.ImportCheck
 import io.github.tuthan.paddock.ssh.ImportedKeyInfo
+import io.github.tuthan.paddock.answers.AnswerController
+import io.github.tuthan.paddock.answers.AnswerGate
+import io.github.tuthan.paddock.answers.AnswerSetupText
+import io.github.tuthan.paddock.answers.Behavior
+import io.github.tuthan.paddock.answers.DecisionEntryModel
+import io.github.tuthan.paddock.answers.DecisionModel
+import io.github.tuthan.paddock.answers.DecisionPresenter
+import io.github.tuthan.paddock.ui.screens.DecisionActions
+import io.github.tuthan.paddock.ui.screens.DecisionSheet
+import io.github.tuthan.paddock.ui.screens.GuardedAnswers
+import io.github.tuthan.paddock.ui.screens.GuardedAnswersUi
+import io.github.tuthan.paddock.ui.screens.GuardedCopied
+import io.github.tuthan.paddock.ui.screens.GuardedHostState
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
 import io.github.tuthan.paddock.ops.ComposerRules
@@ -78,6 +97,11 @@ import io.github.tuthan.paddock.hostkey.HostKeyPrompts
 import io.github.tuthan.paddock.hostkey.HostKeyState
 import io.github.tuthan.paddock.hostprofile.AddMachineForm
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
+import io.github.tuthan.paddock.hostprofile.PairingCopy
+import io.github.tuthan.paddock.hostprofile.PairingEvent
+import io.github.tuthan.paddock.hostprofile.PairingLink
+import io.github.tuthan.paddock.hostprofile.PairingLinks
+import io.github.tuthan.paddock.hostprofile.PairingResult
 import io.github.tuthan.paddock.ledger.ActivityFilter
 import io.github.tuthan.paddock.ledger.ActivityPresenter
 import io.github.tuthan.paddock.ledger.Activity
@@ -86,8 +110,12 @@ import io.github.tuthan.paddock.live.MonitoredHost
 import io.github.tuthan.paddock.live.PreviewState
 import io.github.tuthan.paddock.net.LocalNetworkPolicy
 import io.github.tuthan.paddock.output.OutputState
+import io.github.tuthan.paddock.ui.commandShareIntent
 import io.github.tuthan.paddock.ui.components.FingerprintDialog
+import io.github.tuthan.paddock.ui.components.LocalAgentGlyphs
 import io.github.tuthan.paddock.ui.components.SecureWindow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import io.github.tuthan.paddock.ui.screens.ActivityLog
 import io.github.tuthan.paddock.ui.screens.ADD_MACHINE_INTRO
 import io.github.tuthan.paddock.ui.screens.AddMachine
@@ -105,12 +133,20 @@ import io.github.tuthan.paddock.ui.screens.LocalAccess
 import io.github.tuthan.paddock.ui.screens.ManualInputActions
 import io.github.tuthan.paddock.ui.screens.ManualInputUi
 import io.github.tuthan.paddock.ui.screens.RelayInstall
+import io.github.tuthan.paddock.ui.screens.AlertRelay
+import io.github.tuthan.paddock.ui.screens.AlertRelayHostState
+import io.github.tuthan.paddock.ui.screens.AlertRelayUi
+import io.github.tuthan.paddock.ui.screens.PushDistributorUi
+import io.github.tuthan.paddock.ui.screens.PushRegisteredUi
+import io.github.tuthan.paddock.ui.screens.PushUi
+import io.github.tuthan.paddock.ui.screens.AlertsState
 import io.github.tuthan.paddock.ui.screens.Settings
 import io.github.tuthan.paddock.ui.screens.SettingsState
 import io.github.tuthan.paddock.ui.screens.TerminalActions
 import io.github.tuthan.paddock.ui.screens.TerminalTab
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.NavItem
+import io.github.tuthan.paddock.ui.components.NoticeBar
 import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.PaddockNavBar
 import io.github.tuthan.paddock.ui.components.ScreenHeader
@@ -120,7 +156,7 @@ import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class Route { Home, Output, Compose, Snippets, Activity, Settings, AddMachine }
+private enum class Route { Home, Output, Compose, Snippets, Activity, Settings, AddMachine, AlertRelay, Decision, GuardedAnswers }
 
 private val NAV = listOf(NavItem("Herd", PaddockIcons.Herd), NavItem("Activity", PaddockIcons.Activity))
 
@@ -131,12 +167,20 @@ private val NAV = listOf(NavItem("Herd", PaddockIcons.Herd), NavItem("Activity",
  */
 @Composable
 fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
+    // One provider for every agent tile in the app, so Settings > Agent icons redraws the herd at once without threading it through each screen.
+    val agentGlyphs by remember(graph) { graph.settings.map { it.agentGlyphs }.distinctUntilChanged() }.collectAsState(true)
+    CompositionLocalProvider(LocalAgentGlyphs provides agentGlyphs) { PaddockRootContent(graph, modifier) }
+}
+
+@Composable
+private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     val boot by graph.boot.collectAsState()
     var route by rememberSaveable { mutableStateOf(Route.Home) }
     var addFrom by rememberSaveable { mutableStateOf(Route.Home) }
     var terminalId by rememberSaveable { mutableStateOf<String?>(null) }
     var outputTab by rememberSaveable { mutableStateOf(AgentTab.Output) }
     var snippetsFrom by rememberSaveable { mutableStateOf(Route.Settings) }
+    var guardedFrom by rememberSaveable { mutableStateOf(Route.Settings) }
     var relayDismissed by rememberSaveable { mutableStateOf(false) }
     var reviewKey by rememberSaveable { mutableStateOf(false) }
     // The composer's text lives here, above the route: leaving the composer (Edit snippets, Back) or a reconnect that swaps it for "not available" must not lose it.
@@ -144,14 +188,80 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
     // Add machine opened to set up the watched machine's key (its key could not be read), not to add another.
     var editing by rememberSaveable { mutableStateOf(false) }
 
+    // What the last alert tap found ("State changed since the alert", "No longer observed"). It stays until the user dismisses it.
+    var alertNotice by rememberSaveable { mutableStateOf<String?>(null) }
+    val alertEvent by graph.alerts.event.collectAsState()
+    LaunchedEffect(alertEvent, boot) {
+        val e = alertEvent ?: return@LaunchedEffect
+        if (boot == Boot.Loading) return@LaunchedEffect
+        when (e) {
+            is AlertEvent.Invalid -> { alertNotice = AlertCopy.INVALID_LINK; graph.alerts.consume(e) }
+            is AlertEvent.MachineWoke -> {
+                // A push that named no terminal: the herd of that machine, read fresh, and what that read says in counts.
+                alertNotice = AlertCopy.OPENING
+                route = Route.Home
+                val r = graph.resolveMachine(e)
+                alertNotice = when {
+                    r.unknownMachine -> AlertCopy.UNKNOWN_MACHINE
+                    r.outcome == null -> AlertCopy.unreachable(r.machine)
+                    else -> AlertCopy.machineNotice(r.outcome, r.machine)
+                }
+                graph.alerts.consume(e)
+            }
+            is AlertEvent.Arrived -> {
+                // The herd shows while the connection and the read come up; the alert is resolved against that read, never a cached one.
+                alertNotice = AlertCopy.OPENING
+                route = Route.Home
+                val resolved = graph.resolveAlert(e)
+                val outcome = resolved.outcome
+                if (outcome == null) alertNotice = AlertCopy.unreachable(resolved.machine)
+                else {
+                    alertNotice = AlertCopy.notice(outcome, e.hint, System.currentTimeMillis(), resolved.machine)
+                    when (outcome) {
+                        is AlertOutcome.Current -> {
+                            terminalId = outcome.terminalId
+                            // A blocked agent opens its Terminal tab, observing (the Review prompt route); answering stays a deliberate Request control.
+                            outputTab = if (outcome.state == AlertState.Blocked) AgentTab.Terminal else AgentTab.Output
+                            // Opening a Done from its alert is the user acknowledging it, as tapping its row is.
+                            if (outcome.state == AlertState.Done) resolved.row?.takeIf { it.state == StateWord.Done }?.let { resolved.host?.markSeen(it) }
+                            route = Route.Output
+                        }
+                        is AlertOutcome.Changed -> { terminalId = outcome.terminalId; outputTab = AgentTab.Output; route = Route.Output }
+                        is AlertOutcome.NoLongerObserved -> route = Route.Home
+                    }
+                }
+                graph.alerts.consume(e)
+            }
+        }
+    }
+
+    // A pairing link (a tap, or Paste a pairing link): Add machine opens pre-filled. Nothing connects and nothing is trusted from here.
+    var pairing by remember { mutableStateOf<PairingLink?>(null) }
+    val pairingEvent by graph.pairing.event.collectAsState()
+    LaunchedEffect(pairingEvent, boot) {
+        val e = pairingEvent ?: return@LaunchedEffect
+        if (boot == Boot.Loading) return@LaunchedEffect
+        when (e) {
+            is PairingEvent.Invalid -> alertNotice = PairingCopy.invalid(e.reason)
+            is PairingEvent.Link -> {
+                alertNotice = null
+                pairing = e.link; editing = false
+                if (route != Route.AddMachine) { addFrom = if (boot == Boot.Ready && route != Route.Output) route else Route.Home; route = Route.AddMachine }
+            }
+        }
+        graph.pairing.consume(e)
+    }
+
     val effective = if (boot == Boot.NoMachines) Route.AddMachine else route
     // Manual input belongs to the agent screen and the composer opened from it; leaving them, or opening another agent, ends it.
     val onAgent = (effective == Route.Output && outputTab == AgentTab.Output) || effective == Route.Compose || (effective == Route.Snippets && snippetsFrom == Route.Compose)
     LaunchedEffect(onAgent, terminalId) { if (onAgent) graph.manualInput.leaveUnless(terminalId) else graph.manualInput.leave() }
-    val backTo = when (effective) { Route.AddMachine -> addFrom; Route.Compose -> Route.Output; Route.Snippets -> snippetsFrom; else -> Route.Home }
+    val backTo = when (effective) { Route.AddMachine -> addFrom; Route.Compose -> Route.Output; Route.Snippets -> snippetsFrom; Route.AlertRelay -> Route.Settings; Route.Decision -> Route.Output; Route.GuardedAnswers -> guardedFrom; else -> Route.Home }
     // Registered before the screens', so a screen's own back handling (the import screen's) is asked first.
     BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { route = backTo }
-    Box(modifier.fillMaxSize().safeDrawingPadding()) {
+    Column(modifier.fillMaxSize().safeDrawingPadding()) {
+    alertNotice?.let { NoticeBar(it, onDismiss = { alertNotice = null }, modifier = Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 8.dp)) }
+    Box(Modifier.weight(1f).fillMaxWidth()) {
         when (boot) {
             Boot.Loading -> Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title, modifier = Modifier.padding(PaddockTokens.spacing.gutter))
             else -> when (effective) {
@@ -163,12 +273,17 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
                             // Review prompt goes to the agent's Terminal tab, observing: answering is a deliberate Request control from there.
                             onReviewPrompt = { terminalId = it; outputTab = AgentTab.Terminal; route = Route.Output },
                             onSettings = { route = Route.Settings },
-                            onSetUpKey = { editing = true; addFrom = Route.Home; route = Route.AddMachine },
+                            onSetUpKey = { editing = true; pairing = null; addFrom = Route.Home; route = Route.AddMachine },
                         ) else ActivityRoute(graph, onOpenAgent = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output })
                     }
                     PaddockNavBar(NAV, if (effective == Route.Home) 0 else 1, { route = if (it == 0) Route.Home else Route.Activity })
                 }
-                Route.Output -> OutputRoute(graph, terminalId, outputTab, { outputTab = it }, onBack = { route = Route.Home }, onCompose = { route = Route.Compose })
+                Route.Output -> OutputRoute(graph, terminalId, outputTab, { outputTab = it }, onBack = { route = Route.Home }, onCompose = { route = Route.Compose }, onDecision = { route = Route.Decision })
+                Route.Decision -> DecisionRoute(
+                    graph, terminalId, onBack = { route = Route.Output },
+                    onOpenTerminal = { outputTab = AgentTab.Terminal; route = Route.Output },
+                    onSetUp = { guardedFrom = Route.Decision; route = Route.GuardedAnswers },
+                )
                 Route.Compose -> ComposeRoute(
                     graph, terminalId, draft, { change -> draft = change(draft) }, onBack = { route = Route.Output },
                     onOpenTerminal = { outputTab = AgentTab.Terminal; route = Route.Output },
@@ -176,16 +291,22 @@ fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
                 )
                 Route.Snippets -> SnippetsRoute(graph, onBack = { route = snippetsFrom })
                 Route.Settings -> SettingsRoute(
-                    graph, onBack = { route = Route.Home }, onAddMachine = { editing = false; addFrom = Route.Settings; route = Route.AddMachine },
+                    graph, onBack = { route = Route.Home }, onAddMachine = { editing = false; pairing = null; addFrom = Route.Settings; route = Route.AddMachine },
                     onEditSnippets = { snippetsFrom = Route.Settings; route = Route.Snippets },
+                    onAlertRelay = { route = Route.AlertRelay },
+                    onGuardedAnswers = { guardedFrom = Route.Settings; route = Route.GuardedAnswers },
                 )
+                Route.AlertRelay -> AlertRelayRoute(graph, onBack = { route = Route.Settings })
+                Route.GuardedAnswers -> GuardedAnswersRoute(graph, onBack = { route = guardedFrom })
                 Route.AddMachine -> AddMachineRoute(
-                    graph, canGoBack = boot == Boot.Ready, editing = editing && boot == Boot.Ready,
-                    onBack = { editing = false; route = backTo }, onAdded = { editing = false; route = Route.Home; relayDismissed = false },
+                    graph, canGoBack = boot == Boot.Ready, editing = editing && boot == Boot.Ready, pairing = pairing,
+                    onBack = { editing = false; pairing = null; route = backTo }, onAdded = { editing = false; pairing = null; route = Route.Home; relayDismissed = false },
+                    onPairing = { pairing = it }, onNotice = { alertNotice = it },
                 )
             }
         }
         HostKeyDialogs(graph, reviewKey) { reviewKey = false }
+    }
     }
 }
 
@@ -258,7 +379,7 @@ private fun HomeRoute(
 }
 
 @Composable
-private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onTab: (AgentTab) -> Unit, onBack: () -> Unit, onCompose: () -> Unit) {
+private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onTab: (AgentTab) -> Unit, onBack: () -> Unit, onCompose: () -> Unit, onDecision: () -> Unit) {
     val view by graph.hostUi.view.collectAsState()
     val settings by graph.settings.collectAsState()
     val profile by graph.profile.collectAsState()
@@ -299,6 +420,8 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onT
     val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
     val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
     val focus = focusView(host, terminalId)
+    // A permission request the hook published for this agent: the entry above the output opens the sheet. Nothing here can answer it.
+    val decision = rememberDecision(host, terminalId, now)
     // The tap checks the gate again, as for the keys; the first time ever it asks what focus does.
     FocusGuard(settings.desktopFocusConfirmed, onConfirmed = graph::setDesktopFocusConfirmed, focus = { focus.key?.takeIf { focus.gate is OperationGate.Open }?.let { host.sends?.focus(it) } }) { requestFocus ->
         val manual = rememberManualInput(
@@ -310,6 +433,8 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onT
             terminal = { TerminalRoute(graph, host, terminalId) },
             onCompose = if (host.sends != null) onCompose else null,
             manualInput = manual?.first, manualActions = manual?.second,
+            // Tapping the entry is the user choosing to look at the newest request: it becomes the one on the sheet before the sheet is up.
+            decision = decision?.entry, onOpenDecision = { decision?.answers?.review(terminalId); onDecision() },
         )
     }
 }
@@ -589,7 +714,7 @@ private fun ActivityRoute(graph: AppGraph, onOpenAgent: (terminalId: String) -> 
 }
 
 @Composable
-private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () -> Unit, onEditSnippets: () -> Unit) {
+private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () -> Unit, onEditSnippets: () -> Unit, onAlertRelay: () -> Unit, onGuardedAnswers: () -> Unit) {
     val snippets by graph.snippets.collectAsState()
     val settings by graph.settings.collectAsState()
     val profile by graph.profile.collectAsState()
@@ -608,9 +733,23 @@ private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () 
     val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "unknown" }
     val machine = profile?.let { p -> MachineSummary(p.name, "${p.user}@${p.host}:${p.port}", p.session) }
     val journalUnreadable by graph.journal.unreadable.collectAsState()
+    // Read again on every return from system settings and after the dialog answers: the user can change any of it out of our sight.
+    var accessTick by remember { mutableIntStateOf(0) }
+    val activity = remember(ctx) { generateSequence(ctx) { (it as? android.content.ContextWrapper)?.baseContext }.firstOrNull { it is android.app.Activity } as? android.app.Activity }
+    val notificationAccess = remember(resumes, accessTick, settings.notificationPermissionAsked) { graph.notificationAccess.read(activity, settings.notificationPermissionAsked) }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { accessTick++ }
+    val recovery = io.github.tuthan.paddock.alerts.NotificationAccessRules.recovery(notificationAccess)
+    fun askPermission() {
+        graph.notePermissionAsked()
+        permission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
     Settings(
-        SettingsState(settings.protectSensitiveScreens, access, version, machine = machine, herdrVersion = view.herdrVersion, keepPromptText = settings.keepPromptText, snippetCount = snippets.size, journalUnreadable = journalUnreadable),
+        SettingsState(
+            settings.protectSensitiveScreens, access, version, machine = machine, herdrVersion = view.herdrVersion, keepPromptText = settings.keepPromptText, snippetCount = snippets.size, journalUnreadable = journalUnreadable,
+            alerts = AlertsState(settings.localAlerts, settings.hidePromptOnLockScreen, recovery), agentGlyphs = settings.agentGlyphs,
+        ),
         onProtectSensitive = { scope.launch { graph.setProtectSensitive(it) } },
+        onAgentGlyphs = { graph.setAgentGlyphs(it) },
         onOpenSystemSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
         onBack = onBack,
         onAddMachine = onAddMachine,
@@ -619,11 +758,275 @@ private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () 
         onRetryJournal = { graph.journal.retryLoad() },
         // Off the main thread: setting the file aside is disk work. A failure leaves the journal unreadable, which the card keeps saying.
         onResetJournal = { scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { graph.journal.resetUnreadable() } } },
+        // Turning alerts on is the moment the permission is asked for (Android 13 and later); a refusal leaves the recovery row.
+        onLocalAlerts = { on ->
+            graph.setLocalAlerts(on)
+            if (on && notificationAccess is io.github.tuthan.paddock.alerts.NotificationAccess.NeedsPermission && notificationAccess.canAsk) askPermission()
+        },
+        onHideOnLockScreen = { graph.setHidePromptOnLockScreen(it) },
+        onAlertRelay = onAlertRelay,
+        onGuardedAnswers = onGuardedAnswers,
+        onAlertRecovery = { action ->
+            if (action == io.github.tuthan.paddock.alerts.AccessRecovery.Action.AskPermission) askPermission()
+            else recovery?.let { r -> graph.notificationAccess.settingsIntent(r, notificationAccess)?.let { ctx.startActivity(it) } }
+        },
+    )
+}
+
+/** One terminal's permission request as the Output tab's entry and the decision sheet draw it. */
+private class DecisionState(val key: TerminalKey?, val model: DecisionModel, val entry: DecisionEntryModel?, val awaitsSettle: Boolean, val answers: AnswerController)
+
+/**
+ * Watches the host's request files for [terminalId] while the screen is up (a read only while the agent is blocked) and turns them into
+ * words. Null when this machine has no answers (no operation journal, so no operations at all). A reconnect changes the key, which
+ * restarts the watch under the new epoch.
+ */
+@Composable
+private fun rememberDecision(host: MonitoredHost, terminalId: String, nowMillis: Long): DecisionState? {
+    val answers = host.answers ?: return null
+    val installed by host.reconciler.installed.collectAsState()
+    val freshness by host.freshness.collectAsState()
+    val records by host.operationRecords.collectAsState()
+    val journalUnreadable by host.journalUnreadable.collectAsState()
+    val views by answers.views.collectAsState()
+    val running by answers.running.collectAsState()
+    val presenter = remember { OperationPresenter() }
+    val epoch = installed?.epoch
+    val key = epoch?.let { TerminalKey(TargetRef(host.profile.hostId, host.sessionName, terminalId), it) }
+    DisposableEffect(answers, key) {
+        if (key != null) answers.watch(key)
+        onDispose { if (key != null) answers.unwatch(terminalId) }
+    }
+    val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminalId }
+    val gate = if (key == null) OperationGate.Closed(SendBlock.Reading, "Reading the agent's state…")
+    else AnswerGate.gate(agent, installed?.readAtMillis, freshness == Freshness.Live, records, key, currentEpoch = epoch, journalUnreadable = journalUnreadable != null)
+    val model = DecisionPresenter.model(views[terminalId], nowMillis, gate, terminalId in running, presenter)
+    val awaitsSettle = key != null && records.any { it.sameTerminal(key) && it.awaitsReread && (it.kind == OperationKind.Allow || it.kind == OperationKind.Deny) }
+    return DecisionState(key, model, DecisionPresenter.entry(views[terminalId], nowMillis), awaitsSettle, answers)
+}
+
+/**
+ * The decision sheet: the request the hook published for this agent, shown whole, with Yes and No for exactly that request. Every
+ * button acts on the request on screen; a newer one is only offered. Leaving it for the terminal is always one tap.
+ */
+@Composable
+private fun DecisionRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit, onOpenTerminal: () -> Unit, onSetUp: () -> Unit) {
+    val view by graph.hostUi.view.collectAsState()
+    val settings by graph.settings.collectAsState()
+    val host = (view.phase as? HostPhase.Monitoring)?.host
+    val profile by graph.profile.collectAsState()
+    val unavailable: @Composable (String) -> Unit = { what ->
+        Column(Modifier.fillMaxSize()) {
+            ScreenHeader("Permission request", onBack = onBack, compact = true)
+            Column(Modifier.padding(PaddockTokens.spacing.gutter), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(what, style = PaddockTokens.type.body, color = PaddockTokens.colors.title)
+                PaddockButton("Back", onBack, kind = ButtonKind.Ghost, icon = PaddockIcons.Back)
+            }
+        }
+    }
+    if (terminalId == null || host == null) { unavailable("This agent is not available right now. Its machine is not connected."); return }
+    SecureWindow(settings.protectSensitiveScreens)
+    val now = rememberNow()
+    val state = rememberDecision(host, terminalId, now)
+    if (state == null) { unavailable("Answers from the phone are not available on this machine: Paddock cannot keep the record of an answer here."); return }
+    val home by host.home.collectAsState()
+    val row = home?.rows?.firstOrNull { it.key.target.terminalId == terminalId }
+    val header = AgentHeader(row?.title ?: "Agent", listOfNotNull(row?.agentKind, host.sessionName, profile?.name).joinToString(" · "), row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
+    val scope = rememberCoroutineScope()
+    var notice by remember(terminalId) { mutableStateOf<String?>(null) }
+    val key = state.key
+    val answers = state.answers
+    DecisionSheet(
+        header, state.model, state.awaitsSettle,
+        DecisionActions(
+            onYes = { id -> key?.let { answers.answer(it, Behavior.Allow, id) } },
+            onNo = { id -> key?.let { answers.answer(it, Behavior.Deny, id) } },
+            onReviewNewer = { answers.review(terminalId) },
+            onOpenTerminal = onOpenTerminal,
+            onRefresh = { key?.let { answers.refresh(it) } },
+            onDismissResult = { answers.dismiss(terminalId) },
+            onSettle = {
+                key?.let { k ->
+                    scope.launch {
+                        notice = try { answers.settle(k).lastOrNull()?.let { DecisionPresenter.settled(it.second) } }
+                        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                        catch (e: Throwable) { "Could not read the host's files: " + (e.message?.lineSequence()?.firstOrNull()?.take(120) ?: "unknown error") + ". Nothing was sent." }
+                    }
+                }
+            },
+            onSetUp = if (state.model.readError != null) onSetUp else null,
+        ),
+        onBack, notice = notice,
+    )
+}
+
+/**
+ * Guarded answers on the watched machine: the two pinned scripts' state on the host (read through the live connection), the consented
+ * install of exactly those files, and the two texts to paste. Nothing here registers the hook or edits Claude Code's settings.
+ */
+@Composable
+private fun GuardedAnswersRoute(graph: AppGraph, onBack: () -> Unit) {
+    val view by graph.hostUi.view.collectAsState()
+    val profile by graph.profile.collectAsState()
+    val host = (view.phase as? HostPhase.Monitoring)?.host
+    val answerHost = host?.answerHost
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var tick by remember { mutableIntStateOf(0) }
+    var hostState by remember(answerHost) { mutableStateOf<GuardedHostState>(if (answerHost == null) GuardedHostState.NotConnected else GuardedHostState.Reading) }
+    var installing by remember { mutableStateOf(false) }
+    var installError by remember { mutableStateOf<String?>(null) }
+    var copied by remember { mutableStateOf(GuardedCopied.None) }
+    var window by rememberSaveable { mutableIntStateOf(AnswerSetupText.DEFAULT_WINDOW_SECONDS) }
+    LaunchedEffect(answerHost, tick) {
+        if (answerHost == null) { hostState = GuardedHostState.NotConnected; return@LaunchedEffect }
+        hostState = GuardedHostState.Reading
+        hostState = try { GuardedHostState.Known(answerHost.inspect()) }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Throwable) { GuardedHostState.Failed(e.message?.lineSequence()?.firstOrNull()?.take(160) ?: "the read failed") }
+    }
+    val known = (hostState as? GuardedHostState.Known)?.setup
+    val config = runCatching { AnswerSetupText.configCommand(window) }.getOrNull()
+    val snippet = known?.let { runCatching { AnswerSetupText.settingsSnippet(it.hookDestination, window) }.getOrNull() }
+    val copy = { label: String, text: String?, which: GuardedCopied ->
+        text?.let {
+            (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(label, it))
+            copied = which
+        }
+    }
+    GuardedAnswers(
+        GuardedAnswersUi(
+            profile?.name ?: "this machine", answerHost?.decideSha256 ?: graph.decideScriptSha256, answerHost?.hookSha256 ?: graph.hookScriptSha256,
+            hostState, installing, installError, window, config, snippet, copied,
+        ),
+        onBack = onBack,
+        onInstall = {
+            val h = answerHost ?: return@GuardedAnswers
+            installing = true; installError = null
+            scope.launch {
+                try { h.install() }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (e: Throwable) { installError = "The install did not finish: " + (e.message?.lineSequence()?.firstOrNull()?.take(160) ?: "unknown error") }
+                finally { installing = false; tick++ }
+            }
+        },
+        onCheck = { tick++ },
+        onWindow = { window = it; copied = GuardedCopied.None },
+        onCopyConfig = { copy("Paddock guarded answers configuration", config, GuardedCopied.Config) },
+        onCopySettings = { copy("Paddock guarded answers registration", snippet, GuardedCopied.Settings) },
+    )
+}
+
+/**
+ * The alert relay on the watched machine: what the pinned script's state on the host is (read through the live connection), the
+ * consented install of that one file, and the setup commands to read and copy. Nothing here enables the user's unit.
+ */
+@Composable
+private fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
+    val view by graph.hostUi.view.collectAsState()
+    val profile by graph.profile.collectAsState()
+    val host = (view.phase as? HostPhase.Monitoring)?.host
+    val relay = host?.alertRelay
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var tick by remember { mutableIntStateOf(0) }
+    var hostState by remember(relay) { mutableStateOf<AlertRelayHostState>(if (relay == null) AlertRelayHostState.NotConnected else AlertRelayHostState.Reading) }
+    var installing by remember { mutableStateOf(false) }
+    var installError by remember { mutableStateOf<String?>(null) }
+    var copied by remember { mutableStateOf(false) }
+    // Connector mode: the registrations and the distributors on the phone, read again on every return (an app may have been installed meanwhile).
+    val registrations by graph.push.registrations.collectAsState()
+    val pushNotice by graph.push.notice.collectAsState()
+    val resumes = rememberResumes()
+    LaunchedEffect(Unit) { graph.push.refresh() }
+    val distributors = remember(resumes, registrations) { graph.push.distributors() }
+    var pushBusy by remember { mutableStateOf(false) }
+    var pushError by remember { mutableStateOf<String?>(null) }
+    var onHost by remember(relay, tick) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(relay, tick) { onHost = if (relay == null) null else try { relay.hasPushEndpoint() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Throwable) { null } }
+    val reg = registrations.firstOrNull { it.profile == profile?.id }
+    LaunchedEffect(relay, tick) {
+        if (relay == null) { hostState = AlertRelayHostState.NotConnected; return@LaunchedEffect }
+        hostState = AlertRelayHostState.Reading
+        hostState = try { AlertRelayHostState.Known(relay.inspect()) }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Throwable) { AlertRelayHostState.Failed(e.message?.take(160) ?: "the read failed") }
+    }
+    val commands = host?.let { h -> profile?.let { p -> runCatching { io.github.tuthan.paddock.alerts.AlertRelaySetup.commands(graph.alertUnit, graph.alertConfigExample, p.id, h.socketPath, graph.alertScriptSha256) }.getOrNull() } }
+    AlertRelay(
+        AlertRelayUi(
+            profile?.name ?: "this machine", profile?.id ?: "", graph.alertScriptSha256, hostState, installing, installError, commands, copied,
+            push = PushUi(
+                distributors = distributors.map { PushDistributorUi(it.packageName, it.label) },
+                registered = reg?.let { r ->
+                    PushRegisteredUi(
+                        distributorLabel = distributors.firstOrNull { it.packageName == r.distributor }?.label ?: r.distributor,
+                        distributorInstalled = distributors.any { it.packageName == r.distributor },
+                        endpointHost = r.endpoint?.let { runCatching { android.net.Uri.parse(it).host }.getOrNull() },
+                        hasEndpoint = r.endpoint != null, shared = r.sharedAtMillis != null, failure = r.failure?.label,
+                    )
+                },
+                notice = pushNotice, busy = pushBusy, error = pushError, onHost = onHost,
+            ),
+        ),
+        onPushRegister = { pkg ->
+            val p = profile ?: return@AlertRelay
+            pushError = null
+            scope.launch { graph.push.register(p.id, p.name, pkg) }
+        },
+        onPushShare = {
+            val r = relay ?: return@AlertRelay
+            val p = profile ?: return@AlertRelay
+            val endpoint = reg?.endpoint ?: return@AlertRelay
+            pushBusy = true; pushError = null
+            scope.launch {
+                try { r.writePushEndpoint(endpoint); graph.push.markShared(p.id) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (e: Throwable) { pushError = "The address was not written: " + (e.message?.take(160) ?: "unknown error") }
+                finally { pushBusy = false; tick++ }
+            }
+        },
+        onPushRemove = {
+            val p = profile ?: return@AlertRelay
+            pushBusy = true; pushError = null
+            scope.launch {
+                try {
+                    graph.push.unregister(p.id)
+                    // The file on the host goes too when the phone can reach it; otherwise it stays, and the screen says it could not be removed.
+                    if (relay != null) relay.removePushEndpoint()
+                    else if (reg?.sharedAtMillis != null) pushError = "Unregistered. The address file on the host could not be removed because Paddock is not connected."
+                }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (e: Throwable) { pushError = "Unregistered. The address file on the host was not removed: " + (e.message?.take(160) ?: "unknown error") }
+                finally { pushBusy = false; tick++ }
+            }
+        },
+        onBack = onBack,
+        onInstall = {
+            val r = relay ?: return@AlertRelay
+            installing = true; installError = null
+            scope.launch {
+                try { r.install() }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (e: Throwable) { installError = "The install did not finish: " + (e.message?.take(160) ?: "unknown error") }
+                finally { installing = false; tick++ }
+            }
+        },
+        onCheck = { tick++ },
+        onCopy = {
+            commands?.let {
+                (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock alert relay setup", it))
+                copied = true
+            }
+        },
     )
 }
 
 @Composable
-private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, editing: Boolean, onBack: () -> Unit, onAdded: () -> Unit) {
+private fun AddMachineRoute(
+    graph: AppGraph, canGoBack: Boolean, editing: Boolean, pairing: PairingLink?, onBack: () -> Unit, onAdded: () -> Unit,
+    onPairing: (PairingLink) -> Unit, onNotice: (String) -> Unit,
+) {
     val ctx = LocalContext.current
     val watched by graph.profile.collectAsState()
     // Setting up the key keeps the machine (its id, so its pinned host key and history) while it is the same host and port.
@@ -643,6 +1046,8 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, editing: Boolea
             val made = AddMachineForm.profile(input, existing - setOfNotNull(fixing?.id)) ?: return@launch
             val same = fixing != null && made.host == fixing.host && made.port == fixing.port
             val profile = if (same) made.copy(id = fixing.id, name = fixing.name) else made
+            // Set or cleared on every Connect: a link's fingerprints are compared with the key this machine presents, and never outlive the form that carried them.
+            graph.broker.expectPairing(profile.id, input.pairedFingerprints)
             graph.addMachine(profile)
             // The same profile is resumed, not rebuilt: ask for the reconnect that picks up the new key.
             if (same) graph.retry()
@@ -688,7 +1093,7 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, editing: Boolea
         permissionDenied = denied,
     )
     // Its own saved form: setting up a key starts from the watched machine's values, not from a half-typed new one.
-    holder.SaveableStateProvider(fixing?.let { "key-${it.id}" } ?: "add-machine") {
+    holder.SaveableStateProvider(fixing?.let { "key-${it.id}" } ?: pairing?.let { "pair-${it.hashCode()}" } ?: "add-machine") {
         AddMachine(
             state,
             onConnect = { input ->
@@ -697,10 +1102,20 @@ private fun AddMachineRoute(graph: AppGraph, canGoBack: Boolean, editing: Boolea
             },
             onGenerateKey = { scope.launch { graph.createPhoneKey(); keyTick++ } },
             onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },
+            onCopyCommand = { command -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock authorize command", command)) },
+            onShareCommand = { command -> ctx.startActivity(Intent.createChooser(commandShareIntent(command), "Share the command")) },
+            onPastePairingLink = {
+                // The user asked for this read. Only a token that starts with the pairing scheme is looked at, and the text is never echoed.
+                val text = runCatching { (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString() }.getOrNull()
+                when (val r = PairingLinks.parse(PairingLinks.find(text) ?: text?.trim()?.take(PairingLinks.MAX_LENGTH + 1))) {
+                    is PairingResult.Valid -> onPairing(r.link)
+                    is PairingResult.Rejected -> onNotice(PairingCopy.invalid(r.reason))
+                }
+            },
             onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
             onBack = { if (canGoBack) onBack() },
             onImportKey = { importing = true },
-            initial = fixing?.let { AddMachineInput(it.host, it.port.toString(), it.user, it.key, it.importedKeyId, it.session ?: "") } ?: AddMachineInput(),
+            initial = fixing?.let { AddMachineInput(it.host, it.port.toString(), it.user, it.key, it.importedKeyId, it.session ?: "") } ?: pairing?.toInput() ?: AddMachineInput(),
             title = if (fixing != null) "Set up the key" else "Add a machine",
             intro = if (fixing != null) SET_UP_KEY_INTRO else ADD_MACHINE_INTRO,
         )
@@ -786,8 +1201,11 @@ private fun HostKeyDialogs(graph: AppGraph, reviewKey: Boolean, dismissReview: (
     val request by graph.broker.firstTrust.collectAsState()
     request?.let { r ->
         // Answers name the request they answer: a tap on a dialog whose connect was cancelled answers nothing else.
-        FingerprintDialog(HostKeyPrompts.firstTrust(r.endpoint, r.presented), onTrust = { graph.broker.answerFirstTrust(r.id, true) }, onCancel = { graph.broker.answerFirstTrust(r.id, false) })
+        FingerprintDialog(HostKeyPrompts.firstTrust(r.endpoint, r.presented, r.linkFingerprints), onTrust = { graph.broker.answerFirstTrust(r.id, true) }, onCancel = { graph.broker.answerFirstTrust(r.id, false) })
     }
+    // A key the pairing link does not name was refused before any question: this only says so, with both fingerprints, and offers no way to trust it.
+    val refusal by graph.broker.pairingRefused.collectAsState()
+    refusal?.let { r -> FingerprintDialog(HostKeyPrompts.pairingMismatch(r), onTrust = {}, onCancel = { graph.broker.clearPairingRefusal() }) }
     val profile by graph.profile.collectAsState()
     val changed by graph.broker.changed.collectAsState()
     val c = profile?.let { changed[it.id] }

@@ -39,24 +39,9 @@ data class AgentRowModel(
     /** When the phone observed this state, or the time of the read that first showed it; never "blocked for". */
     val observedAtMillis: Long,
     val stateChangeSeq: Long?,
-    /** herdr's agent kind (`claude`, `codex`, …), for the monogram; null when herdr does not say. */
+    /** herdr's agent kind (`claude`, `codex`, …), for the row's mark and spoken text; null when herdr does not say. */
     val agentKind: String? = null,
 )
-
-/** Two lowercase letters for an agent kind, as the design's monograms: known kinds by name, others by their first letters. */
-object Monogram {
-    private val known = mapOf(
-        "claude" to "cl", "codex" to "cx", "opencode" to "oc", "gemini" to "gm", "copilot" to "cp",
-        "pi" to "pi", "amp" to "am", "hermes" to "hm", "shell" to "sh",
-    )
-
-    fun of(kind: String?): String {
-        val k = kind?.trim()?.lowercase().orEmpty()
-        known[k]?.let { return it }
-        val letters = k.filter { it in 'a'..'z' || it in '0'..'9' }
-        return if (letters.isEmpty()) "··" else letters.take(2)
-    }
-}
 
 data class HomeModel(
     val sections: List<Pair<Section, List<AgentRowModel>>>,

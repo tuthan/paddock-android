@@ -155,4 +155,10 @@ class ActivityPresenterTest {
         assertEquals(null, row(op(OperationOutcome.Acknowledged)).rereadOperationId)
         assertEquals(null, row(op(OperationOutcome.Rejected, code = "agent_blocked")).rereadOperationId)
     }
+
+
+    @Test fun aPhoneAnswerToAPermissionRequestIsNamedForWhatItWas() {
+        assertEquals("You answered Yes to a permission request from approve edit to build.gradle", opRow(op(OperationOutcome.Acknowledged, OperationKind.Allow)).text)
+        assertEquals("You answered No to a permission request from approve edit to build.gradle", opRow(op(OperationOutcome.Acknowledged, OperationKind.Deny)).text)
+    }
 }

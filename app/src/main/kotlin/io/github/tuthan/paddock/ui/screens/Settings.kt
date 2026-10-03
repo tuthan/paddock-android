@@ -36,6 +36,8 @@ import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import io.github.tuthan.paddock.alerts.AccessRecovery
+import io.github.tuthan.paddock.alerts.AlertDelivery
 import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.Kicker
@@ -65,6 +67,19 @@ data class SettingsState(
     val snippetCount: Int = 0,
     /** Why the saved record of sends cannot be read, or null. While it is set no prompt, key or focus is sent. */
     val journalUnreadable: String? = null,
+    val alerts: AlertsState = AlertsState(),
+    /** Agent icons: a glyph on the row's tile for the common agents, letters for the rest. */
+    val agentGlyphs: Boolean = true,
+)
+
+/**
+ * The Alerts section. [localAlerts] is the switch for notifications raised while Paddock is open but not in front; the
+ * permission is asked for when it is turned on. [recovery] is set when notifications cannot reach the user, and says why.
+ */
+data class AlertsState(
+    val localAlerts: Boolean = false,
+    val hideOnLockScreen: Boolean = true,
+    val recovery: AccessRecovery? = null,
 )
 
 const val RECONNECT_SHORT = "Fast retries, then up to every 2 minutes"
@@ -86,6 +101,12 @@ fun Settings(
     onEditSnippets: () -> Unit = {},
     onRetryJournal: () -> Unit = {},
     onResetJournal: () -> Unit = {},
+    onLocalAlerts: (Boolean) -> Unit = {},
+    onHideOnLockScreen: (Boolean) -> Unit = {},
+    onAlertRecovery: (AccessRecovery.Action) -> Unit = {},
+    onAlertRelay: () -> Unit = {},
+    onGuardedAnswers: () -> Unit = {},
+    onAgentGlyphs: (Boolean) -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     var reconnectOpen by rememberSaveable { mutableStateOf(false) }
@@ -149,12 +170,58 @@ fun Settings(
                 }
             }
 
-            Section("Notifications")
-            Fixed("Needs you", "Not yet", "Alerts when an agent is blocked.", enabled = false)
-            Fixed("Done", "Not yet", "Alerts when an agent finishes.", enabled = false)
+            Section("Alerts")
+            Toggle(
+                "Alerts from this app", state.alerts.localAlerts, onLocalAlerts, Modifier.card(c, padded = false),
+                inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                detail = "While Paddock is open but not in front, an agent that becomes blocked or done raises a notification. Paddock does not watch in the background in this version.",
+            )
+            if (state.alerts.recovery != null && state.alerts.localAlerts) {
+                Banner(state.alerts.recovery.message, actionLabel = state.alerts.recovery.actionLabel, onAction = { onAlertRecovery(state.alerts.recovery.action) })
+            }
+            Toggle(
+                "Hide prompt text on the lock screen", state.alerts.hideOnLockScreen, onHideOnLockScreen, Modifier.card(c, padded = false),
+                inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                detail = "On: the lock screen shows only \"Paddock: attention on <machine>\". The agent's title appears once the phone is unlocked. Android's own lock-screen setting can hide more, never less.",
+            )
+            Row(
+                Modifier.card(c, padded = false)
+                    .clickable(role = Role.Button, onClickLabel = "Set up the alert relay", onClick = onAlertRelay)
+                    .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
+                    .semantics(mergeDescendants = true) { contentDescription = "Locked-phone alerts, ${AlertDelivery.MODE}. ${AlertDelivery.BEST_EFFORT} ${AlertDelivery.MEASURED}" },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Locked-phone alerts", style = PaddockTokens.type.rowTitle, color = c.title)
+                    Text(AlertDelivery.MODE, style = PaddockTokens.type.secondary, color = c.text)
+                    Text(AlertDelivery.BEST_EFFORT + " " + AlertDelivery.MEASURED, style = PaddockTokens.type.secondary, color = c.dim)
+                }
+                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
+            }
+            Note2("Every notification has two buttons, Open and Review. Both only open Paddock; nothing is ever sent to an agent from a notification.")
+
+            Section("Answers")
+            Row(
+                Modifier.card(c, padded = false)
+                    .clickable(role = Role.Button, onClickLabel = "Set up guarded answers", onClick = onGuardedAnswers)
+                    .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
+                    .semantics(mergeDescendants = true) { contentDescription = "Guarded answers. $GUARDED_ROW" },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Guarded answers", style = PaddockTokens.type.rowTitle, color = c.title)
+                    Text(GUARDED_ROW, style = PaddockTokens.type.secondary, color = c.dim)
+                }
+                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
+            }
 
             Section("Appearance")
             Fixed("Theme", "Paddock palette", "Follows the system light or dark setting.")
+            Toggle(
+                "Agent icons", state.agentGlyphs, onAgentGlyphs, Modifier.card(c, padded = false),
+                inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                detail = if (state.agentGlyphs) "Pictures for the common agents, letters for the rest." else "Two letters for every agent.",
+            )
 
             Section("Prompts")
             Row(

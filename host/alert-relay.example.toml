@@ -1,0 +1,27 @@
+# ~/.config/paddock/alert-relay.toml, mode 600 (chmod 600) when it holds a token.
+# paddock-alert-relay.py watches one herdr session and posts one generic message when an agent newly becomes
+# blocked or done. The message names no agent, prompt or output; the phone reads the current state over SSH when you open it.
+
+# herdr's API socket: `herdr session list` prints it. The default session is ~/.config/herdr/herdr.sock,
+# a named session is ~/.config/herdr/sessions/NAME/herdr.sock.
+socket = "~/.config/herdr/herdr.sock"
+
+# The id the phone chose for this machine (Paddock shows it under Settings > Alerts).
+profile = "workstation"
+
+# Shown in the notification title: "Paddock: attention on <label>". Defaults to this machine's host name.
+# label = "workstation"
+
+delivery = "ntfy"                 # "ntfy", or "unifiedpush" once the phone has registered an endpoint
+# alert_on = ["blocked", "done"]  # the states that alert
+# debounce_seconds = 15           # the same terminal and state alerts at most once per window
+# expiry_seconds = 600            # a message that could not be delivered within this long is dropped
+# heartbeat_seconds = 30          # a read even when no event arrives (herdr 0.9.1 can drop events silently)
+
+[ntfy]
+url = "https://ntfy.example.org"  # your own server is recommended; an https URL, or http only for loopback
+topic = "paddock-change-this-to-a-long-random-string"
+# token = ""                      # optional access token, sent as a bearer token; never over plain http
+
+[unifiedpush]
+# endpoint_file = "~/.config/paddock/push-endpoint.json"   # written by the phone after you agree

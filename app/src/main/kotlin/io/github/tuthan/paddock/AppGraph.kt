@@ -1,6 +1,26 @@
 package io.github.tuthan.paddock
 
 import android.app.Application
+import io.github.tuthan.paddock.alerts.AlertArrival
+import io.github.tuthan.paddock.alerts.AlertContent
+import io.github.tuthan.paddock.alerts.LocalAlertRules
+import io.github.tuthan.paddock.attention.AttentionModel
+import io.github.tuthan.paddock.notify.AndroidAlertNotifier
+import io.github.tuthan.paddock.notify.NotificationAccessReader
+import io.github.tuthan.paddock.reconcile.Observation
+import kotlinx.coroutines.Job
+import io.github.tuthan.paddock.alerts.AlertEvent
+import io.github.tuthan.paddock.alerts.AlertInbox
+import io.github.tuthan.paddock.alerts.AlertOutcome
+import io.github.tuthan.paddock.alerts.AlertReads
+import io.github.tuthan.paddock.alerts.AlertResolver
+import io.github.tuthan.paddock.alerts.FilePushStore
+import io.github.tuthan.paddock.alerts.MachineOutcome
+import io.github.tuthan.paddock.alerts.PushRegistry
+import io.github.tuthan.paddock.alerts.Unobserved
+import io.github.tuthan.paddock.herdr.Snapshot
+import io.github.tuthan.paddock.notify.UnifiedPushConnector
+import io.github.tuthan.paddock.attention.AgentRowModel
 import io.github.tuthan.paddock.host.HostUiModel
 import io.github.tuthan.paddock.hostkey.ChangedKey
 import io.github.tuthan.paddock.hostkey.FileHostKeyStore
@@ -14,7 +34,9 @@ import io.github.tuthan.paddock.ledger.Ledger
 import io.github.tuthan.paddock.lifecycle.AndroidTriggers
 import io.github.tuthan.paddock.lifecycle.ConnectionOwner
 import io.github.tuthan.paddock.lifecycle.SessionFactory
+import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.live.HostSessionController
+import io.github.tuthan.paddock.live.MonitoredHost
 import io.github.tuthan.paddock.ops.FileJournalStore
 import io.github.tuthan.paddock.ops.FileSnippetStore
 import io.github.tuthan.paddock.ops.ManualInputMode
@@ -38,8 +60,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Where the machine list stands at start-up. */
 enum class Boot { Loading, NoMachines, Ready }
@@ -68,6 +93,25 @@ class AppGraph(private val app: Application) {
     private val snippetStore = FileSnippetStore(File(files, "snippets.json"))
     /** Manual input (Esc and Ctrl+C) lives as long as the process and is never restored: a killed app starts with it off. */
     val manualInput = ManualInputMode()
+    /** Where a tapped alert enters: parsed, deduped, then resolved against a fresh read by [resolveAlert]. */
+    val alerts = AlertInbox(clock)
+
+    /** Pairing links from a tap or a paste: they only fill in Add machine, never connect or trust. */
+    val pairing = io.github.tuthan.paddock.hostprofile.PairingInbox()
+    /** Notifications Paddock raises itself, only while it is open but not in front (the watching mode of Phase 07). */
+    private val notifier = AndroidAlertNotifier(app)
+    val notificationAccess = NotificationAccessReader(app)
+    private val alertRules = LocalAlertRules()
+    /** Connector mode: registrations with a UnifiedPush distributor, one per machine. A push raises a generic notification through [notifier]. */
+    private val pushRegistry = PushRegistry(FilePushStore(File(files, "push.json")), clock = clock)
+    val push = UnifiedPushConnector(
+        app, pushRegistry, scope, clock,
+        machineName = { id -> profiles.get(id)?.name },
+        show = { notifier.show(it) },
+        herdInFront = { triggers.interactive.value },
+        hideOnLockScreen = { runCatching { settingsStore.load().hidePromptOnLockScreen }.getOrDefault(true) },
+    )
+    @Volatile private var alertWatcher: Job? = null
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
     val owner = ConnectionOwner(scope, SessionFactory { profile -> connect(profile) }, clock)
@@ -79,6 +123,22 @@ class AppGraph(private val app: Application) {
     private val controlScript: ByteArray = app.assets.open("paddock-control.py").use { it.readBytes() }
     private val controlPin: String = app.assets.open("paddock-control.sha256").use { it.readBytes().toString(Charsets.UTF_8).trim() }
     init { check(sha256Hex(controlScript) == controlPin) { "the bundled control helper does not match its pin" } }
+
+    /** The alert relay's script, unit and example configuration, each checked against its pin (host/SOURCE.json) when the graph is built. */
+    private fun pinnedAsset(name: String, pin: String): ByteArray = app.assets.open(name).use { it.readBytes() }.also {
+        val want = app.assets.open(pin).use { p -> p.readBytes().toString(Charsets.UTF_8).trim() }
+        check(sha256Hex(it) == want) { "the bundled $name does not match its pin" }
+    }
+    private val alertScript: ByteArray = pinnedAsset("paddock-alert-relay.py", "paddock-alert-relay.py.sha256")
+    val alertScriptSha256: String = sha256Hex(alertScript)
+    val alertUnit: String = pinnedAsset("paddock-alert-relay.service", "paddock-alert-relay.service.sha256").toString(Charsets.UTF_8)
+    val alertConfigExample: String = pinnedAsset("alert-relay.example.toml", "alert-relay.example.toml.sha256").toString(Charsets.UTF_8)
+
+    /** The permission-request writer and the Claude Code hook (Phase 08), each checked against its pin when the graph is built. */
+    private val decideScript: ByteArray = pinnedAsset("paddock-decide.py", "paddock-decide.py.sha256")
+    val decideScriptSha256: String = sha256Hex(decideScript)
+    private val hookScript: ByteArray = pinnedAsset("paddock-claude-permission-hook.py", "paddock-claude-permission-hook.py.sha256")
+    val hookScriptSha256: String = sha256Hex(hookScript)
 
     private val _boot = MutableStateFlow(Boot.Loading)
     val boot: StateFlow<Boot> = _boot.asStateFlow()
@@ -102,6 +162,8 @@ class AppGraph(private val app: Application) {
 
     fun start() {
         triggers.install()
+        // The herd in front of the user is the alert: notifications raised while it was away are cleared when it returns.
+        scope.launch { triggers.interactive.collect { if (it) runCatching { notifier.cancelAll() } } }
         scope.launch {
             _settings.value = settingsStore.load()
             _snippets.value = runCatching { snippetStore.load() }.getOrDefault(emptyList())
@@ -110,6 +172,7 @@ class AppGraph(private val app: Application) {
             val watched = all.firstOrNull { it.id == _settings.value.watchedProfileId } ?: all.firstOrNull()
             _profile.value = watched
             _boot.value = if (watched == null) Boot.NoMachines else Boot.Ready
+            runCatching { push.resume() }
             // The connection is claimed while the app is visible and released when it is not (the owner closes it after its grace).
             triggers.foreground.collectLatest { visible -> if (visible) _profile.value?.let { watch(it) } else controller?.pause() }
         }
@@ -147,15 +210,83 @@ class AppGraph(private val app: Application) {
         if (triggers.foreground.value) watch(profile)
     }
 
+    /** Makes [id] the watched machine, as tapping an alert for it needs. Null when this phone has no such machine. */
+    suspend fun watchProfile(id: String): HostProfile? {
+        val profile = profiles.get(id) ?: return null
+        if (_profile.value?.id != profile.id) {
+            _settings.value = _settings.value.copy(watchedProfileId = profile.id)
+            runCatching { settingsStore.save(_settings.value) }
+            _profile.value = profile
+            if (triggers.foreground.value) watch(profile)
+        }
+        return profile
+    }
+
+    /**
+     * The arrival rule for an alert (Phase 07): switch to the machine it names, wait for a read this phone made after the alert
+     * arrived on a live connection, and resolve the target against that read. A null outcome means no such read came in time.
+     */
+    suspend fun resolveAlert(event: AlertEvent.Arrived): AlertResolution {
+        val hint = event.hint
+        val fresh = freshHerd(hint.target.host.value, event.arrivedAtMillis)
+            ?: return AlertResolution(AlertOutcome.NoLongerObserved(Unobserved.UnknownMachine), "this phone", null, null)
+        val snapshot = fresh.snapshot ?: return AlertResolution(null, fresh.profile.name, null, fresh.host)
+        val outcome = AlertResolver.resolve(hint, fresh.profile.hostId, fresh.host!!.sessionName, snapshot)
+        val terminal = when (outcome) { is AlertOutcome.Current -> outcome.terminalId; is AlertOutcome.Changed -> outcome.terminalId; is AlertOutcome.NoLongerObserved -> null }
+        return AlertResolution(outcome, fresh.profile.name, terminal?.let { id -> fresh.host.home.value?.rows?.firstOrNull { it.key.target.terminalId == id } }, fresh.host)
+    }
+
+    /** What a push that named no terminal found: the same arrival rule, answered with counts from the fresh read. A null outcome means no such read came in time. */
+    suspend fun resolveMachine(event: AlertEvent.MachineWoke): MachineResolution {
+        val fresh = freshHerd(event.hint.host.value, event.arrivedAtMillis) ?: return MachineResolution(null, "this phone", unknownMachine = true)
+        return MachineResolution(fresh.snapshot?.let { AlertResolver.resolveMachine(it) }, fresh.profile.name, unknownMachine = false)
+    }
+
+    private class FreshHerd(val profile: HostProfile, val host: MonitoredHost?, val snapshot: Snapshot?)
+
+    /**
+     * The arrival rule: switch to [profileId]'s machine, wait for a read the phone made after [arrivedAtMillis] on a live
+     * connection. Null when the phone has no such machine; a null snapshot when no such read came within the arrival timeout.
+     */
+    private suspend fun freshHerd(profileId: String, arrivedAtMillis: Long): FreshHerd? {
+        val profile = watchProfile(profileId) ?: return null
+        val deadline = clock.nowMillis() + AlertArrival.TIMEOUT_MILLIS
+        val host = withTimeoutOrNull(AlertArrival.TIMEOUT_MILLIS) {
+            hostUi.view.map { (it.phase as? HostPhase.Monitoring)?.host }.first { it != null && it.profile.id == profile.id }
+        } ?: return FreshHerd(profile, null, null)
+        host.refresh()
+        val installed = AlertArrival.freshRead(AlertReads(host.sessionName, host.freshness, host.reconciler.installed), arrivedAtMillis, (deadline - clock.nowMillis()).coerceAtLeast(1_000))
+        return FreshHerd(profile, host, installed?.snapshot)
+    }
+
     /** Resumes the controller already watching [profile]; for any other profile, stops it and starts a new one. */
     private fun watch(profile: HostProfile) = synchronized(lock) {
         val c = controller
         if (c != null && c.profile == profile) { c.resume(); return@synchronized }
         c?.stop()
-        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin, journal = journal)
+        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin, journal = journal, alertScript = alertScript, alertSha256 = alertScriptSha256,
+            decideScript = decideScript, decideSha256 = decideScriptSha256, hookScript = hookScript, hookSha256 = hookScriptSha256)
         controller = next
         hostUi.attach(next)
         next.start()
+        alertWatcher?.cancel()
+        alertWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) raiseAlerts(p.host) } }
+    }
+
+    /**
+     * Watching mode: a terminal the open app saw become Blocked or Done raises a notification, unless alerts are off or the
+     * herd is in front. The reconciler only reports changes between two reads of one epoch, so a reconnect invents none.
+     */
+    private suspend fun raiseAlerts(host: MonitoredHost) {
+        host.reconciler.observations.collect { o ->
+            if (o !is Observation.StatusChanged) return@collect
+            val settings = _settings.value
+            val agent = host.reconciler.installed.value?.snapshot?.agents?.firstOrNull { it.terminalId == o.key.target.terminalId }
+            val alert = alertRules.alertFor(
+                o.to, agent, o.key.target, host.profile.name, clock.nowMillis() / 1000, settings.localAlerts, triggers.interactive.value, agent?.let { AttentionModel.title(it) },
+            ) ?: return@collect
+            runCatching { notifier.show(AlertContent.of(alert, settings.hidePromptOnLockScreen)) }
+        }
     }
 
     /** "Try again": a setup problem on a healthy connection runs the setup again; anything else refreshes the connection. */
@@ -164,6 +295,12 @@ class AppGraph(private val app: Application) {
         _profile.value?.let { owner.refresh(it.id) }
     }
     fun installRelay() { controller?.installRelay() }
+
+    /** Saved in the graph's scope: the herd redraws at once and leaving Settings straight after cannot drop the write. */
+    fun setAgentGlyphs(on: Boolean) {
+        _settings.value = _settings.value.copy(agentGlyphs = on)
+        scope.launch { runCatching { settingsStore.save(_settings.value) } }
+    }
 
     suspend fun setProtectSensitive(on: Boolean) {
         _settings.value = _settings.value.copy(protectSensitiveScreens = on)
@@ -174,6 +311,23 @@ class AppGraph(private val app: Application) {
     fun setSnippets(items: List<String>) {
         _snippets.value = items
         scope.launch { runCatching { snippetStore.save(items) } }
+    }
+
+    fun setLocalAlerts(on: Boolean) {
+        _settings.value = _settings.value.copy(localAlerts = on)
+        scope.launch { runCatching { settingsStore.save(_settings.value) } }
+    }
+
+    fun setHidePromptOnLockScreen(on: Boolean) {
+        _settings.value = _settings.value.copy(hidePromptOnLockScreen = on)
+        scope.launch { runCatching { settingsStore.save(_settings.value) } }
+    }
+
+    /** The permission dialog was shown once: from now on a refusal without a rationale means the system will not show it again. */
+    fun notePermissionAsked() {
+        if (_settings.value.notificationPermissionAsked) return
+        _settings.value = _settings.value.copy(notificationPermissionAsked = true)
+        scope.launch { runCatching { settingsStore.save(_settings.value) } }
     }
 
     fun setKeepPromptText(on: Boolean) {
@@ -221,5 +375,11 @@ class AppGraph(private val app: Application) {
         }
     }
 }
+
+/** What an arrived alert turned into. [row] is the agent's row when there is one; [host] lets the caller acknowledge a Done. */
+class AlertResolution(val outcome: AlertOutcome?, val machine: String, val row: AgentRowModel?, val host: MonitoredHost?)
+
+/** What a push for a whole machine turned into. [outcome] is null when the read did not come in time; [unknownMachine] when this phone has no such machine. */
+class MachineResolution(val outcome: MachineOutcome?, val machine: String, val unknownMachine: Boolean)
 
 const val IMPORTED_KEY_ID = "imported"

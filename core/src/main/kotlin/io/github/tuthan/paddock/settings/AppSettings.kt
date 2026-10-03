@@ -31,6 +31,20 @@ data class AppSettings(
      * completion seen on the machine) and agreed once. Until then the first tap asks.
      */
     val desktopFocusConfirmed: Boolean = false,
+    /**
+     * Off until the user turns it on, which is where the notification permission is asked for. On: while Paddock is open but not
+     * in front, an agent that becomes blocked or done raises a notification. It never watches in the background.
+     */
+    val localAlerts: Boolean = false,
+    /** On by default: the lock screen shows only a generic line; the agent's title appears once the phone is unlocked. */
+    val hidePromptOnLockScreen: Boolean = true,
+    /** Whether the notification permission dialog has been shown, so a refusal that Android will not repeat is told from a first ask. */
+    val notificationPermissionAsked: Boolean = false,
+    /**
+     * On by default: a row's tile draws a small glyph for the ten common agents and two letters for the rest. Off: two
+     * letters for every agent. It changes only what is drawn; nothing else depends on it.
+     */
+    val agentGlyphs: Boolean = true,
 )
 
 interface AppSettingsStore {

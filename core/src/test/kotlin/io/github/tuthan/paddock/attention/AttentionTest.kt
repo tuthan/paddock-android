@@ -82,11 +82,7 @@ class AttentionTest {
         assertEquals("blindpass › Mig", placed("Mig\u202E"), "labels are cleaned like titles")
     }
 
-    @Test fun monogramsFollowTheDesignAndNeverComeOutEmpty() {
-        assertEquals(listOf("cl", "cx", "oc", "gm", "sh"), listOf("claude", "Codex", "opencode", "gemini", "shell").map(Monogram::of))
-        assertEquals("fa", Monogram.of("fake"))
-        assertEquals("··", Monogram.of(null))
-        assertEquals("··", Monogram.of("—"))
+    @Test fun aRowCarriesTheAgentKindHerdrReports() {
         assertEquals("claude", home(agent("w1:p1", AgentStatus.Idle)).rows.single().agentKind)
     }
 

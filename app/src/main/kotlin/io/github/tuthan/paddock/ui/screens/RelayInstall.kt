@@ -34,6 +34,7 @@ fun RelayInstall(hostName: String, ask: HostPhase.NeedsRelayInstall, installing:
                     "It is written to the file below with owner-only permissions, and checked against the hash below before every use.",
                 style = PaddockTokens.type.body, color = c.text,
             )
+            ask.pluginNote?.let { Banner(it) }
             if (ask.replacing) Banner("A different file is already there. Installing replaces it.")
             Fact("File on the host", ask.destination)
             Fact("SHA-256 of the script", ask.expectedSha256)

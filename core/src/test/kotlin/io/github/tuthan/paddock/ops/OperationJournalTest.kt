@@ -353,4 +353,29 @@ class OperationJournalTest {
         assertFalse(1L in ids); assertFalse(2L in ids)
         assertTrue((OperationJournal.MAX_ROWS + 10L) in ids)
     }
+
+
+    @Test fun anAnswerRowKeepsTheRequestIdItAnsweredOnDiskAndAnOlderFileWithoutOneStillLoads() {
+        val j = journal()
+        val row = (j.begin(key(), OperationKind.Allow, requestId = "11111111-1111-4111-8111-111111111111") as Begin.Started).record
+        assertEquals("11111111-1111-4111-8111-111111111111", row.requestId)
+        assertEquals("11111111-1111-4111-8111-111111111111", store.load().records.single().requestId)
+        assertEquals("a restart still knows which request it answered", "11111111-1111-4111-8111-111111111111", journal().get(row.id)?.requestId)
+        val older = """{"nextId":2,"records":[{"id":1,"host":"h1","session":"s","terminalId":"t","epoch":1,"kind":"Focus","requestedAt":1}]}"""
+        val dir = java.nio.file.Files.createTempDirectory("journal").toFile()
+        try {
+            val f = java.io.File(dir, "j.json").apply { writeText(older) }
+            assertNull(FileJournalStore(f).load().records.single().requestId)
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun anAnswerThatLostItsLinkBlocksTheTerminalLikeAnyOtherUnknown() {
+        val j = journal()
+        val k = key()
+        val row = (j.begin(k, OperationKind.Deny, requestId = "11111111-1111-4111-8111-111111111111") as Begin.Started).record
+        j.markSent(row.id, "w1:p1"); j.unknown(row.id, "link lost")
+        assertTrue(j.begin(k, OperationKind.Allow, requestId = "22222222-2222-4222-8222-222222222222") is Begin.NeedsReread)
+        j.resolve(row.id, "re-read: taken by the hook")
+        assertTrue(j.begin(k, OperationKind.Allow, requestId = "22222222-2222-4222-8222-222222222222") is Begin.Started)
+    }
 }

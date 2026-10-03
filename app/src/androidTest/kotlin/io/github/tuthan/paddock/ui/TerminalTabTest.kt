@@ -3,6 +3,8 @@ package io.github.tuthan.paddock.ui
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
@@ -82,11 +84,11 @@ class TerminalTabTest {
         )
     }
 
-    private fun show(view: TerminalView, calls: Calls = Calls(), dark: Boolean = true, fontScale: Float? = null): Calls {
+    private fun show(view: TerminalView, calls: Calls = Calls(), dark: Boolean = true, fontScale: Float? = null, compact: Boolean = false): Calls {
         rule.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
-                PaddockTheme(darkTheme = dark) { Box(Modifier.fillMaxSize().padding(16.dp)) { TerminalTab(view, calls.actions()) } }
+                PaddockTheme(darkTheme = dark) { Box(Modifier.fillMaxSize().padding(16.dp)) { TerminalTab(view, calls.actions(), compact = compact) } }
             }
         }
         return calls
@@ -100,6 +102,66 @@ class TerminalTabTest {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val dir = File(ctx.getExternalFilesDir(null), "screens").apply { mkdirs() }
         File(dir, "$name.png").outputStream().use { rule.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    // ---- the keyboard shares the screen (compact) ----
+
+    private fun heightDp(node: androidx.compose.ui.test.SemanticsNodeInteraction): Float = with(rule.density) { node.fetchSemanticsNode().size.height.toDp().value }
+    private fun topPx(node: androidx.compose.ui.test.SemanticsNodeInteraction): Float = node.fetchSemanticsNode().boundsInRoot.top
+
+    @Test fun withTheKeyboardUpTheControlsAreOneLineAndTheKeysAreFortyDpBarsWithNoNote() {
+        show(viewOf(TerminalMode.Controlling), compact = true)
+        val keyboard = rule.onNodeWithText("Keyboard"); val release = rule.onNodeWithText("Release"); val fit = rule.onNodeWithText("Resize to fit")
+        keyboard.assertIsDisplayed(); release.assertIsDisplayed()
+        assertEquals("the three controls share one line", topPx(keyboard), topPx(release), 1f)
+        assertTrue("dense buttons are 36 dp, not 48 (${heightDp(keyboard)})", heightDp(keyboard) <= 40f && heightDp(keyboard) >= 36f)
+        fit.assertExists()
+        byDesc("Escape").assertIsDisplayed()
+        assertTrue("strip keys are 40 dp (${heightDp(byDesc("Escape"))})", heightDp(byDesc("Escape")) in 39.5f..40.5f)
+        byDesc("Control, for the next key").assertIsDisplayed()
+        rule.onNodeWithText("Keys and the keyboard go to the terminal", substring = true).assertDoesNotExist()
+        byDesc("Terminal: in control · 40×12").assertIsDisplayed()
+    }
+
+    @Test fun withoutTheKeyboardNothingChangesFortyEightDpButtonsTheNoteAndTheOldPill() {
+        show(viewOf(TerminalMode.Controlling), compact = false)
+        rule.onNodeWithText("Release").assertHeightIsAtLeast(48.dp)
+        byDesc("Escape").assertHeightIsAtLeast(48.dp)
+        rule.onNodeWithText("Keys and the keyboard go to the terminal", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("in control · 40×12").assertIsDisplayed()
+    }
+
+    @Test fun compactGivesTheGridMoreRoomInTheSameWindow() {
+        val compact = androidx.compose.runtime.mutableStateOf(false)
+        val view = viewOf(TerminalMode.Controlling)
+        rule.setContent {
+            PaddockTheme(darkTheme = true) { Box(Modifier.fillMaxSize().padding(16.dp)) { TerminalTab(view, Calls().actions(), compact = compact.value) } }
+        }
+        val roomy = heightDp(screenNode())
+        compact.value = true; rule.waitForIdle()
+        val dense = heightDp(screenNode())
+        assertTrue("the grid grew from $roomy dp to $dense dp", dense >= roomy + 50f)
+    }
+
+    @Test fun controllingFollowsTheCursorToTheBottomOfALargeTerminalButObservingShowsTheTop() {
+        val prompt = "${esc}[2J${esc}[1;1H${esc}[0m${esc}[71;1H${esc}[1;97mPROMPT> ${esc}[0m"
+        val big = { mode: TerminalMode -> viewOf(mode, cols = 40, rows = 79, text = prompt) }
+        fun lit(): Int {
+            val img = screenNode().captureToImage().asAndroidBitmap()
+            var n = 0
+            for (y in 0 until img.height) for (x in 0 until img.width) { val p = img.getPixel(x, y); if ((p shr 16 and 0xFF) > 200 && (p shr 8 and 0xFF) > 200 && (p and 0xFF) > 200) n++ }
+            return n
+        }
+        val mode = androidx.compose.runtime.mutableStateOf<TerminalMode>(TerminalMode.Observing)
+        rule.setContent {
+            PaddockTheme(darkTheme = true) { Box(Modifier.fillMaxWidth().height(300.dp).padding(16.dp)) { TerminalTab(big(mode.value), Calls().actions(), compact = true) } }
+        }
+        rule.waitForIdle()
+        val observing = lit()
+        mode.value = TerminalMode.Controlling; rule.waitForIdle()
+        val controlling = lit()
+        assertTrue("observing starts at the top of a 79-row terminal: no prompt in view ($observing lit pixels)", observing < 20)
+        assertTrue("controlling shows the prompt row at the bottom ($controlling lit pixels)", controlling > 60)
     }
 
     // ---- observing ----
@@ -169,8 +231,8 @@ class TerminalTabTest {
         show(viewOf(TerminalMode.Observing))
         rule.onNodeWithText("Keyboard").assertDoesNotExist()
         keyboardField().assertDoesNotExist()
-        byDesc("Control, for the next character typed").assertDoesNotExist()
-        byDesc("Page up").assertDoesNotExist()
+        for (d in listOf("Control", "Alt", "Shift")) byDesc("$d, for the next key").assertDoesNotExist()
+        for (d in listOf("Page up", "Insert", "Delete forward", "F1", "F12")) byDesc(d).assertDoesNotExist()
     }
 
     @Test fun theKeyboardButtonFocusesTheFieldAndWhatIsTypedGoesToTheTerminal() {
@@ -207,7 +269,7 @@ class TerminalTabTest {
     @Test fun stickyCtrlIsArmedByATapAndSpentOnTheNextCharacterOnly() {
         val calls = show(viewOf(TerminalMode.Controlling))
         rule.onNodeWithText("Keyboard").performClick()
-        val ctrl = byDesc("Control, for the next character typed")
+        val ctrl = byDesc("Control, for the next key")
         fun state() = ctrl.fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription)
         assertEquals("off", state())
         ctrl.performScrollTo().performClick()
@@ -226,6 +288,73 @@ class TerminalTabTest {
         for (d in listOf("Home", "End", "Page up", "Page down")) byDesc(d).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         assertArrayEquals("\u001B[H".toByteArray(), calls.keys[0]); assertArrayEquals("\u001B[F".toByteArray(), calls.keys[1])
         assertArrayEquals("\u001B[5~".toByteArray(), calls.keys[2]); assertArrayEquals("\u001B[6~".toByteArray(), calls.keys[3])
+    }
+
+    @Test fun insertDeleteAndAllTwelveFunctionKeysAreOnTheStrip() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        val keys = listOf("Insert", "Delete forward") + (1..12).map { "F$it" }
+        for (d in keys) byDesc(d).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(
+            listOf("\u001B[2~", "\u001B[3~", "\u001BOP", "\u001BOQ", "\u001BOR", "\u001BOS", "\u001B[15~", "\u001B[17~", "\u001B[18~", "\u001B[19~", "\u001B[20~", "\u001B[21~", "\u001B[23~", "\u001B[24~"),
+            typed(calls),
+        )
+    }
+
+    private fun modState(d: String) = byDesc(d).fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription)
+    private fun arm(d: String) { byDesc(d).performScrollTo().performClick() }
+    private fun tap(d: String) { byDesc(d).performScrollTo().performClick() }
+
+    @Test fun shiftCtrlAndAltAreOnTheStripOffUntilTapped() {
+        show(viewOf(TerminalMode.Controlling))
+        for (d in listOf("Control", "Alt", "Shift")) {
+            byDesc("$d, for the next key").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+            assertEquals("off", modState("$d, for the next key"))
+        }
+    }
+
+    @Test fun anArmedModifierChangesTheNextStripKeyAndIsSpentByIt() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        arm("Shift, for the next key"); tap("Tab")
+        assertEquals("off", modState("Shift, for the next key"))
+        arm("Control, for the next key"); tap("Right arrow")
+        arm("Alt, for the next key"); tap("Enter")
+        arm("Shift, for the next key"); arm("Alt, for the next key"); arm("Control, for the next key"); tap("Home")
+        tap("Up arrow")
+        assertEquals(listOf("\u001B[Z", "\u001B[1;5C", "\u001B\r", "\u001B[1;8H", "\u001B[A"), typed(calls))
+        for (d in listOf("Control", "Alt", "Shift")) assertEquals("$d spent", "off", modState("$d, for the next key"))
+    }
+
+    @Test fun anArmedModifierAlsoChangesTheSecondRowsKeys() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        arm("Shift, for the next key"); tap("Page up")
+        arm("Control, for the next key"); tap("F5")
+        arm("Alt, for the next key"); tap("Delete forward")
+        assertEquals(listOf("\u001B[5;2~", "\u001B[15;5~", "\u001B[3;3~"), typed(calls))
+    }
+
+    @Test fun controlCIsTheSameWithAModifierArmedAndSpendsIt() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        arm("Alt, for the next key"); tap("Control C")
+        assertArrayEquals(byteArrayOf(0x03), calls.keys.single())
+        assertEquals("off", modState("Alt, for the next key"))
+    }
+
+    @Test fun aModifierTappedTwiceIsOffAgainAndSentNothing() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        arm("Alt, for the next key"); assertEquals("armed", modState("Alt, for the next key"))
+        arm("Alt, for the next key"); assertEquals("off", modState("Alt, for the next key"))
+        tap("Escape")
+        assertArrayEquals(byteArrayOf(0x1B), calls.keys.single())
+    }
+
+    @Test fun anArmedAltAndAKeyboardCharacterAreEscapeThenTheCharacter() {
+        val calls = show(viewOf(TerminalMode.Controlling))
+        rule.onNodeWithText("Keyboard").performClick()
+        arm("Alt, for the next key")
+        keyboardField().performTextInput("b")
+        rule.waitForIdle()
+        assertEquals(listOf("\u001Bb"), typed(calls))
+        assertEquals("spent on the one character", "off", modState("Alt, for the next key"))
     }
 
     @Test fun nothingAsksForControlOnItsOwn() {

@@ -173,12 +173,42 @@ class TerminalFlowTest {
         pumpSleep(1_500)
         log("KEYBOARD after the tap the button reads: ${if (hasNode(hasText("Hide keyboard"))) "Hide keyboard (the IME is up)" else "Keyboard (no IME shown)"}")
         shoot("soft-keyboard")
+        if (hasNode(hasText("Hide keyboard"))) {
+            // With the keyboard really up the screen is the focus layout: the tabs and the state chip are gone and the grid keeps room.
+            val density = rule.density
+            val grid = rule.onAllNodes(desc("Terminal, ")).fetchSemanticsNodes().first().size.height
+            val gridDp = with(density) { grid.toDp().value }
+            val escDp = with(density) { rule.onNode(desc("Escape", substring = false)).fetchSemanticsNode().size.height.toDp().value }
+            log("KEYBOARD the grid is $gridDp dp tall with the keyboard up; the Esc key is $escDp dp")
+            assertFalse("the tabs are hidden while the keyboard is up", hasNode(hasText("Output")))
+            assertTrue("the grid keeps room with the keyboard up ($gridDp dp)", gridDp >= 150f)
+            assertTrue("the strip keys are the 40 dp bars ($escDp dp)", escDp in 39.5f..40.5f)
+        }
         checkpoint("soft-keyboard-ready", pump = true)
         waitFor("the soft-typed output on the screen") { screenText().lines().any { it.trim() == "soft-e2e" } }
         shoot("soft-typed")
         if (hasNode(hasText("Hide keyboard"))) rule.onNodeWithText("Hide keyboard").performClick()
         pumpSleep(800)
         assertTrue("still in control after the keyboard was used", pill() == "in control")
+
+        // --- the key strip's modifiers and extra keys, against the real pane: `cat -v` prints each key as the pane's terminal
+        // received it (^[ is ESC), with the tty's own echo off so a line appears once. The last tap of each line is Enter. ---
+        fun tapKey(d: String) { rule.onNode(desc(d, substring = false)).performScrollTo().performClick() }
+        typeLine("stty -echo"); typeLine("cat -v"); pumpSleep(700)
+        tapKey("Shift, for the next key"); tapKey("Tab")
+        tapKey("Control, for the next key"); tapKey("Right arrow")
+        tapKey("Insert"); tapKey("Delete forward")
+        tapKey("Enter")
+        waitFor("Shift+Tab, Ctrl+Right, Insert and Delete as the pane received them") { screenText().lines().any { it.trim() == "^[[Z^[[1;5C^[[2~^[[3~" } }
+        tapKey("F1"); tapKey("F12")
+        tapKey("Shift, for the next key"); tapKey("Page up")
+        tapKey("Alt, for the next key"); tapKey("Enter")
+        waitFor("F1, F12, Shift+PgUp and Alt+Enter as the pane received them") { screenText().lines().any { it.trim() == "^[OP^[[24~^[[5;2~^[" } }
+        shoot("strip-keys")
+        checkpoint("strip-keys", pump = true)
+        tapKey("Control C"); pumpSleep(500)
+        typeLine("stty echo"); pumpSleep(500)
+        assertTrue("still in control after the strip's keys", pill() == "in control")
 
         // --- AC-05.8: a 200-line scroll. Once from the hardware keyboard (to show the keys drive it), then five times with the
         // script starting it from the host while this thread is idle, so the numbers are the app's and not the test harness's.

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,12 +16,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -46,6 +49,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.tuthan.paddock.terminal.EndReason
+import io.github.tuthan.paddock.terminal.Mods
 import io.github.tuthan.paddock.terminal.TerminalMode
 import io.github.tuthan.paddock.terminal.TerminalNotice
 import io.github.tuthan.paddock.terminal.TerminalView
@@ -112,7 +116,14 @@ internal fun endedText(reason: EndReason): Pair<String, String> = when (reason) 
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier = Modifier) {
+fun TerminalTab(
+    view: TerminalView, actions: TerminalActions, modifier: Modifier = Modifier,
+    /**
+     * The Android keyboard shares the screen: the controls stay on one scrolling line, the keys are 40 dp bars with no note under
+     * them, and the grid follows the cursor. Follows the keyboard itself; a test sets it.
+     */
+    compact: Boolean = WindowInsets.isImeVisible,
+) {
     val c = PaddockTokens.colors
     val density = LocalDensity.current
     val controlling = view.mode == TerminalMode.Controlling
@@ -132,37 +143,47 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
     val keyboardFocus = remember { FocusRequester() }
     var keyboardFocused by remember { mutableStateOf(false) }
     val keyboardShown = WindowInsets.isImeVisible && keyboardFocused
-    var ctrlArmed by remember { mutableStateOf(false) }
-    LaunchedEffect(controlling) { if (!controlling) { keyboard?.hide(); ctrlArmed = false } }
+    var armed by remember { mutableStateOf(Mods.None) }
+    // Every key sent asks the grid to show the cursor again, even after the person moved the grid by hand.
+    var typed by remember { mutableIntStateOf(0) }
+    val send: (ByteArray) -> Unit = { bytes -> typed++; actions.onKey(bytes) }
+    LaunchedEffect(controlling) { if (!controlling) { keyboard?.hide(); armed = Mods.None } }
     val notice = view.notice
     if (notice is TerminalNotice.Resynced) LaunchedEffect(notice, view.frames) { delay(4_000); actions.onDismissNotice() }
 
-    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
-            Chip(
-                pillText(view), description = "Terminal: ${pillText(view)}", tone = if (controlling) c.attention else null,
-                icon = if (controlling) PaddockIcons.Key else PaddockIcons.Eye,
+    val controls: @Composable () -> Unit = {
+        Chip(
+            if (compact) pillText(view).removePrefix("in ") else pillText(view), description = "Terminal: ${pillText(view)}", tone = if (controlling) c.attention else null,
+            icon = if (controlling) PaddockIcons.Keyboard else PaddockIcons.Eye,
+        )
+        when (view.mode) {
+            TerminalMode.Observing -> if (notice !is TerminalNotice.HelperNeeded) PaddockButton(
+                "Request control", { if (view.controlWouldResizeDesktop) asking = Ask.TakeControlResizes(fitCells.first, fitCells.second) else actions.onRequestControl() },
+                kind = ButtonKind.Ghost, small = true, fillWidth = false, icon = PaddockIcons.Keyboard, dense = compact,
             )
-            when (view.mode) {
-                TerminalMode.Observing -> if (notice !is TerminalNotice.HelperNeeded) PaddockButton(
-                    "Request control", { if (view.controlWouldResizeDesktop) asking = Ask.TakeControlResizes(fitCells.first, fitCells.second) else actions.onRequestControl() },
-                    kind = ButtonKind.Ghost, small = true, fillWidth = false, icon = PaddockIcons.Key,
+            TerminalMode.Controlling -> {
+                PaddockButton(
+                    if (keyboardShown) "Hide keyboard" else "Keyboard",
+                    {
+                        if (keyboardShown) { keyboard?.hide(); runCatching { focus.requestFocus() } }
+                        else { runCatching { keyboardFocus.requestFocus() }; keyboard?.show() }
+                    },
+                    kind = ButtonKind.Ghost, small = true, fillWidth = false, dense = compact,
                 )
-                TerminalMode.Controlling -> {
-                    PaddockButton(
-                        if (keyboardShown) "Hide keyboard" else "Keyboard",
-                        {
-                            if (keyboardShown) { keyboard?.hide(); runCatching { focus.requestFocus() } }
-                            else { runCatching { keyboardFocus.requestFocus() }; keyboard?.show() }
-                        },
-                        kind = ButtonKind.Ghost, small = true, fillWidth = false,
-                    )
-                    PaddockButton("Release", actions.onRelease, kind = ButtonKind.Secondary, small = true, fillWidth = false)
-                    PaddockButton("Resize to fit", { asking = Ask.Resize(fitCells.first, fitCells.second) }, kind = ButtonKind.Ghost, small = true, fillWidth = false)
-                }
-                else -> Unit
+                PaddockButton("Release", actions.onRelease, kind = ButtonKind.Secondary, small = true, fillWidth = false, dense = compact)
+                PaddockButton("Resize to fit", { asking = Ask.Resize(fitCells.first, fitCells.second) }, kind = ButtonKind.Ghost, small = true, fillWidth = false, dense = compact)
             }
+            else -> Unit
         }
+    }
+
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp)) {
+        // One line while the keyboard is up (it scrolls sideways if the four do not fit); wraps otherwise.
+        if (compact) Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
+        ) { controls() }
+        else FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) { controls() }
         NoticeBanner(notice, actions)
         if (ended != null) {
             val (what, why) = endedText(ended.reason)
@@ -185,8 +206,8 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
             }
             if (controlling) {
                 SoftKeyboardInput(
-                    focusRequester = keyboardFocus, ctrlArmed = ctrlArmed, onCtrlSpent = { ctrlArmed = false },
-                    onFocus = { keyboardFocused = it }, onBytes = { bytes -> actions.onKey(bytes) },
+                    focusRequester = keyboardFocus, armed = armed, onArmedSpent = { armed = Mods.None },
+                    onFocus = { keyboardFocused = it }, onBytes = send,
                     modifier = Modifier.align(Alignment.BottomStart).testTag(KEYBOARD_FIELD_TAG),
                 )
             }
@@ -197,6 +218,7 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
                 onViewSize = { viewWidth = it },
                 description = terminalDescription(view.grid, pillText(view).replace(" · ", ", ")),
                 dimmed = ended != null, frame = view.frames, arrivedNanos = view.lastFrameArrivedNanos,
+                followCursor = controlling, refollow = typed,
                 // Focus and keys sit on the node that TalkBack reads, so the terminal is one stop with one description.
                 modifier = Modifier.focusRequester(focus).onFocusChanged { focused = it.isFocused }.focusable()
                     .onPreviewKeyEvent { e ->
@@ -204,15 +226,15 @@ fun TerminalTab(view: TerminalView, actions: TerminalActions, modifier: Modifier
                         if (!controlling) return@onPreviewKeyEvent false
                         val bytes = HardwareKeys.encode(e.key.nativeKeyCode, e.utf16CodePoint, e.isShiftPressed, e.isAltPressed, e.isCtrlPressed)
                             ?: return@onPreviewKeyEvent false
-                        if (e.type == KeyEventType.KeyDown) actions.onKey(bytes)
+                        if (e.type == KeyEventType.KeyDown) send(bytes)
                         true
                     },
             )
         }
         KeyStrip(
-            onKey = { bytes -> if (controlling) actions.onKey(bytes) }, enabled = controlling,
+            onKey = { bytes -> if (controlling) send(bytes) }, enabled = controlling, dense = compact,
             note = if (controlling) "Keys and the keyboard go to the terminal. Release to stop." else "Request control to use the keys. Observing never sends a key.",
-            ctrlArmed = if (controlling) ctrlArmed else null, onToggleCtrl = { ctrlArmed = !ctrlArmed },
+            armed = if (controlling) armed else null, onToggleMod = { armed = armed.toggled(it) }, onModsSpent = { armed = Mods.None },
         )
         if (!controlling && ended == null) Note("Pinch to change the text size, drag to move, double tap to fit. None of it changes the terminal.")
     }

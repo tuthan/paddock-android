@@ -113,6 +113,58 @@ class HostSessionControllerTest {
         c.stop()
     }
 
+    private val pluginDir = "/home/jdoe/.local/share/herdr/plugins/paddock"
+    private val pluginListing = """{"id":"cli:plugin","result":{"plugins":[{"plugin_id":"paddock","plugin_root":"$pluginDir","version":"0.1.0","enabled":true}],"type":"plugin_list"}}"""
+    private val oneSession = """{"sessions":[{"name":"main","default":true,"running":true,"session_dir":"/d/main","socket_path":"/d/main/herdr.sock"}]}"""
+    private val pushedPath = "/home/jdoe/.local/share/paddock/paddock-relay.py"
+
+    /** A host with the Paddock plugin installed, whose relay files are [files] (path to hash); a path not in the map is missing. */
+    private fun pluginHost(files: Map<String, String>) = host(
+        sha256sum = { argv -> files[argv.last()]?.let { result(0, "$it  ${argv.last()}\n") } ?: result(1, "", "No such file") },
+        other = { argv -> if (argv.getOrNull(1) == "plugin") result(0, pluginListing) else result(0, oneSession) },
+    )
+
+    @Test fun theRelayInThePluginDirectoryIsUsedWithoutAskingOrWritingAnything() = runBlocking<Unit> {
+        val session = pluginHost(mapOf("$pluginDir/host/paddock-relay.py" to sha))
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("monitoring") { c.phase.value is HostPhase.Monitoring }
+        until("the relay is started") { session.streams.isNotEmpty() }
+        assertTrue(session.streams.first().argv.contains("$pluginDir/host/paddock-relay.py"), session.streams.first().argv.toString())
+        assertTrue(session.execs.none { (_, stdin) -> stdin != null }, "nothing was written to the host")
+        assertEquals(listOf("/usr/bin/herdr", "plugin", "list", "--plugin", "paddock", "--json"), session.execs.map { it.first }.single { it.getOrNull(1) == "plugin" })
+        c.stop()
+    }
+
+    @Test fun aPluginRelayThatIsNotThePinIsNotRunAndTheAskNamesTheVersionFound() = runBlocking<Unit> {
+        val session = pluginHost(mapOf("$pluginDir/host/paddock-relay.py" to "0".repeat(64)))
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("ask") { c.phase.value is HostPhase.NeedsRelayInstall }
+        val ask = c.phase.value as HostPhase.NeedsRelayInstall
+        assertEquals(pushedPath, ask.destination, "the push install is still offered, at the push destination")
+        assertEquals(false, ask.replacing)
+        assertTrue(ask.pluginNote!!.contains("0.1.0") && ask.pluginNote!!.contains("--ref"), ask.pluginNote)
+        assertTrue(session.streams.isEmpty() && session.execs.none { (_, stdin) -> stdin != null }, "nothing ran and nothing was written")
+        c.stop()
+    }
+
+    @Test fun aPushedPinnedRelayStillRunsWhenThePluginCarriesAnotherOneAndNobodyIsAsked() = runBlocking<Unit> {
+        val session = pluginHost(mapOf("$pluginDir/host/paddock-relay.py" to "0".repeat(64), pushedPath to sha))
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("monitoring") { c.phase.value is HostPhase.Monitoring }
+        until("the relay is started") { session.streams.isNotEmpty() }
+        assertTrue(session.streams.first().argv.contains(pushedPath), session.streams.first().argv.toString())
+        c.stop()
+    }
+
+    @Test fun aHostWithoutThePluginAsksAsBeforeAndSaysNothingAboutOne() = runBlocking<Unit> {
+        val session = host(sha256sum = { result(1, "", "No such file") }, other = { argv -> if (argv.getOrNull(1) == "plugin") result(0, """{"result":{"plugins":[],"type":"plugin_list"}}""") else result(1) })
+        val c = controller(FakeLease(Connection.Connected(session, 1))).also { it.start() }
+        until("ask") { c.phase.value is HostPhase.NeedsRelayInstall }
+        assertNull((c.phase.value as HostPhase.NeedsRelayInstall).pluginNote)
+        assertEquals(pushedPath, (c.phase.value as HostPhase.NeedsRelayInstall).destination)
+        c.stop()
+    }
+
     @Test fun herdrMissingFromEveryUsualPlaceIsAHostFactNamingThePlaces() = runBlocking<Unit> {
         herdrFound = false
         val session = host(sha256sum = { result(0, "$sha  x\n") })

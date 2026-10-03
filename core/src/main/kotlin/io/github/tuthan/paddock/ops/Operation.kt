@@ -2,7 +2,7 @@ package io.github.tuthan.paddock.ops
 
 import io.github.tuthan.paddock.identity.StalePane
 import io.github.tuthan.paddock.identity.TerminalKey
-import io.github.tuthan.paddock.relay.HerdrError
+import io.github.tuthan.paddock.relay.HostRefusal
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -58,6 +58,7 @@ object Operation {
         kind: OperationKind,
         payload: String? = null,
         keepText: Boolean = false,
+        requestId: String? = null,
         resolveTarget: () -> String,
         preflight: suspend (paneId: String) -> Preflight = { Preflight.Go() },
         send: suspend (paneId: String, beforeWrite: suspend () -> Unit) -> T,
@@ -65,7 +66,7 @@ object Operation {
         val pane = try { resolveTarget() } catch (e: StalePane) { return OperationResult.Stale(e.key) }
 
         val row = try {
-            when (val b = io { journal.begin(key, kind, payload, keepText) }) {
+            when (val b = io { journal.begin(key, kind, payload, keepText, requestId) }) {
                 is Begin.Started -> b.record
                 is Begin.InFlight -> return OperationResult.Busy(b.first)
                 is Begin.NeedsReread -> return OperationResult.NeedsReread(b.unknown)
@@ -94,7 +95,7 @@ object Operation {
         } catch (e: CancellationException) {
             settle { lose(journal, row, e) }
             throw e
-        } catch (e: HerdrError) {
+        } catch (e: HostRefusal) {
             val state = journal.get(row.id)?.outcome
             if (state == OperationOutcome.Sent) OperationResult.Rejected(settle { journal.rejected(row.id, e.code, e.message.orEmpty()) }, e.code, e.message.orEmpty())
             else notSent(journal, row, e.code, e.message.orEmpty())

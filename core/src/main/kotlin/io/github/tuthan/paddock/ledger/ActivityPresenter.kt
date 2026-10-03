@@ -95,6 +95,8 @@ class ActivityPresenter(
                 OperationKind.Esc -> "You sent Esc to $who"
                 OperationKind.CtrlC -> "You sent Ctrl+C to $who"
                 OperationKind.Focus -> "You focused $who on the desktop"
+                OperationKind.Allow -> "You answered Yes to a permission request from $who"
+                OperationKind.Deny -> "You answered No to a permission request from $who"
             }
             // The sentence says what was attempted; how it ended is in the suffix and, in full, in the detail. A prompt's text is
             // never here: the journal keeps a hash unless the user turned on keeping it, and Activity does not show it either way.

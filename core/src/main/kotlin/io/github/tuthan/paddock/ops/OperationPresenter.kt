@@ -70,6 +70,7 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
             }
             OperationKind.Esc, OperationKind.CtrlC -> "Paddock cannot tell whether the key reached the agent. Look at the terminal."
             OperationKind.Focus -> "Paddock cannot tell whether the desktop focused the agent. Look at the desktop."
+            OperationKind.Allow, OperationKind.Deny -> "Paddock cannot tell whether Claude Code applied the answer. The request's files on the host say what the hook did with it; look at the agent."
         }
         return listOf(state, what)
     }
@@ -91,9 +92,9 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
     /** A journal row as one line, for Activity and the agent screen. */
     fun describe(record: OperationRecord): String = when (record.outcome) {
         OperationOutcome.Requested -> "${record.kind.wire} requested ${at(record.requestedAt)}"
-        OperationOutcome.Sent -> "${record.kind.wire} sent${record.sentAt?.let { " ${at(it)}" }.orEmpty()}, waiting for herdr's answer"
+        OperationOutcome.Sent -> "${record.kind.wire} sent${record.sentAt?.let { " ${at(it)}" }.orEmpty()}, waiting for ${if (record.kind == OperationKind.Allow || record.kind == OperationKind.Deny) "the host's" else "herdr's"} answer"
         OperationOutcome.Acknowledged -> acknowledged(record.kind, record)
-        OperationOutcome.Rejected -> "${record.kind.wire} refused by herdr${record.code?.let { " ($it)" }.orEmpty()}"
+        OperationOutcome.Rejected -> "${record.kind.wire} refused by ${if (record.kind == OperationKind.Allow || record.kind == OperationKind.Deny) "the host" else "herdr"}${record.code?.let { " ($it)" }.orEmpty()}"
         OperationOutcome.NotSent -> "${record.kind.wire} not sent${record.code?.let { reasonWords(it)?.let { w -> " ($w)" } }.orEmpty()}"
         OperationOutcome.Unknown -> unknownText(record)
     }
@@ -104,10 +105,15 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
             OperationKind.Prompt -> "Prompt sent$time · accepted by herdr, which is not a receipt for any turn"
             OperationKind.Esc, OperationKind.CtrlC -> "${kind.wire} sent$time · accepted by herdr"
             OperationKind.Focus -> "The desktop now has this agent focused${record.sentAt?.let { " · ${at(it)}" }.orEmpty()}"
+            OperationKind.Allow, OperationKind.Deny -> "${kind.wire} written$time · for the hook to hand to Claude Code, which this does not prove"
         }
     }
 
-    private fun rejected(kind: OperationKind, r: OperationResult.Rejected): ResultLine = when (r.code) {
+    private fun rejected(kind: OperationKind, r: OperationResult.Rejected): ResultLine =
+        if (kind == OperationKind.Allow || kind == OperationKind.Deny) ResultLine(io.github.tuthan.paddock.answers.AnswerCodes.sentence(r.code) ?: "The host refused the ${kind.wire}: ${r.message.ifBlank { r.code }}", ResultTone.Refused, opensTerminal = true)
+        else rejectedByHerdr(kind, r)
+
+    private fun rejectedByHerdr(kind: OperationKind, r: OperationResult.Rejected): ResultLine = when (r.code) {
         "agent_blocked" -> ResultLine("herdr refused the prompt: the agent is blocked and needs an answer. Nothing was typed. Use the terminal.", ResultTone.Refused, opensTerminal = true)
         "agent_not_ready" -> ResultLine("herdr refused: the agent is not ready for input (${r.message}). Nothing was typed.", ResultTone.Refused, opensTerminal = true)
         "agent_not_found" -> ResultLine("herdr no longer knows this agent. Nothing was sent.", ResultTone.Refused)
@@ -117,7 +123,9 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
 
     private fun notSent(kind: OperationKind, r: OperationResult.NotSent): ResultLine {
         val notReady = NotReadyReason.entries.firstOrNull { it.code == r.reason }
+        val answer = io.github.tuthan.paddock.answers.NotAnswerable.entries.firstOrNull { it.code == r.reason }
         return when {
+            answer != null -> ResultLine("${answer.sentence} Nothing was sent.", ResultTone.Refused, opensTerminal = true)
             notReady != null -> ResultLine("${notReady.sentence} Nothing was sent.", ResultTone.Refused, opensTerminal = notReady == NotReadyReason.Blocked)
             r.reason == "pane_moved" -> ResultLine("This agent's pane now holds another terminal. Re-read, then try again. Nothing was sent.", ResultTone.Problem)
             r.reason == "preflight_failed" -> ResultLine("Could not read the agent just before sending, so nothing was sent. (${r.message})", ResultTone.Problem)

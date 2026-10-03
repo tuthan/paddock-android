@@ -122,7 +122,8 @@ class ReconcilerTest {
         r.invalidate("start")
         withTimeout(2_000) { r.installed.first { it != null } }
         assertEquals(listOf(1_000L, 2_000L), sleeps)
-        assertNull(r.lastFailure.value)
+        // The install and the clearing of the failure are two writes; the test can run between them under load.
+        withTimeout(2_000) { r.lastFailure.first { it == null } }
         loop.cancel()
     }
 

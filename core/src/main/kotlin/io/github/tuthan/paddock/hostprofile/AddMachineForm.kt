@@ -13,6 +13,12 @@ data class AddMachineInput(
     val importedKeyId: String? = null,
     /** Optional herdr session name; blank means the running default. */
     val session: String = "",
+    /**
+     * The host-key fingerprints a pairing link named for this host and port, while the fields still say what the link said;
+     * null for a machine typed in. [AddMachineForm.profile] ignores it: the caller hands it to the host-key broker, which
+     * compares the key the machine presents with it before the trust dialog.
+     */
+    val pairedFingerprints: List<String>? = null,
 )
 
 /** One message per field, null when the field is fine. */

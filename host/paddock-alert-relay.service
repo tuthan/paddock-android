@@ -1,0 +1,19 @@
+# Paddock alert relay, as a systemd user unit. Enabling it is your step, the app never does it:
+#   mkdir -p ~/.config/systemd/user && cp paddock-alert-relay.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now paddock-alert-relay.service
+#   loginctl enable-linger "$USER"      # keeps the user manager (and this unit) running without a login session
+# Needs ~/.config/paddock/alert-relay.toml (see alert-relay.example.toml) and Python 3.11 or newer.
+[Unit]
+Description=Paddock alert relay (herdr attention hints to a phone)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 %h/.local/share/paddock/paddock-alert-relay.py --config %h/.config/paddock/alert-relay.toml
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

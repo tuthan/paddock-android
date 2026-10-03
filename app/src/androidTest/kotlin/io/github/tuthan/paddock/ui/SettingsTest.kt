@@ -14,6 +14,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -107,14 +108,75 @@ class SettingsTest {
         rule.onNodeWithText("Font licences").assertDoesNotExist()
     }
 
-    @Test fun notificationRowsAreDisabledAndSaySo() {
-        show()
-        for (label in listOf("Needs you", "Done")) {
-            val node = rule.onNode(hasContentDescription("$label, Not yet", substring = true)).performScrollTo()
-            node.assertIsDisplayed()
-            assertTrue(node.fetchSemanticsNode().config.contains(SemanticsProperties.Disabled))
-            assertTrue(node.fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription)!!.single().endsWith("unavailable"))
+    private fun showAlerts(alerts: io.github.tuthan.paddock.ui.screens.AlertsState, fontScale: Float? = null, onAlerts: (Boolean) -> Unit = {}, onHide: (Boolean) -> Unit = {}, onRecovery: (io.github.tuthan.paddock.alerts.AccessRecovery.Action) -> Unit = {}) {
+        rule.setContent {
+            val base = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
+                PaddockTheme(darkTheme = true) {
+                    Settings(SettingsState(true, LocalAccess.NotRequired, "0.1.0", machine = machine, alerts = alerts), {}, {}, {}, onLocalAlerts = onAlerts, onHideOnLockScreen = onHide, onAlertRecovery = onRecovery)
+                }
+            }
         }
+    }
+
+    private fun announced(label: String) = rule.onNodeWithText(label).fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription)
+
+    @Test fun alertsAreOffByDefaultAndTheLockScreenRedactionIsOn() {
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState())
+        rule.onNodeWithText("Alerts from this app").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        assertEquals("Off", announced("Alerts from this app"))
+        rule.onNodeWithText("Hide prompt text on the lock screen").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        assertEquals("On", announced("Hide prompt text on the lock screen"))
+        rule.onNodeWithText("Paddock does not watch in the background in this version.", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Every notification has two buttons, Open and Review.", substring = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun theSwitchesReportTheirNewValues() {
+        var alerts: Boolean? = null; var hide: Boolean? = null
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState(), onAlerts = { alerts = it }, onHide = { hide = it })
+        rule.onNodeWithText("Alerts from this app").performScrollTo().performClick()
+        rule.onNodeWithText("Hide prompt text on the lock screen").performScrollTo().performClick()
+        assertEquals(true, alerts); assertEquals(false, hide)
+    }
+
+    @Test fun aDeniedPermissionHasARecoveryRowWithAnActionWhileAlertsAreOn() {
+        var action: io.github.tuthan.paddock.alerts.AccessRecovery.Action? = null
+        val recovery = io.github.tuthan.paddock.alerts.NotificationAccessRules.recovery(io.github.tuthan.paddock.alerts.NotificationAccess.NeedsPermission(canAsk = true))
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState(localAlerts = true, recovery = recovery), onRecovery = { action = it })
+        rule.onNodeWithText("Paddock needs your permission to show notifications.", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Allow notifications").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(io.github.tuthan.paddock.alerts.AccessRecovery.Action.AskPermission, action)
+    }
+
+    @Test fun aPermissionAndroidWillNotAskForAgainSendsTheUserToSystemSettings() {
+        var action: io.github.tuthan.paddock.alerts.AccessRecovery.Action? = null
+        val recovery = io.github.tuthan.paddock.alerts.NotificationAccessRules.recovery(io.github.tuthan.paddock.alerts.NotificationAccess.NeedsPermission(canAsk = false))
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState(localAlerts = true, recovery = recovery), onRecovery = { action = it })
+        rule.onNodeWithText("Notifications are blocked for Paddock in system settings", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Open settings").performScrollTo().performClick()
+        assertEquals(io.github.tuthan.paddock.alerts.AccessRecovery.Action.OpenAppSettings, action)
+    }
+
+    @Test fun aDisabledChannelIsExplainedByName() {
+        var action: io.github.tuthan.paddock.alerts.AccessRecovery.Action? = null
+        val recovery = io.github.tuthan.paddock.alerts.NotificationAccessRules.recovery(io.github.tuthan.paddock.alerts.NotificationAccess.ChannelsBlocked(listOf(io.github.tuthan.paddock.alerts.AlertChannel.NeedsYou)))
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState(localAlerts = true, recovery = recovery), onRecovery = { action = it })
+        rule.onNodeWithText("The \"Needs you\" channel is turned off in system settings", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Open channel settings").performScrollTo().performClick()
+        assertEquals(io.github.tuthan.paddock.alerts.AccessRecovery.Action.OpenChannelSettings, action)
+    }
+
+    @Test fun noRecoveryRowShowsWhileAlertsAreOffOrWhenNothingIsWrong() {
+        val recovery = io.github.tuthan.paddock.alerts.NotificationAccessRules.recovery(io.github.tuthan.paddock.alerts.NotificationAccess.NeedsPermission(canAsk = true))
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState(localAlerts = false, recovery = recovery))
+        rule.onNodeWithText("Allow notifications").assertDoesNotExist()
+    }
+
+    @Test fun theAlertsSectionHoldsAt200PercentFont() {
+        val recovery = io.github.tuthan.paddock.alerts.NotificationAccessRules.recovery(io.github.tuthan.paddock.alerts.NotificationAccess.NeedsPermission(canAsk = true))
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState(localAlerts = true, recovery = recovery), fontScale = 2f)
+        rule.onNodeWithText("Allow notifications").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        rule.onNodeWithText("Hide prompt text on the lock screen").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun theThemeRowIsFixedAndNamesThePalette() {
@@ -293,5 +355,44 @@ class SettingsTest {
         rule.setContent { PaddockTheme(darkTheme = true) { Settings(SettingsState(true, LocalAccess.NotRequired, "0.1.0", machine = machine), {}, {}, {}) } }
         rule.onNodeWithText("Sending is off.", substring = true).assertDoesNotExist()
         rule.onNodeWithText("Reset the record…").assertDoesNotExist()
+    }
+
+    private fun showIcons(on: Boolean, fontScale: Float? = null, dark: Boolean = true, onIcons: (Boolean) -> Unit = {}) {
+        rule.setContent {
+            val base = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
+                PaddockTheme(darkTheme = dark) {
+                    Settings(SettingsState(true, LocalAccess.NotRequired, "0.1.0", machine = machine, agentGlyphs = on), {}, {}, {}, onAgentGlyphs = onIcons)
+                }
+            }
+        }
+    }
+
+    @Test fun agentIconsIsAToggleUnderAppearanceOnByDefaultThatReportsItsNewValue() {
+        var seen: Boolean? = null
+        showIcons(on = true, onIcons = { seen = it })
+        // One scroll, then all three positions: the column composes every card, so off-screen bounds are still laid out.
+        rule.onNodeWithText("Agent icons").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        val theme = rule.onNodeWithText("Theme").getUnclippedBoundsInRoot()
+        val icons = rule.onNodeWithText("Agent icons").getUnclippedBoundsInRoot()
+        val privacy = rule.onNodeWithText("PRIVACY").getUnclippedBoundsInRoot()
+        assertTrue("under Theme", icons.top >= theme.bottom && icons.top < privacy.top)
+        assertEquals("On", announced("Agent icons"))
+        rule.onNodeWithText("Pictures for the common agents, letters for the rest.").assertIsDisplayed()
+        rule.onNodeWithText("Agent icons").performClick()
+        assertEquals(false, seen)
+    }
+
+    @Test fun withAgentIconsOffTheToggleSaysSoAndOffersTheLettersExplanation() {
+        showIcons(on = false)
+        assertEquals("Off", announced("Agent icons"))
+        rule.onNodeWithText("Two letters for every agent.").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun agentIconsFitsAtDoubleFontSizeInTheLightTheme() {
+        showIcons(on = true, fontScale = 2.0f, dark = false)
+        rule.onNodeWithText("Agent icons").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        rule.onNodeWithText("Pictures for the common agents, letters for the rest.").assertIsDisplayed()
+        shoot("settings-agent-icons-light-200")
     }
 }

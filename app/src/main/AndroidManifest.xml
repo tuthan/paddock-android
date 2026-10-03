@@ -6,8 +6,18 @@
     <!-- A normal permission: lets ConnectionOwner notice a default-network change and replace a dead socket. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Android 13 and later: asked for in context, when the user turns alerts on in Settings (Phase 07). A refusal has a recovery row. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Android 17 (target 37) gates LAN sockets behind this grant. Phase 02 requests and recovers it. -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+
+    <!-- Connector mode (Phase 07): which apps on this phone are UnifiedPush distributors, so the user can pick one. -->
+    <queries>
+        <intent>
+            <action android:name="org.unifiedpush.android.distributor.REGISTER" />
+        </intent>
+    </queries>
 
     <application
         android:name=".PaddockApp"
@@ -22,13 +32,40 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.Paddock"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- An alert's link (ntfy's tap, or a notification Paddock raised). Any app can fire it, so DeepLink.parse is the boundary.
+                 No BROWSABLE category: a web page cannot open it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="paddock" android:host="open" />
+            </intent-filter>
+            <!-- A pairing link from the machine (its tap in a message, or a share). It only fills in Add machine: PairingLinks.parse is the
+                 boundary, nothing connects and the host key is still the user's to trust. No BROWSABLE category, so a web page cannot open it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="paddock" android:host="pair" />
+            </intent-filter>
         </activity>
+
+        <!-- The UnifiedPush messaging receiver. Exported because a distributor is another app; the token each registration carries is
+             the only authentication the specification has, and UnifiedPushConnector drops anything that does not hold one. -->
+        <receiver android:name=".notify.UnifiedPushReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
+                <action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" />
+                <action android:name="org.unifiedpush.android.connector.MESSAGE" />
+                <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
+                <action android:name="org.unifiedpush.android.connector.TEMP_UNAVAILABLE" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

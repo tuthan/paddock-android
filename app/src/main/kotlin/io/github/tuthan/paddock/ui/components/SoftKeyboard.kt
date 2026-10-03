@@ -34,6 +34,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import io.github.tuthan.paddock.terminal.Mods
 import io.github.tuthan.paddock.terminal.SoftInput
 
 /**
@@ -53,7 +54,8 @@ import io.github.tuthan.paddock.terminal.SoftInput
  * password-type field with no suggestions. Compose does not let a transformation see the composition, so each step would be
  * read as new text and the letters sent again. Gboard commits each character directly in such a field.
  *
- * [ctrlArmed] is the sticky Ctrl from the key strip: it is spent on the first character and [onCtrlSpent] says so.
+ * [armed] is the sticky Ctrl, Alt and Shift from the key strip: they are spent on the first key (a character, Enter or
+ * Backspace) and [onArmedSpent] says so.
  * Keys that arrive as key events rather than text (Enter and Backspace on some keyboards, a Bluetooth keyboard's arrows,
  * Esc, Ctrl chords) are encoded here the way the terminal itself encodes a hardware key; a plain printable key is left to the
  * field, which turns it into an edit, so nothing is sent twice.
@@ -61,19 +63,19 @@ import io.github.tuthan.paddock.terminal.SoftInput
 @Composable
 fun SoftKeyboardInput(
     focusRequester: FocusRequester,
-    ctrlArmed: Boolean,
-    onCtrlSpent: () -> Unit,
+    armed: Mods,
+    onArmedSpent: () -> Unit,
     onFocus: (Boolean) -> Unit,
     onBytes: (ByteArray) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state = rememberTextFieldState(SoftInput.SENTINEL, TextRange(SoftInput.SENTINEL.length))
-    // The sticky Ctrl as the field itself last knew it: the parameter only changes on the next composition, and a burst of edits
-    // arrives before that, so the first character would spend it and the second would still find it armed.
-    val armedNow = remember { BooleanArray(1) }
-    SideEffect { armedNow[0] = ctrlArmed }
+    // The armed modifiers as the field itself last knew them: the parameter only changes on the next composition, and a burst of
+    // edits arrives before that, so the first character would spend them and the second would still find them armed.
+    val armedNow = remember { arrayOf(Mods.None) }
+    SideEffect { armedNow[0] = armed }
     val send by rememberUpdatedState(onBytes)
-    val spent by rememberUpdatedState(onCtrlSpent)
+    val spent by rememberUpdatedState(onArmedSpent)
     val reader = remember {
         InputTransformation {
             val keys = SoftInput.keys(asCharSequence().toString())
@@ -81,7 +83,7 @@ fun SoftKeyboardInput(
             for (k in keys) {
                 val e = SoftInput.encode(k, armedNow[0])
                 e.bytes?.let(send)
-                if (e.usedCtrl) { armedNow[0] = false; spent() }
+                if (e.spent) { armedNow[0] = Mods.None; spent() }
             }
         }
     }
@@ -90,10 +92,15 @@ fun SoftKeyboardInput(
         modifier = modifier.size(1.dp).alpha(0f).semantics { hideFromAccessibility() }
             .focusRequester(focusRequester).onFocusChanged { onFocus(it.isFocused) }
             .onPreviewKeyEvent { e ->
-                if (!HardwareKeys.isRaw(e.key.nativeKeyCode, e.isAltPressed, e.isCtrlPressed)) return@onPreviewKeyEvent false
-                val bytes = HardwareKeys.encode(e.key.nativeKeyCode, e.utf16CodePoint, e.isShiftPressed, e.isAltPressed, e.isCtrlPressed)
-                    ?: return@onPreviewKeyEvent false
-                if (e.type == KeyEventType.KeyDown) send(bytes)
+                // A key event is a key too: the armed modifiers join the ones the event carries, and the first key spends them.
+                val a = armedNow[0]
+                val alt = e.isAltPressed || a.alt; val ctrl = e.isCtrlPressed || a.ctrl; val shift = e.isShiftPressed || a.shift
+                if (!HardwareKeys.isRaw(e.key.nativeKeyCode, alt, ctrl)) return@onPreviewKeyEvent false
+                val bytes = HardwareKeys.encode(e.key.nativeKeyCode, e.utf16CodePoint, shift, alt, ctrl) ?: return@onPreviewKeyEvent false
+                if (e.type == KeyEventType.KeyDown) {
+                    send(bytes)
+                    if (!a.none) { armedNow[0] = Mods.None; spent() }
+                }
                 true
             },
         inputTransformation = reader,

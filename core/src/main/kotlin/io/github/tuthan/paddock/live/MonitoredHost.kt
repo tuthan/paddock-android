@@ -62,7 +62,7 @@ class MonitoredHost(
     val sessionName: String,
     private val session: SshSession,
     relayPath: String,
-    socketPath: String,
+    val socketPath: String,
     private val ledger: Ledger,
     private val clock: Clock,
     foreground: StateFlow<Boolean>,
@@ -76,6 +76,10 @@ class MonitoredHost(
     private val terminalOptions: TerminalOptions = TerminalOptions(),
     /** The phone's operation journal; null leaves this host read-only (no prompt, key or focus operations). */
     journal: OperationJournal? = null,
+    /** The alert relay's installer and checker on this host (Phase 07); null on a build that ships none. */
+    val alertRelay: io.github.tuthan.paddock.alerts.AlertRelayHost? = null,
+    /** The permission-request writer and hook on this host (Phase 08); null on a build that ships neither, which leaves Claude Code prompts to the terminal. */
+    val answerHost: io.github.tuthan.paddock.answers.AnswerHost? = null,
 ) {
     private val relay = RelayClient(session, relayPath, socketPath)
     private val readSnapshot = SessionMonitor.snapshotReader(relay)
@@ -94,6 +98,15 @@ class MonitoredHost(
 
     /** Runs those operations in this host's scope and keeps the newest outcome per terminal; null with [operations]. */
     val sends: SendController? = operations?.let { SendController(scope, it) }
+
+    /**
+     * Yes and No for Claude Code permission requests the hook published, journaled; null without a journal or without the host scripts.
+     * It reads and writes request files through [answerHost] and holds no herdr client, so it cannot send a key.
+     */
+    val answers: io.github.tuthan.paddock.answers.AnswerController? = if (journal != null && answerHost != null) io.github.tuthan.paddock.answers.AnswerController(
+        scope, answerHost, journal, { reconciler.installed.value },
+        { id -> reconciler.installed.value?.snapshot?.agents?.firstOrNull { it.terminalId == id }?.agentStatus }, clock,
+    ) else null
 
     /** Every row of the operation journal, oldest first: the composer's gate and Activity read it. Empty without a journal. */
     val operationRecords: StateFlow<List<OperationRecord>> = journal?.records ?: MutableStateFlow(emptyList<OperationRecord>()).asStateFlow()

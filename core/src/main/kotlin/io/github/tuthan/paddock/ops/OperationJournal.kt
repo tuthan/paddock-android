@@ -16,6 +16,9 @@ enum class OperationKind(val wire: String) {
     Esc("Esc"),
     CtrlC("Ctrl+C"),
     Focus("desktop focus"),
+    /** Phase 08: the phone's Yes or No for one Claude Code permission request, written by `paddock-decide.py`; never a key. */
+    Allow("Yes"),
+    Deny("No"),
 }
 
 /**
@@ -34,6 +37,8 @@ enum class OperationOutcome { Requested, NotSent, Sent, Acknowledged, Rejected, 
  * change observed after the send, and the same value five seconds on is "no progress observed".
  * [code] is herdr's error code for [OperationOutcome.Rejected] and the reason for [OperationOutcome.NotSent].
  * [resolvedAt] is set once the user re-read the terminal after an [OperationOutcome.Unknown]; the outcome itself stays.
+ * [requestId] is the hook-minted id of the permission request an [OperationKind.Allow] or [OperationKind.Deny] answered, so
+ * a lost answer can be settled later from the host's request files; it is null for every other kind.
  */
 @Serializable
 data class OperationRecord(
@@ -53,6 +58,7 @@ data class OperationRecord(
     val code: String? = null,
     val resolvedAt: Long? = null,
     val note: String = "",
+    val requestId: String? = null,
 ) {
     val inFlight get() = outcome == OperationOutcome.Requested || outcome == OperationOutcome.Sent
     val awaitsReread get() = outcome == OperationOutcome.Unknown && resolvedAt == null
@@ -153,14 +159,14 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
      * Writes a [OperationOutcome.Requested] row unless the terminal is busy. [payload] is hashed; the text is kept
      * only when [keepText] is true.
      */
-    fun begin(key: TerminalKey, kind: OperationKind, payload: String? = null, keepText: Boolean = false): Begin = synchronized(lock) {
+    fun begin(key: TerminalKey, kind: OperationKind, payload: String? = null, keepText: Boolean = false, requestId: String? = null): Begin = synchronized(lock) {
         _unreadable.value?.let { return Begin.Unreadable(it) }
         data.records.firstOrNull { it.sameTerminal(key) && it.inFlight }?.let { return Begin.InFlight(it) }
         data.records.firstOrNull { it.sameTerminal(key) && it.awaitsReread }?.let { return Begin.NeedsReread(it) }
         val row = OperationRecord(
             id = data.nextId, host = key.target.host.value, session = key.target.session, terminalId = key.target.terminalId, epoch = key.epoch,
             kind = kind, requestedAt = clock.nowMillis(),
-            payloadSha256 = payload?.let(::sha256Hex), promptText = payload?.takeIf { keepText },
+            payloadSha256 = payload?.let(::sha256Hex), promptText = payload?.takeIf { keepText }, requestId = requestId,
         )
         commit(data.copy(nextId = data.nextId + 1, records = data.records + row), mustPersist = true)
         Begin.Started(row)

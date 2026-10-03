@@ -23,12 +23,17 @@ class AndroidTriggers(private val app: Application, private val owner: Connectio
     /** True while any activity of this app is started. The monitor's heartbeat and the connection leases follow it. */
     val foreground: StateFlow<Boolean> = _foreground.asStateFlow()
 
+    private var resumed = 0
+    private val _interactive = MutableStateFlow(false)
+    /** True while an activity of this app is resumed: the herd is in front of the user. Differs from [foreground] when a window above it covers the app. */
+    val interactive: StateFlow<Boolean> = _interactive.asStateFlow()
+
     private val activities = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityStarted(activity: Activity) { if (started++ == 0) { _foreground.value = true; owner.refreshAll() } }
         override fun onActivityStopped(activity: Activity) { started = maxOf(0, started - 1); if (started == 0) _foreground.value = false }
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-        override fun onActivityResumed(activity: Activity) = Unit
-        override fun onActivityPaused(activity: Activity) = Unit
+        override fun onActivityResumed(activity: Activity) { resumed++; _interactive.value = true }
+        override fun onActivityPaused(activity: Activity) { resumed = maxOf(0, resumed - 1); _interactive.value = resumed > 0 }
         override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
         override fun onActivityDestroyed(activity: Activity) = Unit
     }
