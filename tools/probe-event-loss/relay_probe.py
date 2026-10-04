@@ -5,7 +5,8 @@ The consumer of the relay's stdout stops reading for --stall seconds (the stdout
 besides the unix socket), then reads to EOF. Records bytes, EOF, relay exit status."""
 import argparse, json, os, subprocess, sys, threading, time, select
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import evlost
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import evlost, harness
 ap = argparse.ArgumentParser()
 ap.add_argument("--subs", default="lifecycle"); ap.add_argument("--stall", type=float, default=40)
 ap.add_argument("--burst-kind", default="split"); ap.add_argument("--burst-n", type=int, default=800)
@@ -13,7 +14,7 @@ ap.add_argument("--threads", type=int, default=2); ap.add_argument("--out", requ
 a = ap.parse_args()
 evlost.LOGF = open(a.out + ".log", "w")
 pane = evlost.first_pane()
-p = subprocess.Popen(["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "host", "paddock-relay.py"), evlost.SOCK],
+p = subprocess.Popen(["python3", os.path.join(harness.APP, "host", "paddock-relay.py"), evlost.SOCK],
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 req = {"id": "evlost-relay", "method": "events.subscribe", "params": {"subscriptions": evlost.subscriptions(a.subs, pane)}}
 p.stdin.write(json.dumps(req).encode() + b"\n"); p.stdin.flush()

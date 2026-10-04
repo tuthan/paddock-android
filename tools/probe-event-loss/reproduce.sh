@@ -4,10 +4,10 @@
 #   tools/probe-event-loss/reproduce.sh      (about 5 minutes; output under build/event-loss-<time>/)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
-OUT="$REPO/build/event-loss-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"; cd "$OUT"   # captures and logs land here, not in the repo
+. "$HERE/../harness.sh"
+OUT="$OUT_BASE/event-loss-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"; cd "$OUT"   # captures and logs land here, not in the repo
 export PATH="$HERE:$PATH"
-bash "$REPO/tools/setup-session.sh" paddock-test-evlost
+bash "$TOOLS/setup-session.sh" paddock-test-evlost
 # A1: silent gap. Stalled reader (10 s), 5000 status changes -> 285 of 5003 delivered, no marker, connection stays open.
 python3 "$HERE/evlost.py" --subs status --stall 10 --burst-n 5000 --threads 1 --post-read 200 --idle 8 --out A1-status-5000-1thr-stall10
 # A2b: EOF with no marker. Fully stalled reader, 800 pane split+close cycles -> server closes after ~114 events (~35 KB).

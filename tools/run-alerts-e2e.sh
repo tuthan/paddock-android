@@ -15,14 +15,14 @@
 # Only `paddock-test` is touched in herdr, on panes this script creates and closes; the sshd is loopback-only with test keys and an
 # isolated HOME. Nothing is posted anywhere but the loopback stub.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; . "$HERE/harness.sh"
 SERIAL="${1:-emulator-5570}"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
 PKG=io.github.tuthan.paddock; RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
-OUT="$ROOT/build/alerts-e2e-$(date +%Y%m%d-%H%M%S)-${SERIAL#emulator-}"; mkdir -p "$OUT"
+OUT="$OUT_BASE/alerts-e2e-$(date +%Y%m%d-%H%M%S)-${SERIAL#emulator-}"; mkdir -p "$OUT"
 LOG="$OUT/script-log.txt"
 say() { printf '%s %s\n' "$(date +%H:%M:%S.%3N)" "$*" | tee -a "$LOG"; }
-export TEST_SSHD_RUN="$ROOT/build/e2e-sshd" TEST_SSHD_PORT=2233 TEST_SSHD_HOME="$HOME/.cache/pdk-e2e-home"
+export TEST_SSHD_RUN="$OUT_BASE/e2e-sshd" TEST_SSHD_PORT=2233 TEST_SSHD_HOME="$HOME/.cache/pdk-e2e-home"
 PROXY_PORT=2234; PROXY_CTL=2235; STUB_PORT=2290
 # FROM_STAGE=3 (or 4) starts at that stage on the state a full run left on the phone: no pm clear, and the sshd keeps its host key, so
 # the phone's pinned key still matches. Stages 1 and 2 are skipped.
@@ -39,7 +39,7 @@ SOCK="$HOME/.config/herdr/sessions/$SESSION/herdr.sock"
 
 # --- the fake agent, as `claude`, in a pane of its own ---
 AGENT_LOG="$OUT/agent.log"; : >"$AGENT_LOG"
-mkdir -p "$OUT/bin"; ln -s "$ROOT/tools/fake-agent.py" "$OUT/bin/claude"
+mkdir -p "$OUT/bin"; ln -s "$TOOLS/fake-agent.py" "$OUT/bin/claude"
 SRC="alerts-e2e-$(date +%s)"; SEQN=1; PB=""
 BASE=$(H pane list | jq -r '.result.panes[0].pane_id')
 P=$(H pane split "$BASE" --direction right --no-focus | jq -r '.result.pane.pane_id')
@@ -56,7 +56,7 @@ cleanup() {
   H agent send-keys "$P" ctrl+c >/dev/null 2>&1
   SEQN=$((SEQN + 10)); H pane release-agent "$P" --source "$SRC" --agent claude --seq "$SEQN" >/dev/null 2>&1
   H pane close "$P" >/dev/null 2>&1
-  "$HERE/test-sshd.sh" stop >/dev/null 2>&1
+  "$TOOLS/test-sshd.sh" stop >/dev/null 2>&1
   rm -rf "$TEST_SSHD_HOME"
 }
 trap cleanup EXIT
@@ -77,7 +77,7 @@ epoch() { phone ledger.json | jq -r --arg h "$PROFILE" --arg s "$SESSION" '[.epo
 # The ntfy app's tap: a VIEW intent for the link, from outside the app.
 tap() { $ADB shell "am start -a android.intent.action.VIEW -d '$1' -n $PKG/.MainActivity" >"$OUT/tap-$2.txt" 2>&1; }
 
-"$HERE/test-sshd.sh" start >/dev/null && FP="$("$HERE/test-sshd.sh" fingerprint | awk '{print $2}')"
+"$TOOLS/test-sshd.sh" start >/dev/null && FP="$("$TOOLS/test-sshd.sh" fingerprint | awk '{print $2}')"
 python3 "$HERE/blackhole-proxy.py" $PROXY_PORT 2233 $PROXY_CTL >"$OUT/proxy.log" 2>&1 & PROXY_PID=$!
 python3 "$HERE/ntfy-stub.py" $STUB_PORT "$NTFY_LOG" >"$OUT/stub.log" 2>&1 & STUB_PID=$!
 sleep 1
@@ -94,7 +94,7 @@ $ADB install -r "$ROOT/app/build/outputs/apk/androidTest/debug/app-debug-android
 [ "$FROM" = 1 ] && $ADB shell pm clear $PKG >/dev/null
 $ADB shell am instrument -w -e class "$PKG.e2e.AlertsFlowTest#t0_exportAppKey" "$RUNNER" >"$OUT/t0.txt" 2>&1
 $ADB pull "/sdcard/Android/data/$PKG/files/app-phone.pub" "$OUT/transport.pub" >/dev/null 2>&1 \
-  && "$HERE/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
+  && "$TOOLS/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
 $ADB shell "rm -rf /sdcard/Android/data/$PKG/files/screens /sdcard/Android/data/$PKG/files/go-* /sdcard/Android/data/$PKG/files/link.txt"; $ADB logcat -c
 
 instrument() { # test method, output file, extra instrumentation arguments

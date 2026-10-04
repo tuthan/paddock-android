@@ -10,8 +10,8 @@ Only paddock-test or paddock-test-<suffix> is touched, and one transient unit na
 import json, os, re, shutil, signal, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.join(HERE, "..")
+import harness
+REPO = harness.APP
 UNIT = "paddock-alert-relay-check"
 m = re.match(r"^.*/sessions/(paddock-test(?:-[a-z0-9]+)?)/herdr\.sock$", os.environ.get("PADDOCK_TEST_SOCKET", ""))
 if not m:

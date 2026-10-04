@@ -9,7 +9,7 @@
 import os, re, subprocess, sys, time, xml.etree.ElementTree as ET
 
 SERIAL = sys.argv[1] if len(sys.argv) > 1 else "emulator-5572"
-OUT = sys.argv[2] if len(sys.argv) > 2 else "build/ime-check"
+OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.environ.get("PADDOCK_HARNESS_OUT", "build"), "ime-check")
 os.makedirs(OUT, exist_ok=True)
 ADB = [os.path.expanduser("~/Android/Sdk/platform-tools/adb"), "-s", SERIAL]
 PKG = "io.github.tuthan.paddock"

@@ -8,16 +8,16 @@
 # without --takeover is accepted again is the moment the desktop would regain input. Only `paddock-test` is touched in
 # herdr, on a pane this script creates and closes; the sshd is loopback-only with test keys and an isolated HOME.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; . "$HERE/harness.sh"
 SERIAL="${1:-emulator-5572}"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
 PKG=io.github.tuthan.paddock; RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
-OUT="$ROOT/build/term-e2e-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
+OUT="$OUT_BASE/term-e2e-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 LOG="$OUT/script-log.txt"
 say() { printf '%s %s\n' "$(date +%H:%M:%S.%3N)" "$*" | tee -a "$LOG"; }
 # The isolated HOME is kept short on purpose: herdr builds unix socket paths under $HOME/.config/herdr/sessions/<session>/ and a
 # terminal socket under build/ is longer than sun_path (108 bytes) allows.
-export TEST_SSHD_RUN="$ROOT/build/e2e-sshd" TEST_SSHD_PORT=2233 TEST_SSHD_HOME="$HOME/.cache/pdk-e2e-home"
+export TEST_SSHD_RUN="$OUT_BASE/e2e-sshd" TEST_SSHD_PORT=2233 TEST_SSHD_HOME="$HOME/.cache/pdk-e2e-home"
 PROXY_PORT=2234; PROXY_CTL=2235
 # LINK_CUT=proxy (default) cuts the link with the blackhole proxy; LINK_CUT=airplane turns airplane mode on in the emulator
 # instead (`cmd connectivity airplane-mode`, Android 12 and later) and off again afterwards.
@@ -44,7 +44,7 @@ cleanup() {
   [ -n "${PROXY_PID:-}" ] && kill "$PROXY_PID" 2>/dev/null
   H pane release-agent "$P" --source "$SRC" --agent fake --seq 90 >/dev/null 2>&1
   H pane close "$P" >/dev/null 2>&1
-  "$HERE/test-sshd.sh" stop >/dev/null 2>&1
+  "$TOOLS/test-sshd.sh" stop >/dev/null 2>&1
   rm -rf "$TEST_SSHD_HOME" "$OUT"/desk-*.fifo
 }
 trap cleanup EXIT
@@ -65,7 +65,7 @@ observers() { pgrep -af "terminal session observe $P" | grep -v pgrep | sed 's/^
 desk_start() { # name fd
   DESK_NAME=$1; DESK_FD=$2
   mkfifo "$OUT/desk-$1.fifo"
-  python3 "$HERE/desktop-client.py" "$TID" 30 100 <"$OUT/desk-$1.fifo" >"$OUT/desk-$1.out" 2>"$OUT/desk-$1.err" &
+  python3 "$TOOLS/desktop-client.py" "$TID" 30 100 <"$OUT/desk-$1.fifo" >"$OUT/desk-$1.out" 2>"$OUT/desk-$1.err" &
   DESK_PIDS+=($!)
   eval "exec $2>\"$OUT/desk-$1.fifo\""; sleep 2
 }
@@ -75,7 +75,7 @@ say "desktop client A attached: $(tail -1 "$OUT/desk-a.out"); pty $(pty_size)"
 ROWS0=$(view_rows); SIZE0=$(pty_size)
 say "before the app: pane get viewport_rows=$ROWS0, stty rows/cols=$SIZE0"
 
-"$HERE/test-sshd.sh" start >/dev/null && FP="$("$HERE/test-sshd.sh" fingerprint | awk '{print $2}')"
+"$TOOLS/test-sshd.sh" start >/dev/null && FP="$("$TOOLS/test-sshd.sh" fingerprint | awk '{print $2}')"
 python3 "$HERE/blackhole-proxy.py" $PROXY_PORT 2233 $PROXY_CTL >"$OUT/proxy.log" 2>&1 & PROXY_PID=$!
 sleep 1
 proxy() { python3 - "$1" <<'EOF'
@@ -91,7 +91,7 @@ $ADB install -r "$ROOT/app/build/outputs/apk/androidTest/debug/app-debug-android
 $ADB shell pm clear $PKG >/dev/null
 $ADB shell am instrument -w -e class "$PKG.e2e.TerminalFlowTest#t0_exportAppKey" "$RUNNER" >"$OUT/t0.txt" 2>&1
 $ADB pull "/sdcard/Android/data/$PKG/files/app-phone.pub" "$OUT/transport.pub" >/dev/null 2>&1 \
-  && "$HERE/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
+  && "$TOOLS/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
 $ADB shell rm -rf "/sdcard/Android/data/$PKG/files/screens" "/sdcard/Android/data/$PKG/files/go-*"; $ADB logcat -c
 
 $ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" -e port $PROXY_PORT -e home "$TEST_SSHD_HOME" -e session paddock-test \

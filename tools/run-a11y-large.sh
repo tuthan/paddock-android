@@ -4,8 +4,8 @@
 # both are restored afterwards, whatever happens.
 #   tools/run-a11y-large.sh [adb-serial] [out-dir] [font-scale, default 2.0]
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
-SERIAL="${1:-emulator-5570}"; OUT="${2:-$ROOT/build/a11y-large-$(date +%Y%m%d-%H%M%S)}"; SCALE="${3:-2.0}"; mkdir -p "$OUT"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; . "$HERE/harness.sh"
+SERIAL="${1:-emulator-5570}"; OUT="${2:-$OUT_BASE/a11y-large-$(date +%Y%m%d-%H%M%S)}"; SCALE="${3:-2.0}"; mkdir -p "$OUT"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
 P=io.github.tuthan.paddock.ui
 CLASSES=(ActivityLogTest AddMachineTest AgentOutputTest AlertRelayScreenTest ComposerTest DecisionSheetTest GuardedAnswersTest HerdHomeTest ImportKeyTest ManualInputPanelTest RelayInstallTest SettingsTest SnippetEditorTest SpacesTest TerminalTabTest)

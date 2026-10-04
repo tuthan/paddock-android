@@ -23,8 +23,9 @@ import subprocess
 import sys
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.abspath(os.path.join(HERE, ".."))
+import harness
+
+ROOT = harness.APP
 HOOK = os.path.join(ROOT, "host", "paddock-claude-permission-hook.py")
 DECIDE = os.path.join(ROOT, "host", "paddock-decide.py")
 SESSION = "paddock-test"                 # the only herdr session this script ever talks to
@@ -536,7 +537,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--only", default="")
-    ap.add_argument("--out", default=os.path.join(ROOT, "build", "hook-scenarios"))
+    ap.add_argument("--out", default=os.path.join(harness.OUT_BASE, "hook-scenarios"))
     ap.add_argument("--model", default="haiku")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)

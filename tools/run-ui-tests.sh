@@ -2,8 +2,8 @@
 # Run Compose UI tests on a device and pull the screenshots they write.
 #   tools/run-ui-tests.sh [adb-serial] [class] [out-dir]
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
-SERIAL="${1:-emulator-5570}"; FILTER="${2:-io.github.tuthan.paddock.ui}"; OUT="${3:-$ROOT/build/ui-$(date +%Y%m%d-%H%M%S)}"; mkdir -p "$OUT"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; . "$HERE/harness.sh"
+SERIAL="${1:-emulator-5570}"; FILTER="${2:-io.github.tuthan.paddock.ui}"; OUT="${3:-$OUT_BASE/ui-$(date +%Y%m%d-%H%M%S)}"; mkdir -p "$OUT"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
 PKG=io.github.tuthan.paddock; RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
 export JAVA_HOME=$HOME/.local/share/mise/installs/java/temurin-17.0.20+8; export PATH=$JAVA_HOME/bin:$PATH ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"

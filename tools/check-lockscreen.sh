@@ -6,11 +6,11 @@
 # It sets a PIN (1234) and the system's "hide sensitive notification content" setting on the emulator and puts both back at the
 # end, whatever happens. Use a disposable emulator.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; . "$HERE/harness.sh"
 SERIAL="${1:-emulator-5570}"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
 PKG=io.github.tuthan.paddock; RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
-OUT="$ROOT/build/lockscreen-$(date +%Y%m%d-%H%M%S)-${SERIAL#emulator-}"; mkdir -p "$OUT"
+OUT="$OUT_BASE/lockscreen-$(date +%Y%m%d-%H%M%S)-${SERIAL#emulator-}"; mkdir -p "$OUT"
 LOG="$OUT/log.txt"; say() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$LOG"; }
 PIN=1234; fail=0
 check() { if eval "$2"; then say "PASS $1"; else say "FAIL $1"; fail=1; fi; }

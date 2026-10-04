@@ -11,6 +11,7 @@ than a verdict on tens of milliseconds; the scenario suite's `the desktop dialog
 check. Only `paddock-test` is touched; screen text is never written to the log."""
 import argparse, importlib.util, json, os, statistics, sys, time, shutil
 
+import harness
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("scenarios", os.path.join(HERE, "run-hook-scenarios.py"))
 scen = importlib.util.module_from_spec(spec)
@@ -40,7 +41,7 @@ def one(h, condition, n):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--samples", type=int, default=6)
-    ap.add_argument("--out", default=os.path.join(scen.ROOT, "build", "hook-delay"))
+    ap.add_argument("--out", default=os.path.join(harness.OUT_BASE, "hook-delay"))
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     h = scen.Harness(args.out, "haiku")

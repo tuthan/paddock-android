@@ -3,18 +3,18 @@
 #   tools/run-transport-tests.sh [adb-serial] [extra instrumentation class#method]
 # Needs the emulator or phone to reach the host at 10.0.2.2 (emulator) or set HOST_ADDR for a phone.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; . "$HERE/harness.sh"
 SERIAL="${1:-emulator-5570}"; FILTER="${2:-io.github.tuthan.paddock.ssh.SshSessionTest}"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
-RUN="${TEST_SSHD_RUN:-$ROOT/build/test-sshd}"; OUT="$ROOT/build/transport-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$RUN" "$OUT"
+RUN="${TEST_SSHD_RUN:-$OUT_BASE/test-sshd}"; OUT="$OUT_BASE/transport-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$RUN" "$OUT"
 PKG=io.github.tuthan.paddock; RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
 
-"$HERE/test-sshd.sh" status >/dev/null 2>&1 || "$HERE/test-sshd.sh" start
+"$TOOLS/test-sshd.sh" status >/dev/null 2>&1 || "$TOOLS/test-sshd.sh" start
 # Ours is the proxy on its control port; another blackhole-proxy.py on other ports must not count as running.
 PROXY_CONTROL="${PROXY_CONTROL_PORT:-2224}"
 [ -n "$(ss -Hltn "sport = :$PROXY_CONTROL")" ] || { setsid nohup python3 "$HERE/blackhole-proxy.py" "${PROXY_LISTEN_PORT:-2223}" "${TEST_SSHD_PORT:-2222}" "$PROXY_CONTROL" >"$RUN/proxy.log" 2>&1 & sleep 1; }
 [ -f "$RUN/imported_ed25519" ] || ssh-keygen -q -t ed25519 -N spikepass -C paddock-test-imported -f "$RUN/imported_ed25519"
-"$HERE/test-sshd.sh" authorize "$RUN/imported_ed25519.pub" >/dev/null
+"$TOOLS/test-sshd.sh" authorize "$RUN/imported_ed25519.pub" >/dev/null
 $ADB push "$RUN/imported_ed25519" /data/local/tmp/spike_imported >/dev/null; $ADB shell chmod 644 /data/local/tmp/spike_imported
 
 export JAVA_HOME=$HOME/.local/share/mise/installs/java/temurin-17.0.20+8; export PATH=$JAVA_HOME/bin:$PATH ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
@@ -24,9 +24,9 @@ $ADB install -r "$ROOT/app/build/outputs/apk/androidTest/debug/app-debug-android
 
 $ADB shell am instrument -w -e class "io.github.tuthan.paddock.ssh.SshSessionTest#t0_exportPhoneKey" "$RUNNER" >"$OUT/t0.txt" 2>&1
 $ADB pull "/sdcard/Android/data/$PKG/files/transport.pub" "$OUT/transport.pub" >/dev/null 2>&1 \
-  && "$HERE/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
+  && "$TOOLS/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
 
-FP="$("$HERE/test-sshd.sh" fingerprint | awk '{print $2}')"
+FP="$("$TOOLS/test-sshd.sh" fingerprint | awk '{print $2}')"
 LINES=$(wc -l < "$RUN/sshd.log"); $ADB logcat -c
 $ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" ${INSTR_ARGS:-} -e class "$FILTER" "$RUNNER" >"$OUT/instrument.txt" 2>&1
 $ADB logcat -d -s TRANSPORT:I >"$OUT/transport-log.txt"

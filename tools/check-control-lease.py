@@ -13,10 +13,12 @@ that the freeze alone releases nothing.
 """
 import json, os, queue, re, socket, subprocess, sys, tempfile, threading, time
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+import harness
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = harness.APP
 SESSION = "paddock-test"
 ENV = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
-RUN = os.environ.get("TEST_SSHD_RUN", os.path.join(ROOT, "build", "test-sshd"))
+RUN = os.environ.get("TEST_SSHD_RUN", os.path.join(harness.OUT_BASE, "test-sshd"))
 KEY = os.path.join(RUN, "lease_ed25519")
 LEASE, PING = 15, 5
 SCRIPT = os.path.join(ROOT, "host", "paddock-control.py")
@@ -31,14 +33,14 @@ def proxy(cmd):
 
 
 def ensure_infrastructure():
-    if subprocess.run([os.path.join(ROOT, "tools", "test-sshd.sh"), "status"], capture_output=True).returncode != 0:
-        subprocess.run([os.path.join(ROOT, "tools", "test-sshd.sh"), "start"], check=True)
+    if subprocess.run([os.path.join(harness.TOOLS, "test-sshd.sh"), "status"], capture_output=True).returncode != 0:
+        subprocess.run([os.path.join(harness.TOOLS, "test-sshd.sh"), "start"], check=True)
     if subprocess.run(["ss", "-Hltn", "sport = :2224"], capture_output=True, text=True).stdout.strip() == "":
-        subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "blackhole-proxy.py"), "2223", "2222", "2224"], stdout=open(os.path.join(RUN, "proxy.log"), "w"), stderr=subprocess.STDOUT, start_new_session=True)
+        subprocess.Popen([sys.executable, os.path.join(HERE, "blackhole-proxy.py"), "2223", "2222", "2224"], stdout=open(os.path.join(RUN, "proxy.log"), "w"), stderr=subprocess.STDOUT, start_new_session=True)
         time.sleep(1)
     if not os.path.exists(KEY):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "paddock-lease-check", "-f", KEY], check=True)
-    subprocess.run([os.path.join(ROOT, "tools", "test-sshd.sh"), "authorize", KEY + ".pub"], check=True, capture_output=True)
+    subprocess.run([os.path.join(harness.TOOLS, "test-sshd.sh"), "authorize", KEY + ".pub"], check=True, capture_output=True)
 
 
 def ssh_argv():

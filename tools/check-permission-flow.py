@@ -16,8 +16,10 @@ page, which ends the process, and the next attempt is refused (0 new sshd connec
 """
 import re, subprocess, sys, time, xml.etree.ElementTree as ET, os
 
+import harness
+
 SERIAL = sys.argv[1] if len(sys.argv) > 1 else "emulator-5574"
-OUT = sys.argv[2] if len(sys.argv) > 2 else "build/permission-flow"
+OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(harness.OUT_BASE, "permission-flow")
 os.makedirs(OUT, exist_ok=True)
 ADB = [os.path.expanduser("~/Android/Sdk/platform-tools/adb"), "-s", SERIAL]
 PKG = "io.github.tuthan.paddock"
@@ -133,8 +135,7 @@ shot("settings-denied")
 check("denial shows the recovery row in Settings", find(dump(), "Local-network access is off") is not None and find(dump(), "Open settings") is not None)
 
 # 4. Grant from the real dialog, then connect in the same process (AC-02.10, the other half).
-HERE = os.path.dirname(os.path.abspath(__file__))
-SSHD_ENV = dict(os.environ, TEST_SSHD_RUN=os.path.abspath(os.path.join(HERE, "..", "build", "perm-sshd")), TEST_SSHD_PORT="2236")
+SSHD_ENV = dict(os.environ, TEST_SSHD_RUN=os.path.join(harness.OUT_BASE, "perm-sshd"), TEST_SSHD_PORT="2236")
 SSHD_LOG = os.path.join(SSHD_ENV["TEST_SSHD_RUN"], "sshd.log")
 
 def replace_into(current, value):
@@ -144,7 +145,7 @@ def replace_into(current, value):
     for _ in range(10): adb("shell", "input", "keyevent", "KEYCODE_DEL")
     adb("shell", "input", "text", value); time.sleep(0.4)
 
-subprocess.run([os.path.join(HERE, "test-sshd.sh"), "start"], env=SSHD_ENV, check=True, capture_output=True)
+subprocess.run([os.path.join(harness.TOOLS, "test-sshd.sh"), "start"], env=SSHD_ENV, check=True, capture_output=True)
 try:
     adb("shell", "am", "force-stop", PKG)
     adb("shell", "pm", "clear", PKG)
@@ -166,7 +167,7 @@ try:
     log = open(SSHD_LOG).read() if os.path.exists(SSHD_LOG) else ""
     check("the sshd saw the connection", "Connection from" in log or "Connection closed by" in log or "Failed publickey" in log or "kex" in log.lower(), log.strip().splitlines()[-1][:120] if log.strip() else "empty log")
 finally:
-    subprocess.run([os.path.join(HERE, "test-sshd.sh"), "stop"], env=SSHD_ENV, capture_output=True)
+    subprocess.run([os.path.join(harness.TOOLS, "test-sshd.sh"), "stop"], env=SSHD_ENV, capture_output=True)
 
 # 5. The same grant and revoke through the real system settings page (AC-02.10: "granting from the recovery row ... revoking
 # in system settings produces the recovery row on the next attempt").
@@ -207,7 +208,7 @@ def connect_to_throwaway_sshd():
     ensure_key()
     tap("Connect", exact=True)
 
-subprocess.run([os.path.join(HERE, "test-sshd.sh"), "start"], env=SSHD_ENV, check=True, capture_output=True)
+subprocess.run([os.path.join(harness.TOOLS, "test-sshd.sh"), "start"], env=SSHD_ENV, check=True, capture_output=True)
 try:
     adb("shell", "am", "force-stop", PKG)
     adb("shell", "pm", "clear", PKG)
@@ -260,7 +261,7 @@ try:
     time.sleep(3)
     check("and no connection reached the sshd", connections() == connections_at_revoke, f"{connections_at_revoke} -> {connections()}")
 finally:
-    subprocess.run([os.path.join(HERE, "test-sshd.sh"), "stop"], env=SSHD_ENV, capture_output=True)
+    subprocess.run([os.path.join(harness.TOOLS, "test-sshd.sh"), "stop"], env=SSHD_ENV, capture_output=True)
 
 bad = [n for n, ok, _ in results if not ok]
 print("\nRESULT:", "all passed" if not bad else "FAILED: " + ", ".join(bad))

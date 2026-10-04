@@ -3,16 +3,16 @@
 # grant state is set with pm between instrumentation runs.
 #   tools/run-permission-tests.sh [adb-serial]
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; . "$HERE/harness.sh"
 SERIAL="${1:-emulator-5574}"; ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
 PKG=io.github.tuthan.paddock; PERM=android.permission.ACCESS_LOCAL_NETWORK
 RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"; CLS="$PKG.ssh.LocalNetworkGateTest"
-OUT="$ROOT/build/permission-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
+OUT="$OUT_BASE/permission-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 
 # Build, install, export and authorize the phone key (also runs the first method once).
 "$HERE/run-transport-tests.sh" "$SERIAL" "$CLS#recordWhatTheOsDoes" >"$OUT/setup.txt" 2>&1 || { echo "setup failed: $OUT/setup.txt"; exit 1; }
-FP="$("$HERE/test-sshd.sh" fingerprint | awk '{print $2}')"
-SSHD_LOG="${TEST_SSHD_RUN:-$ROOT/build/test-sshd}/sshd.log"
+FP="$("$TOOLS/test-sshd.sh" fingerprint | awk '{print $2}')"
+SSHD_LOG="${TEST_SSHD_RUN:-$OUT_BASE/test-sshd}/sshd.log"
 step() { # <label> <method>
   local label="$1" method="$2"
   $ADB logcat -c; LINES=$(wc -l < "$SSHD_LOG")

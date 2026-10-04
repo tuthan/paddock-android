@@ -9,18 +9,18 @@
 # developer's herdr exports HERDR_SOCKET_PATH; both are overridden), `claude` stand-ins (tools/fake-agent.py) first on the PATH, and the
 # throwaway loopback sshd. The developer's `default` and `paddock-test` sessions are never addressed.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; . "$HERE/harness.sh"
 SERIAL="${1:-emulator-5570}"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
 PKG=io.github.tuthan.paddock; RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
-OUT="$ROOT/build/spaces-e2e-$(date +%Y%m%d-%H%M%S)-${SERIAL#emulator-}"; mkdir -p "$OUT"
+OUT="$OUT_BASE/spaces-e2e-$(date +%Y%m%d-%H%M%S)-${SERIAL#emulator-}"; mkdir -p "$OUT"
 LOG="$OUT/script-log.txt"
 say() { printf '%s %s\n' "$(date +%H:%M:%S.%3N)" "$*" | tee -a "$LOG"; }
 
 HH=/tmp/pdk-s9; RUNNING=paddock-test-e2e9; STOPPED=paddock-test-e2e9b
-export TEST_SSHD_RUN="$ROOT/build/e2e-sshd-s9" TEST_SSHD_PORT=2233 TEST_SSHD_HOME="$HH"
+export TEST_SSHD_RUN="$OUT_BASE/e2e-sshd-s9" TEST_SSHD_PORT=2233 TEST_SSHD_HOME="$HH"
 rm -rf "$TEST_SSHD_RUN" "$HH"; mkdir -p "$HH/bin" "$HH/.local/bin" "$HH/work" "$HH/repo" "$HH/notes"
-ln -s "$HERE/fake-agent.py" "$HH/bin/claude"; ln -s "$HERE/fake-agent.py" "$HH/.local/bin/claude"
+ln -s "$TOOLS/fake-agent.py" "$HH/bin/claude"; ln -s "$TOOLS/fake-agent.py" "$HH/.local/bin/claude"
 HERDR_BIN="${PADDOCK_HERDR:-/usr/bin/herdr}"
 UNSET=(); for v in $(env | grep -o '^HERDR_[A-Za-z_]*'); do UNSET+=(-u "$v"); done
 HENV=(env "${UNSET[@]}" HOME="$HH" XDG_CONFIG_HOME="$HH/.config" XDG_DATA_HOME="$HH/.local/share" XDG_STATE_HOME="$HH/.local/state" PATH="$HH/bin:$PATH")
@@ -46,7 +46,7 @@ say "isolated herdr: $(H --version 2>&1 | head -1); sessions $(sessions)"
 cleanup() {
   [ -n "${PROXY_PID:-}" ] && kill "$PROXY_PID" 2>/dev/null
   for s in "$RUNNING" "$STOPPED"; do "${HENV[@]}" "$HERDR_BIN" session stop "$s" --json >/dev/null 2>&1; "${HENV[@]}" "$HERDR_BIN" session delete "$s" --json >/dev/null 2>&1; done
-  "$HERE/test-sshd.sh" stop >/dev/null 2>&1
+  "$TOOLS/test-sshd.sh" stop >/dev/null 2>&1
   [[ "$HH" == /tmp/pdk-s9 ]] && rm -rf -- "$HH"
 }
 trap cleanup EXIT
@@ -62,7 +62,7 @@ agents() { H agent list | jq -c '[.result.agents[] | select(.name != null) | {na
 agent_field() { agents | jq -r --arg n "$1" --arg f "$2" '.[] | select(.name == $n) | .[$f]'; }
 last_saga() { sagas | jq -c '.records | sort_by(.startedAt) | last'; }
 
-"$HERE/test-sshd.sh" start >/dev/null && FP="$("$HERE/test-sshd.sh" fingerprint | awk '{print $2}')"
+"$TOOLS/test-sshd.sh" start >/dev/null && FP="$("$TOOLS/test-sshd.sh" fingerprint | awk '{print $2}')"
 export JAVA_HOME=$HOME/.local/share/mise/installs/java/temurin-17.0.20+8; export PATH=$JAVA_HOME/bin:$PATH ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 (cd "$ROOT" && ./gradlew --no-daemon --console=plain ${GRADLE_EXTRA:-} :app:assembleDebug :app:assembleDebugAndroidTest >"$OUT/build.log" 2>&1) || { echo "build failed: $OUT/build.log"; exit 1; }
 $ADB install -r "$ROOT/app/build/outputs/apk/debug/app-debug.apk" >/dev/null
@@ -72,7 +72,7 @@ $ADB shell pm clear $PKG >/dev/null
 $ADB shell pm grant $PKG android.permission.ACCESS_LOCAL_NETWORK >/dev/null 2>&1 || true
 $ADB shell am instrument -w -e class "$PKG.e2e.SpacesFlowTest#t0_exportAppKey" "$RUNNER" >"$OUT/t0.txt" 2>&1
 $ADB pull "/sdcard/Android/data/$PKG/files/app-phone.pub" "$OUT/transport.pub" >/dev/null 2>&1 \
-  && "$HERE/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
+  && "$TOOLS/test-sshd.sh" authorize "$OUT/transport.pub" >/dev/null || { echo "key export failed"; cat "$OUT/t0.txt"; exit 1; }
 $ADB shell "rm -rf /sdcard/Android/data/$PKG/files/screens /sdcard/Android/data/$PKG/files/go-*"; $ADB logcat -c
 
 $ADB shell am instrument -w -e hostFp "$FP" -e user "$USER" -e port 2233 -e session "$RUNNING" -e stopped "$STOPPED" \

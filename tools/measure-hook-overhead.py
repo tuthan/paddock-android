@@ -8,7 +8,8 @@ Each sample runs the shipped hook in a scratch XDG_CONFIG_HOME with herdr's envi
 stdin, exactly as Claude Code spawns it. Nothing touches herdr, ~/.claude or ~/.config/paddock. Prints a table and one JSON line."""
 import argparse, json, os, statistics, subprocess, sys, tempfile, time
 
-HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "host", "paddock-claude-permission-hook.py")
+import harness
+HOOK = os.path.join(harness.APP, "host", "paddock-claude-permission-hook.py")
 REQUEST = json.dumps({"session_id": "overhead-1", "transcript_path": "/tmp/none", "cwd": "/tmp", "permission_mode": "default",
                       "hook_event_name": "PermissionRequest", "tool_name": "Bash",
                       "tool_input": {"command": "ls -la /tmp", "description": "list the temp directory"}}).encode()

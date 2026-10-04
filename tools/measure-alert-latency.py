@@ -17,8 +17,8 @@ Only the disposable session is touched, on one pane this script creates and clos
 import argparse, json, os, random, re, signal, socket, statistics, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.join(HERE, "..")
+import harness
+REPO = harness.APP
 RELAY = os.path.join(REPO, "host", "paddock-alert-relay.py")
 m = re.match(r"^.*/sessions/(paddock-test(?:-[a-z0-9]+)?)/herdr\.sock$", os.environ.get("PADDOCK_TEST_SOCKET", ""))
 if not m:
@@ -105,7 +105,7 @@ def main():
     ap.add_argument("--transitions", type=int, default=20)
     ap.add_argument("--min-gap", type=float, default=3.0)
     ap.add_argument("--max-gap", type=float, default=15.0)
-    ap.add_argument("--out", default=os.path.join(REPO, "build", "alert-latency-" + time.strftime("%Y%m%d-%H%M%S")))
+    ap.add_argument("--out", default=os.path.join(harness.OUT_BASE, "alert-latency-" + time.strftime("%Y%m%d-%H%M%S")))
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="alert-latency-")

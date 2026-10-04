@@ -6,19 +6,19 @@
 # The sshd is loopback-only and its authorized_keys is $HOME/.cache/pdk-pair-home/.ssh/authorized_keys, the file the copied command
 # writes; the command runs with that directory as HOME, never the real one. herdr is not involved.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$HERE/.."
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; . "$HERE/harness.sh"
 SERIAL="${1:-emulator-5570}"
 ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb -s $SERIAL"
 PKG=io.github.tuthan.paddock; RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
-OUT="$ROOT/build/pairing-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
+OUT="$OUT_BASE/pairing-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 FAKE_HOME="$HOME/.cache/pdk-pair-home"
 rm -rf "$FAKE_HOME"; mkdir -p "$FAKE_HOME/.ssh"; chmod 755 "$FAKE_HOME/.ssh"   # a loose directory, as a hand-made one often is
 export TEST_SSHD_RUN="$FAKE_HOME/.ssh" TEST_SSHD_PORT=2235 TEST_SSHD_HOME="$FAKE_HOME"
-cleanup() { "$HERE/test-sshd.sh" stop >/dev/null 2>&1; rm -rf "$FAKE_HOME"; }
+cleanup() { "$TOOLS/test-sshd.sh" stop >/dev/null 2>&1; rm -rf "$FAKE_HOME"; }
 trap cleanup EXIT
 grant_lan() { $ADB shell pm grant $PKG android.permission.ACCESS_LOCAL_NETWORK >/dev/null 2>&1 || true; }
 
-"$HERE/test-sshd.sh" start >/dev/null && FP="$("$HERE/test-sshd.sh" fingerprint | awk '{print $2}')"
+"$TOOLS/test-sshd.sh" start >/dev/null && FP="$("$TOOLS/test-sshd.sh" fingerprint | awk '{print $2}')"
 [ -n "$FP" ] || { echo "no host fingerprint"; exit 1; }
 export JAVA_HOME=$HOME/.local/share/mise/installs/java/temurin-17.0.20+8; export PATH=$JAVA_HOME/bin:$PATH ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 (cd "$ROOT" && ./gradlew --no-daemon --console=plain :app:assembleDebug :app:assembleDebugAndroidTest >"$OUT/build.log" 2>&1) || { echo "build failed: $OUT/build.log"; exit 1; }
