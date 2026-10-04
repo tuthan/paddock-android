@@ -29,7 +29,7 @@ How it decides, in `Tracker` (pure, tested without herdr): the first read is a s
 
 ### herdr 0.9.1 facts the design rests on
 
-- `events_lost` is **never sent** (found 2026-10-02, `tools/probe-event-loss`): a subscriber that lags silently loses events. Events are therefore only *invalidations*; a closed stream and a heartbeat also lead to a snapshot read, and a change that happened while a stream was down is alerted on once after the reconnect.
+- `events_lost` is **never sent** (found 2026-10-02, `paddock-harness/probe-event-loss`): a subscriber that lags silently loses events. Events are therefore only *invalidations*; a closed stream and a heartbeat also lead to a snapshot read, and a change that happened while a stream was down is alerted on once after the reconnect.
 - `done` is detection-only: only `blocked`, `idle`, `working` and `unknown` can be reported, so a test cannot drive `done` through `pane report-agent`.
 - A subscription gives no initial status sample; a repeated report of the same state emits nothing; `state_change_seq` is a global counter bumped per real transition; status subscriptions need a `pane_id`; session names allow dots.
 
@@ -97,19 +97,19 @@ The app implements the UnifiedPush Android specification (AND_3.1.0) directly, w
 | --- | --- | --- |
 | Python | relay config, message shape, tracker, outbox, sequence, notifier (loopback HTTP), a fake herdr unix server, process tests | `python3 tools/test-alert-relay.py` |
 | Python, live | the relay against the disposable herdr session | `PADDOCK_TEST_SOCKET=~/.config/herdr/sessions/paddock-test/herdr.sock python3 tools/test-alert-relay.py --live` |
-| Unit file | verify, run, SIGKILL, resume within 60 s under a transient user unit | `PADDOCK_TEST_SOCKET=... tools/check-alert-unit.py` |
+| Unit file | verify, run, SIGKILL, resume within 60 s under a transient user unit | `PADDOCK_TEST_SOCKET=... paddock-harness/check-alert-unit.py` |
 | Core | link parser, resolver, arrival rule, inbox, notification content, access rules, relay host, UnifiedPush rules | `./gradlew :core:test` |
-| Device | channels, redaction, actions, permission state (`NotifyTest`, `NotifyPermissionTest`), the relay screen, settings, the connector against a spec-following test distributor (`PushConnectorTest`) | `tools/run-ui-tests.sh`, `tools/run-permission-tests.sh` |
-| End to end | the real relay, a loopback ntfy stub (`tools/ntfy-stub.py`), the tap as a VIEW intent, every outcome above, a reconnect that advances the epoch, a cold start, then connector mode from the relay to the notification | `tools/run-alerts-e2e.sh [serial]` |
-| Lock screen | a notification raised with the phone locked, read from the lock screen itself: generic text only by default, the agent's title only once the privacy setting is turned off | `tools/check-lockscreen.sh [serial]` |
-| Permission | the real system dialog, a first and a second denial, the way to the app's system page, a grant there seen without a restart, one channel turned off on its system page (API 33 and later); notifications turned off for the whole app (API 32 and earlier) | `tools/check-notification-permission.py [serial] [out-dir]` |
-| Measurement | the relay's own latency in both delivery modes and two outages, against a loopback server | `PADDOCK_TEST_SOCKET=... tools/measure-alert-latency.py` |
+| Device | channels, redaction, actions, permission state (`NotifyTest`, `NotifyPermissionTest`), the relay screen, settings, the connector against a spec-following test distributor (`PushConnectorTest`) | `paddock-harness/run-ui-tests.sh`, `paddock-harness/run-permission-tests.sh` |
+| End to end | the real relay, a loopback ntfy stub (`paddock-harness/ntfy-stub.py`), the tap as a VIEW intent, every outcome above, a reconnect that advances the epoch, a cold start, then connector mode from the relay to the notification | `paddock-harness/run-alerts-e2e.sh [serial]` |
+| Lock screen | a notification raised with the phone locked, read from the lock screen itself: generic text only by default, the agent's title only once the privacy setting is turned off | `paddock-harness/check-lockscreen.sh [serial]` |
+| Permission | the real system dialog, a first and a second denial, the way to the app's system page, a grant there seen without a restart, one channel turned off on its system page (API 33 and later); notifications turned off for the whole app (API 32 and earlier) | `paddock-harness/check-notification-permission.py [serial] [out-dir]` |
+| Measurement | the relay's own latency in both delivery modes and two outages, against a loopback server | `PADDOCK_TEST_SOCKET=... paddock-harness/measure-alert-latency.py` |
 
 Only `paddock-test` (or `paddock-test-<suffix>`) is ever touched in herdr, on panes the test creates. Nothing is posted anywhere but loopback. After any edit under `host/`, run `tools/pin-host.sh`: the app refuses to start when a bundled script does not match its pin in `host/SOURCE.json`.
 
 ## Measurements
 
-`tools/measure-alert-latency.py` runs the real relay against a loopback stand-in for the server and drives blocked transitions in `paddock-test` with `pane report-agent` at random gaps (3 to 15 s). Time is taken from the moment the transition is reported to herdr to the moment the stub receives the post: the relay's whole contribution, and nothing after it.
+`paddock-harness/measure-alert-latency.py` runs the real relay against a loopback stand-in for the server and drives blocked transitions in `paddock-test` with `pane report-agent` at random gaps (3 to 15 s). Time is taken from the moment the transition is reported to herdr to the moment the stub receives the post: the relay's whole contribution, and nothing after it.
 
 Run 2026-10-02, herdr 0.9.1, 20 transitions per mode, debounce 1 s:
 

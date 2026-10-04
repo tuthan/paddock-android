@@ -28,7 +28,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Phase 11 slices 1 to 3 on a device (`tools/run-pairing-e2e.sh`): the phone's key is authorized on a throwaway sshd with only the
+ * Phase 11 slices 1 to 3 on a device (`paddock-harness/run-pairing-e2e.sh`): the phone's key is authorized on a throwaway sshd with only the
  * copied command, and a machine is added from a pairing link delivered as a real VIEW intent through the manifest's filter. The
  * script runs the copied command on the host between t1 and t2 and clears the app's data before t3.
  *

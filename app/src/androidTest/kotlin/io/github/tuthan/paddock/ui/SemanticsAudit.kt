@@ -137,7 +137,7 @@ object SemanticsAudit {
 
     /** Fails with every finding listed, and writes what was measured next to the screenshots (`a11y-<screen>.txt`). */
     fun expectClean(rule: ComposeContentTestRule, screen: String, options: Options = Options()) {
-        // `-e a11yLarge <font scale>` is how tools/run-a11y-large.sh asks every audit test to also check for cut-off text and off-screen controls, on a 360 x 640 dp screen at that font scale.
+        // `-e a11yLarge <font scale>` is how paddock-harness/run-a11y-large.sh asks every audit test to also check for cut-off text and off-screen controls, on a 360 x 640 dp screen at that font scale.
         val large = InstrumentationRegistry.getArguments().getString("a11yLarge")
         val opts = if (large != null) options.copy(overflow = true) else options
         val name = if (large != null) "$screen, font $large" else screen

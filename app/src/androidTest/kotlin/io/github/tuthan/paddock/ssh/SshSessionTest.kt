@@ -36,7 +36,7 @@ import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
-/** Transport tests against the throwaway sshd from tools/test-sshd.sh, driven by tools/run-transport-tests.sh. */
+/** Transport tests against the throwaway sshd from tools/test-sshd.sh, driven by paddock-harness/run-transport-tests.sh. */
 class SshSessionTest {
     private val ctx = InstrumentationRegistry.getInstrumentation().targetContext
     private val args = InstrumentationRegistry.getArguments()

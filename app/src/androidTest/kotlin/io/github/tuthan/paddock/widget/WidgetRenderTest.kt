@@ -34,7 +34,7 @@ import org.junit.Test
 /**
  * The widgets on a device (AC-10.1): every size, in the light and the dark theme, on a roomy and a tight launcher grid, drawn from a fake
  * cache; every one carries its time; none is wired to a connection. The widgets are inflated from the real RemoteViews the renderer builds, in a
- * configuration context for the theme, and screenshotted to `screens/` (`tools/run-ui-tests.sh` pulls them).
+ * configuration context for the theme, and screenshotted to `screens/` (`paddock-harness/run-ui-tests.sh` pulls them).
  */
 class WidgetRenderTest {
     private val target: Context get() = InstrumentationRegistry.getInstrumentation().targetContext

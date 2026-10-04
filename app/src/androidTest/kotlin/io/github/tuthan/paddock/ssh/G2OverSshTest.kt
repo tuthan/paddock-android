@@ -29,7 +29,7 @@ import org.junit.Test
 
 /**
  * The G2 path over real SSH: phone key, pinned host key, the relay script on the host, herdr's `paddock-test`
- * session. Needs `-e socket <herdr.sock>` and `-e relay <paddock-relay.py>` (tools/run-transport-tests.sh passes them
+ * session. Needs `-e socket <herdr.sock>` and `-e relay <paddock-relay.py>` (paddock-harness/run-transport-tests.sh passes them
  * through INSTR_ARGS); skipped otherwise. Mutations go through exec, like the app's own commands would.
  */
 class G2OverSshTest {

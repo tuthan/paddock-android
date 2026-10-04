@@ -11,7 +11,7 @@ object AlertDelivery {
         "Best effort. Delivery depends on the ntfy app, this phone's battery settings and the network, so an alert can be late or missing. It is not an always-on service."
 
     /**
-     * The recorded delivery times, from the Phase 07 evidence report (`tools/measure-alert-latency.py`, 2026-10-02). They are the
+     * The recorded delivery times, from the Phase 07 evidence report (`paddock-harness/measure-alert-latency.py`, 2026-10-02). They are the
      * relay's own part against a local stand-in for the push server; the phone, the network and the ntfy app are not in them.
      */
     const val MEASURED =

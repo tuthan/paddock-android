@@ -31,7 +31,7 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * AC-02.9 to AC-02.11 on an Android 17 device with this target-37 build, driven by tools/run-permission-tests.sh.
+ * AC-02.9 to AC-02.11 on an Android 17 device with this target-37 build, driven by paddock-harness/run-permission-tests.sh.
  * Revoking a runtime permission kills the app's process, so the grant state is set from outside with `pm grant`
  * and `pm revoke` between instrumentation runs, and each test asserts the state it was started in. Skipped
  * below API 37, where the grant is not enforced and the gate is a no-op (that half is unit-tested in :core).

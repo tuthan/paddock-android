@@ -38,7 +38,7 @@ import org.junit.Test
 
 /**
  * Phase 06 on a device, through the whole app over SSH, in two stages with an app restart between them
- * (`tools/run-operations-e2e.sh`). The script prepares the host (a fake agent that logs every key and submission outside the
+ * (`paddock-harness/run-operations-e2e.sh`). The script prepares the host (a fake agent that logs every key and submission outside the
  * pane, a throwaway sshd, the link-cut proxy), checks what only the host can see at each checkpoint, and releases the test
  * with a file.
  *

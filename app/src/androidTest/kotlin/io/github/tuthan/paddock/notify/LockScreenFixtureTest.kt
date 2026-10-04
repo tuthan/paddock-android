@@ -15,7 +15,7 @@ import org.junit.Test
 
 /**
  * Not a test of anything on its own: each method posts one alert whose agent title is sensitive and leaves it in the shade, for
- * `tools/check-lockscreen.sh` to look at on the lock screen of a phone with a PIN (AC-07.4). The redacted variant must show the
+ * `paddock-harness/check-lockscreen.sh` to look at on the lock screen of a phone with a PIN (AC-07.4). The redacted variant must show the
  * generic words only; the other is the control that proves the check can see a title when one is shown.
  */
 class LockScreenFixtureTest {

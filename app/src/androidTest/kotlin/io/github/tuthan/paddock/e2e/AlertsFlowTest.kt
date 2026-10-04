@@ -44,7 +44,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Phase 07 on a device (`tools/run-alerts-e2e.sh`): the stopgap mode, through the whole app over SSH. The real relay posts to a
+ * Phase 07 on a device (`paddock-harness/run-alerts-e2e.sh`): the stopgap mode, through the whole app over SSH. The real relay posts to a
  * loopback ntfy stub; the script then does what the ntfy app does when its notification is tapped, a VIEW intent for the
  * message's `click` link, and this test says what the app did with it. The script prepares the host (a fake agent that logs every
  * key and submission outside the pane, a second pane, the link-cut proxy), checks what only the host can see at each

@@ -4,7 +4,7 @@
   tools/run-release-smoke.py <adb-serial> <signed-apk> [out-dir]
 
 The release APK is not debuggable, so nothing here uses run-as or instrumentation: the app is driven through adb and uiautomator dumps,
-as tools/check-permission-flow.py does, and judged from what a user sees, from the host, and from the phone's own logs and sockets.
+as paddock-harness/check-permission-flow.py does, and judged from what a user sees, from the host, and from the phone's own logs and sockets.
 
 Host: an isolated HOME (/tmp/pdk-r10, short because unix socket paths are) with a herdr of its own (session paddock-test-rel10, created
 and stopped here; the developer's sessions are never addressed), `claude` stand-ins first on PATH (tools/fake-agent.py: a real Claude

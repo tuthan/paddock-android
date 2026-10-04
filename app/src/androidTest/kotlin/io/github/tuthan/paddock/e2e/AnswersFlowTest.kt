@@ -30,7 +30,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Phase 08 on a device, through the whole app over SSH (`tools/run-answers-e2e.sh`). The script prepares the host: a fake agent
+ * Phase 08 on a device, through the whole app over SSH (`paddock-harness/run-answers-e2e.sh`). The script prepares the host: a fake agent
  * that logs every key and submission outside its pane (so "no key was sent" is a count), a throwaway sshd, the link-cut proxy, and
  * the real hook script run the way Claude Code runs it (a PermissionRequest on stdin, herdr's environment for the pane). It checks
  * at each checkpoint what only the host can see: the request files, what the hook printed, the journal on the phone.

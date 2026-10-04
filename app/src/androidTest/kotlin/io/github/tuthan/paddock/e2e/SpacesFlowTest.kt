@@ -31,7 +31,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Phase 09 on a device, through the whole app over SSH to a herdr of its own (`tools/run-spaces-e2e.sh`). The script prepares an isolated
+ * Phase 09 on a device, through the whole app over SSH to a herdr of its own (`paddock-harness/run-spaces-e2e.sh`). The script prepares an isolated
  * HOME with a running session `paddock-test-e2e9` (the one this phone watches), a stopped one with a saved layout, `claude` stand-ins, and
  * the throwaway sshd, then checks at each checkpoint what only the host can see and releases the test with a file. Nothing here touches
  * `default` or `paddock-test` of the developer's herdr: the isolated HOME has its own, and its `default` is a stopped session without a

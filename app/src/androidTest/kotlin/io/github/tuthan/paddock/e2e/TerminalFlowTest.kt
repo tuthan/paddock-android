@@ -33,7 +33,7 @@ import org.junit.Test
  * Phase 05 on a device, through the whole app: Add machine over SSH, the Terminal tab observing a real herdr pane, an owner
  * conflict with a desktop client, the helper install consent, take over, typing with the hardware keyboard, a 200-line scroll
  * timed five times, the Android keyboard (keys injected by the system reach the pane), Resize to fit, release, control again, the app sent to the background and Back pressed while in control
- * (both must release at once), then control once more and the link dying under it. `tools/run-terminal-e2e.sh`
+ * (both must release at once), then control once more and the link dying under it. `paddock-harness/run-terminal-e2e.sh`
  * prepares the host, runs the checks that need the host (`pane get`, the desktop client, the proxy) at each checkpoint and
  * releases the test with a file; the test never waits for the script for more than two minutes.
  */

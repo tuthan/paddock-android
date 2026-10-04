@@ -27,7 +27,7 @@ import org.junit.Test
 /**
  * The whole product on one device, driven through its UI against a throwaway sshd and the disposable `paddock-test`
  * herdr session: Add machine, first-trust fingerprint, relay install consent, a live home from real agents, Output,
- * Activity, Settings. `tools/run-live-e2e.sh` sets the host up and passes `hostFp`, `user`, `port` and `home`.
+ * Activity, Settings. `paddock-harness/run-live-e2e.sh` sets the host up and passes `hostFp`, `user`, `port` and `home`.
  */
 class LiveFlowTest {
     @get:Rule val rule: AndroidComposeTestRule<*, MainActivity> = createAndroidComposeRule<MainActivity>()

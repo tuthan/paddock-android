@@ -82,6 +82,6 @@ Claude Code makes its next tool call only after the dialog for the one before wa
 | Hook and writer: state machine, races, permissions, exit codes, no-window path, desktop-answered rule, supersede | `python3 tools/test-permission-hook.py` (74 tests; `--live` adds the real herdr with `PADDOCK_TEST_SOCKET` set), part of `tools/check.sh` |
 | Pure rules, controller, presenter, host wrapper, journal | `core/src/test/.../answers/*`, `OperationPresenterTest`, `OperationJournalTest`, `HostScriptPinTest` |
 | Real hook and writer against `paddock-test` | `integration/Phase08LiveTest.kt` (with `PADDOCK_TEST_SOCKET`) |
-| Real Claude Code, 13 scenarios x 3 runs | `python3 tools/run-hook-scenarios.py` |
-| The sheet and the setup screen | `DecisionSheetTest`, `GuardedAnswersTest` (`tools/run-ui-tests.sh`) |
-| Through the app, over SSH, on an emulator | `tools/run-answers-e2e.sh` (`AnswersFlowTest`) |
+| Real Claude Code, 13 scenarios x 3 runs | `python3 paddock-harness/run-hook-scenarios.py` |
+| The sheet and the setup screen | `DecisionSheetTest`, `GuardedAnswersTest` (`paddock-harness/run-ui-tests.sh`) |
+| Through the app, over SSH, on an emulator | `paddock-harness/run-answers-e2e.sh` (`AnswersFlowTest`) |

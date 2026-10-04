@@ -14,7 +14,7 @@ import org.junit.Test
 
 /**
  * The notification permission as the system has it right now, which this test never changes: revoking a runtime permission kills
- * the app's process, so `tools/run-alerts-e2e.sh` revokes it with `pm revoke` and then runs this class, and again after `pm grant`.
+ * the app's process, so `paddock-harness/run-alerts-e2e.sh` revokes it with `pm revoke` and then runs this class, and again after `pm grant`.
  * The recovery row the permission state leads to is the same one Settings draws (SettingsTest draws each).
  */
 class NotifyPermissionTest {

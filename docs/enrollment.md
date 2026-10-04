@@ -14,7 +14,7 @@ What it does, on the machine you run it on: creates `~/.ssh` (mode 700) and `aut
 
 The command is built only from a key line `AuthorizedKey.parse` accepts: one line, `ecdsa-sha2-nistp256`, a base64 body that is a real OpenSSH P-256 public-key blob, and a comment of letters, digits and `@ . _ -`. Nothing in that alphabet needs quoting inside single quotes, so there is nothing to escape, and no command exists for any other input (`AuthorizeCommandTest`, `AuthorizedKeyTest`). The fingerprint is shown too, in the form `ssh-keygen -l` prints.
 
-Checked: `AuthorizeCommandTest` runs it in `sh` and `bash --posix` against a temporary HOME (with a space and a shell metacharacter in its name): twice gives one line and the same bytes, 700 and 600, other lines untouched with and without a trailing newline, an empty file, a loose existing directory and file tightened. `tools/run-pairing-e2e.sh` runs the text the app copied against a throwaway sshd's authorized_keys and then connects with it.
+Checked: `AuthorizeCommandTest` runs it in `sh` and `bash --posix` against a temporary HOME (with a space and a shell metacharacter in its name): twice gives one line and the same bytes, 700 and 600, other lines untouched with and without a trailing newline, an empty file, a loose existing directory and file tightened. `paddock-harness/run-pairing-e2e.sh` runs the text the app copied against a throwaway sshd's authorized_keys and then connects with it.
 
 Not covered: a symlinked `authorized_keys` is followed like any shell redirect would; a read-only one makes the command fail loudly (`&&` chain) and change nothing.
 

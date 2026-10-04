@@ -21,7 +21,7 @@ Runs: API 26 (`sc-api26`) and API 36 (`sc-api36`) emulators, software-backed Key
 | S7 release APK, R8 | **76,834 bytes** | **414,172 bytes** |
 | S8 review | Package 100, no critical or high alert. Deep: overall 27, from `kotlin-stdlib` and `simplesocks` (medium `networkAccess`, `usesEval`, low `unmaintained`). **14 resolved components** | sshj itself 100. Published 0.41.1 pins BouncyCastle 1.84 with a **critical CVE and a high CVE** (deep overall 25). Needs a crypto-library substitution to be usable. **8 resolved components** after the override |
 
-S6 used a TCP blackhole proxy (`tools/blackhole-proxy.py`) that stops relaying without closing sockets, as a deterministic stand-in for airplane mode. The real airplane-mode check stays a device item.
+S6 used a TCP blackhole proxy (`paddock-harness/blackhole-proxy.py`) that stops relaying without closing sockets, as a deterministic stand-in for airplane mode. The real airplane-mode check stays a device item.
 
 ## Why sshlib
 
