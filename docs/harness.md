@@ -2,6 +2,8 @@
 
 The scripts that run the app on a device against a real herdr, measure the host and cut the link on purpose live in their own repository, `paddock-harness`, beside this one. They were `tools/` here until 2026-10-04 (the first harness commit, `2f15eb4`, is those scripts as `tools/` held them at `354c6be`); evidence reports before that date cite them under `tools/`.
 
+**Current evidence.** The reruns of 2026-10-04 against this repository at `536f76e` were made with harness `2f15eb4` and are recorded, one line each, in the harness's `docs/runs.md` (committed at `3679322`). Their report is the vault's `evidence/harness-split-2026-10-04.md`.
+
 ## What stays here, and why
 
 `tools/` holds the 25 scripts that the offline gate, the pins, the release cut or a JVM test executes:
