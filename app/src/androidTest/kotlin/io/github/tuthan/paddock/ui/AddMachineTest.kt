@@ -494,4 +494,22 @@ class AddMachineTest {
         rule.onNodeWithText(mismatch.presentedFingerprint).assertIsDisplayed()
         button("Close").assertIsDisplayed()
     }
+
+    /** The example inside an empty address field may be cut at a large font; its label above it is not. */
+    private val ADDRESS_EXAMPLE = SemanticsAudit.Options(ellipsisOk = { it.startsWith("192.168.1.20 or") })
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditAddMachineNewDark() { show(); SemanticsAudit.expectClean(rule, "Add machine, new, dark", ADDRESS_EXAMPLE) }
+    @Test fun auditAddMachineNewLight() { show(dark = false); SemanticsAudit.expectClean(rule, "Add machine, new, light", ADDRESS_EXAMPLE) }
+    @Test fun auditAddMachineWithAKeyDark() { show(state(key = line, backing = KeyBacking.Tee)); SemanticsAudit.expectClean(rule, "Add machine, with key, dark", ADDRESS_EXAMPLE) }
+    @Test fun auditAddMachineWithAKeyLight() { show(state(key = line, backing = KeyBacking.Tee), dark = false); SemanticsAudit.expectClean(rule, "Add machine, with key, light", ADDRESS_EXAMPLE) }
+    @Test fun auditFingerprintDialogFirstTrust() { dialog(first); SemanticsAudit.expectClean(rule, "Fingerprint dialog, first trust, dark") }
+    @Test fun auditFingerprintDialogChangedKey() { dialog(changed); SemanticsAudit.expectClean(rule, "Fingerprint dialog, changed key, dark") }
+
+    @Test fun auditAddMachineDeniedDark() { show(state(denied = true)); SemanticsAudit.expectClean(rule, "Add machine, permission denied, dark", ADDRESS_EXAMPLE) }
+    @Test fun auditAddMachineConnectingDark() { show(state(connecting = true)); SemanticsAudit.expectClean(rule, "Add machine, connecting, dark", ADDRESS_EXAMPLE) }
+    @Test fun auditFingerprintDialogPairingMismatch() { dialog(mismatch); SemanticsAudit.expectClean(rule, "Fingerprint dialog, pairing mismatch, dark") }
+    @Test fun auditFingerprintDialogFirstTrustLinked() { dialog(linked); SemanticsAudit.expectClean(rule, "Fingerprint dialog, first trust with link, dark") }
+
 }

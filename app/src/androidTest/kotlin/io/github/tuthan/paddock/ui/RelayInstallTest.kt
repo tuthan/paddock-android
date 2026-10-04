@@ -98,4 +98,10 @@ class RelayInstallTest {
         show(dark = false)
         rule.onNodeWithText("Install the relay").assertIsDisplayed()
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditRelayInstallDark() { show(); SemanticsAudit.expectClean(rule, "Relay install, dark") }
+    @Test fun auditRelayInstallLight() { show(dark = false); SemanticsAudit.expectClean(rule, "Relay install, light") }
+
 }

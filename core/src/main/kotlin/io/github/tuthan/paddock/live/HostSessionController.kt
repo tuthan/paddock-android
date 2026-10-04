@@ -102,9 +102,18 @@ class HostSessionController(
     private val decideSha256: String? = null,
     private val hookScript: ByteArray? = null,
     private val hookSha256: String? = null,
+    /** Where start-agent sagas are kept (Phase 09); null leaves the monitored host without the start-agent flow. */
+    private val sagaStore: io.github.tuthan.paddock.ops.SagaStore? = null,
 ) {
     private val _phase = MutableStateFlow<HostPhase>(HostPhase.Connecting)
     val phase: StateFlow<HostPhase> = _phase.asStateFlow()
+
+    private val _spaces = MutableStateFlow<HostSpaces?>(null)
+    /**
+     * This host's sessions for the Spaces screen (Phase 09), available as soon as herdr is found on the connection, whether or not a
+     * session could be chosen to monitor: a stopped session can still be read and deleted. Null while the connection is not up.
+     */
+    val spaces: StateFlow<HostSpaces?> = _spaces.asStateFlow()
 
     private val lock = Any()
     private var job: Job? = null
@@ -168,15 +177,9 @@ class HostSessionController(
         pause()
     }
 
-    /** A non-interactive SSH command often has a short PATH, so the usual install locations are checked by absolute path. */
-    private suspend fun discoverHerdr(session: SshSession): String? {
-        val script = "for p in \"\$HOME/.local/bin/herdr\" \"\$HOME/.cargo/bin/herdr\" /usr/local/bin/herdr /usr/bin/herdr; do [ -x \"\$p\" ] && { printf %s \"\$p\"; exit 0; }; done; exit 1"
-        val r = session.exec(listOf("sh", "-c", script), limits = io.github.tuthan.paddock.ports.ExecLimits(stdoutMax = 4096, stderrMax = 4096))
-        if (r.exit != 0) return null
-        return r.stdout.toString(Charsets.UTF_8).trim().takeIf { it.startsWith("/") && '\n' !in it }
-    }
+    private suspend fun discoverHerdr(session: SshSession): String? = io.github.tuthan.paddock.cli.HerdrLocator.find(session)
 
-    private fun stopHost() { synchronized(lock) { current.also { current = null } }?.stop() }
+    private fun stopHost() { _spaces.value = null; synchronized(lock) { current.also { current = null } }?.stop() }
 
     private suspend fun bringUp(session: SshSession) {
         val installer: RelayInstaller
@@ -232,6 +235,7 @@ class HostSessionController(
             return
         }
         val cli = HerdrCli(herdr, "default")
+        journal?.let { _spaces.value = HostSpaces(session, herdr, it, profile.hostId, clock, epoch = { current?.reconciler?.installed?.value?.epoch ?: 0L }) }
         val outcome = CliResult.classify(session.exec(cli.sessionList()))
         val catalog = (outcome as? CliOutcome.Ok)?.let { PaddockJson.decodeResult<SessionCatalog>(it.stdout).getOrNull() }
         if (catalog == null) {
@@ -255,6 +259,7 @@ class HostSessionController(
                 RelayInstaller(session, hookScript, hookSha256!!, fileName = "paddock-claude-permission-hook.py"), clock,
                 herdrSession = chosen.name, phoneLabel = profile.name.take(64),
             ) else null,
+            sagaStore = sagaStore,
         )
         synchronized(lock) {
             if (stopped) return

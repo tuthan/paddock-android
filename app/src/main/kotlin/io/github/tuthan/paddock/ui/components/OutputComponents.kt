@@ -65,6 +65,7 @@ import io.github.tuthan.paddock.terminal.NamedKey
 import io.github.tuthan.paddock.ui.theme.AnsiPalette
 import io.github.tuthan.paddock.ui.theme.PaddockColors
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
+import androidx.compose.ui.platform.LocalDensity
 
 internal fun ansiLineToText(line: AnsiLine, colors: PaddockColors): AnnotatedString = buildAnnotatedString {
     if (line.spans.isEmpty()) append(" ") // an empty line keeps its height
@@ -161,7 +162,8 @@ fun Chip(
         ) {
             leading?.invoke()
             if (icon != null) Icon(icon, contentDescription = null, tint = tone ?: c.text, modifier = Modifier.size(14.dp))
-            Text(text, style = PaddockTokens.type.chip, color = tone ?: c.text, maxLines = 1)
+            // One line as designed; at a large font a chip wraps, because an age or a state cut to "Blocked · observed 40 s" says less than it was built to.
+            Text(text, style = PaddockTokens.type.chip, color = tone ?: c.text, maxLines = if (LocalDensity.current.fontScale >= 1.3f) 3 else 1)
         }
     }
 }

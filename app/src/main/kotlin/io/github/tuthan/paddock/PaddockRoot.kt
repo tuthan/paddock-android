@@ -116,6 +116,21 @@ import io.github.tuthan.paddock.ui.components.LocalAgentGlyphs
 import io.github.tuthan.paddock.ui.components.SecureWindow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import io.github.tuthan.paddock.live.SpacesState
+import io.github.tuthan.paddock.ops.CardAction
+import io.github.tuthan.paddock.ops.SagaCard
+import io.github.tuthan.paddock.ops.SagaRecord
+import io.github.tuthan.paddock.ops.SagaRequest
+import io.github.tuthan.paddock.ops.SagaState
+import io.github.tuthan.paddock.ui.components.HostHealth
+import io.github.tuthan.paddock.ui.screens.RenameDialog
+import io.github.tuthan.paddock.ui.screens.RowActionsDialog
+import io.github.tuthan.paddock.ui.screens.SagaProgress
+import io.github.tuthan.paddock.ui.screens.SpacesActions
+import io.github.tuthan.paddock.ui.screens.SpacesScreen
+import io.github.tuthan.paddock.ui.screens.SpacesScreenState
+import io.github.tuthan.paddock.ui.screens.StartAvailability
+import io.github.tuthan.paddock.ui.screens.WorkspaceChoice
 import io.github.tuthan.paddock.ui.screens.ActivityLog
 import io.github.tuthan.paddock.ui.screens.ADD_MACHINE_INTRO
 import io.github.tuthan.paddock.ui.screens.AddMachine
@@ -156,14 +171,14 @@ import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class Route { Home, Output, Compose, Snippets, Activity, Settings, AddMachine, AlertRelay, Decision, GuardedAnswers }
+private enum class Route { Home, Output, Compose, Snippets, Activity, Spaces, Settings, AddMachine, AlertRelay, Decision, GuardedAnswers }
 
-private val NAV = listOf(NavItem("Herd", PaddockIcons.Herd), NavItem("Activity", PaddockIcons.Activity))
+private val NAV = listOf(NavItem("Herd", PaddockIcons.Herd), NavItem("Spaces", PaddockIcons.Spaces), NavItem("Activity", PaddockIcons.Activity))
 
 /**
  * The app's one navigation host. Screens are stateless; this connects them to the graph. The route, where Add machine
  * was opened from, and the open terminal survive rotation (`rememberSaveable`); everything else is read from the graph.
- * Home and Activity share the bottom bar; Settings is the gear on Home, and Add machine lives in Settings.
+ * Home, Spaces and Activity share the bottom bar; Settings is the gear on Home, and Add machine lives in Settings.
  */
 @Composable
 fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
@@ -265,18 +280,22 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
         when (boot) {
             Boot.Loading -> Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title, modifier = Modifier.padding(PaddockTokens.spacing.gutter))
             else -> when (effective) {
-                Route.Home, Route.Activity -> Column(Modifier.fillMaxSize()) {
+                Route.Home, Route.Spaces, Route.Activity -> Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f)) {
-                        if (effective == Route.Home) HomeRoute(
+                        if (effective == Route.Spaces) SpacesRoute(
+                            graph, onNotice = { alertNotice = it },
+                            onOpenAgent = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output },
+                        ) else if (effective == Route.Home) HomeRoute(
                             graph, relayDismissed, { relayDismissed = it }, { reviewKey = true },
                             onOpen = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output },
                             // Review prompt goes to the agent's Terminal tab, observing: answering is a deliberate Request control from there.
                             onReviewPrompt = { terminalId = it; outputTab = AgentTab.Terminal; route = Route.Output },
                             onSettings = { route = Route.Settings },
                             onSetUpKey = { editing = true; pairing = null; addFrom = Route.Home; route = Route.AddMachine },
+                            onNotice = { alertNotice = it },
                         ) else ActivityRoute(graph, onOpenAgent = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output })
                     }
-                    PaddockNavBar(NAV, if (effective == Route.Home) 0 else 1, { route = if (it == 0) Route.Home else Route.Activity })
+                    PaddockNavBar(NAV, when (effective) { Route.Home -> 0; Route.Spaces -> 1; else -> 2 }, { route = when (it) { 0 -> Route.Home; 1 -> Route.Spaces; else -> Route.Activity } })
                 }
                 Route.Output -> OutputRoute(graph, terminalId, outputTab, { outputTab = it }, onBack = { route = Route.Home }, onCompose = { route = Route.Compose }, onDecision = { route = Route.Decision })
                 Route.Decision -> DecisionRoute(
@@ -334,6 +353,7 @@ private fun rememberResumes(): Int {
 private fun HomeRoute(
     graph: AppGraph, relayDismissed: Boolean, setRelayDismissed: (Boolean) -> Unit, onReviewKey: () -> Unit,
     onOpen: (terminalId: String) -> Unit, onReviewPrompt: (terminalId: String) -> Unit, onSettings: () -> Unit, onSetUpKey: () -> Unit,
+    onNotice: (String) -> Unit = {},
 ) {
     val profile by graph.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
@@ -355,8 +375,42 @@ private fun HomeRoute(
     var refreshing by remember { mutableStateOf(false) }
     LaunchedEffect(view.lastReadAtMillis) { refreshing = false }
     LaunchedEffect(refreshing) { if (refreshing) { delay(5_000); refreshing = false } }
+    // Long-press on a live row (Phase 09): rename the agent, or show its workspace or tab on the desktop. Each is a journaled operation.
+    var menuRow by remember { mutableStateOf<AgentRowModel?>(null) }
+    // The row and the name it has now, read when Rename was tapped (a StateFlow is not read in composition).
+    var renameRow by remember { mutableStateOf<Pair<AgentRowModel, String?>?>(null) }
+    val rowOps = host?.operations
+    val presenter = remember { io.github.tuthan.paddock.ops.OperationPresenter() }
+    menuRow?.let { row ->
+        RowActionsDialog(
+            row.title, onDismiss = { menuRow = null },
+            onRename = {
+                renameRow = row to host?.reconciler?.installed?.value?.snapshot?.agents?.firstOrNull { it.terminalId == row.key.target.terminalId }?.name
+                menuRow = null
+            },
+            onFocusWorkspace = {
+                menuRow = null
+                val agent = host?.reconciler?.installed?.value?.snapshot?.agents?.firstOrNull { it.terminalId == row.key.target.terminalId }
+                if (agent == null) onNotice("This agent is no longer listed. Nothing was sent.")
+                else graph.scope.launch { host?.spaceOps?.focusWorkspace(agent.workspaceId)?.let { onNotice(presenter.line(io.github.tuthan.paddock.ops.OperationKind.FocusWorkspace, it).text) } }
+            },
+            onFocusTab = {
+                menuRow = null
+                val agent = host?.reconciler?.installed?.value?.snapshot?.agents?.firstOrNull { it.terminalId == row.key.target.terminalId }
+                if (agent == null) onNotice("This agent is no longer listed. Nothing was sent.")
+                else graph.scope.launch { host?.spaceOps?.focusTab(agent.tabId)?.let { onNotice(presenter.line(io.github.tuthan.paddock.ops.OperationKind.FocusTab, it).text) } }
+            },
+        )
+    }
+    renameRow?.let { (row, current) ->
+        RenameDialog(current, onCancel = { renameRow = null }, onRename = { name ->
+            renameRow = null
+            graph.scope.launch { rowOps?.rename(row.key, name)?.let { onNotice(presenter.line(io.github.tuthan.paddock.ops.OperationKind.Rename, it).text) } }
+        })
+    }
     HerdHome(
         screen.state, now, preview = view.blockedPreview, onSettings = onSettings,
+        onRowMenu = if (host?.operations != null && host.spaceOps != null) { row -> menuRow = row } else null,
         onRefresh = if (host != null) ({ refreshing = true; host.refresh() }) else null, refreshing = refreshing,
         // Review prompt opens the live terminal for that agent, observing only; the captured prompt on Home is not read again, since the terminal shows it as it is.
         onReview = { row -> onReviewPrompt(row.key.target.terminalId) },
@@ -390,7 +444,7 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onT
             ScreenHeader("Agent", onBack = onBack, compact = true)
             Column(Modifier.padding(PaddockTokens.spacing.gutter), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("This agent is not available right now. Its machine is not connected.", style = PaddockTokens.type.body, color = PaddockTokens.colors.title)
-                PaddockButton("Back to the herd", onBack, kind = ButtonKind.Ghost, icon = PaddockIcons.Back)
+                PaddockButton("Back to the herd", onBack, kind = ButtonKind.Secondary, icon = PaddockIcons.Back)
             }
         }
         return
@@ -597,7 +651,7 @@ private fun ComposeRoute(
             ScreenHeader("Prompt", onBack = onBack, compact = true)
             Column(Modifier.padding(PaddockTokens.spacing.gutter), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("This agent is not available right now. Its machine is not connected.", style = PaddockTokens.type.body, color = PaddockTokens.colors.title)
-                PaddockButton("Back", onBack, kind = ButtonKind.Ghost, icon = PaddockIcons.Back)
+                PaddockButton("Back", onBack, kind = ButtonKind.Secondary, icon = PaddockIcons.Back)
             }
         }
         return
@@ -700,7 +754,7 @@ private fun ActivityRoute(graph: AppGraph, onOpenAgent: (terminalId: String) -> 
             canReread = { h, s, tid -> host?.sends != null && h == host.profile.hostId.value && s == host.sessionName && host.home.value?.rows?.any { it.key.target.terminalId == tid } == true },
         )
     }
-    val sections = remember(filter, now / 1_000) { presenter.present(Activity.build(graph.ledger.observations(), graph.ledger.actions(), filter, graph.journal.records.value), now) }
+    val sections = remember(filter, now / 1_000) { presenter.present(Activity.build(graph.ledger.observations(), graph.ledger.actions(), filter, graph.journal.records.value, host?.saga?.sagas?.value ?: graph.savedSagas()), now) }
     // Re-read, then open the agent: its screen is where the result is shown. Never a resend from here.
     val onReread: (Long) -> Unit = { id ->
         val record = graph.journal.get(id)
@@ -711,6 +765,89 @@ private fun ActivityRoute(graph: AppGraph, onOpenAgent: (terminalId: String) -> 
         }
     }
     ActivityLog(sections, filter, { filter = it }, onReread = if (host?.sends != null) onReread else null)
+}
+
+/** The Spaces tab (Phase 09): the watched machine's sessions, the start-agent flow and its recovery cards. */
+@Composable
+private fun SpacesRoute(graph: AppGraph, onNotice: (String) -> Unit, onOpenAgent: (terminalId: String) -> Unit) {
+    val profile by graph.profile.collectAsState()
+    val view by graph.hostUi.view.collectAsState()
+    val spaces = view.spaces
+    val host = (view.phase as? HostPhase.Monitoring)?.host
+    val saga = host?.saga
+    val scope = graph.scope
+    val name = profile?.name ?: "this machine"
+    val listState by (spaces?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow<SpacesState>(SpacesState.Loading) }).collectAsState()
+    val notice by (spaces?.notice ?: remember { kotlinx.coroutines.flow.MutableStateFlow<String?>(null) }).collectAsState()
+    val sagas by (saga?.sagas ?: remember { kotlinx.coroutines.flow.MutableStateFlow<List<SagaRecord>>(emptyList()) }).collectAsState()
+    val installed by (host?.reconciler?.installed ?: remember { kotlinx.coroutines.flow.MutableStateFlow<io.github.tuthan.paddock.reconcile.Installed?>(null) }).collectAsState()
+    var refreshing by remember { mutableStateOf(false) }
+    var progressSince by rememberSaveable { mutableStateOf<Long?>(null) }
+    val now = rememberNow()
+
+    // The list is read when the tab opens and whenever the connection to the machine changes; every operation reads it again after itself.
+    LaunchedEffect(spaces) { spaces?.refresh() }
+
+    val mine = sagas.filter { it.host == profile?.hostId?.value }
+    // updatedAt, not startedAt: a retry under a new name runs in the saga that began earlier.
+    val progress = progressSince?.let { since -> mine.filter { it.updatedAt >= since && it.state != SagaState.Failed }.maxByOrNull { it.updatedAt } }?.let {
+        SagaProgress(it.id, it.agentName, it.kind, it.step.label, done = it.state == SagaState.Succeeded, terminalId = it.terminalId, note = it.promptNote)
+    }
+    val cards = mine.filter { it.needsRecovery }.map { SagaCard.of(it, name) }
+    val start = when {
+        saga == null || host == null -> StartAvailability.Unavailable("Starting an agent needs this phone to be watching a live session on $name.")
+        else -> StartAvailability.Available(installed?.snapshot?.workspaces.orEmpty().map { WorkspaceChoice(it.workspaceId, it.label.ifBlank { "workspace ${it.number}" }) })
+    }
+    val health = when { host != null && view.freshness == io.github.tuthan.paddock.reconcile.Freshness.Live -> HostHealth.Live; view.phase == null || view.phase == HostPhase.Connecting -> HostHealth.Connecting; else -> HostHealth.Degraded }
+    val presenter = remember { io.github.tuthan.paddock.ops.OperationPresenter() }
+
+    fun begin(req: SagaRequest) {
+        progressSince = now
+        scope.launch {
+            try { saga?.run(req) } catch (e: IllegalArgumentException) { onNotice(e.message ?: "That request cannot be sent.") }
+        }
+    }
+
+    SpacesScreen(
+        SpacesScreenState(
+            hostName = name, hostStatus = when (health) { HostHealth.Live -> "live"; HostHealth.Connecting -> "connecting"; else -> "not live" }, health = health,
+            list = if (spaces == null) SpacesState.Failed("No connection to $name yet, so its sessions cannot be read.") else listState,
+            notice = notice, watchedSession = host?.sessionName, cards = cards, progress = progress, start = start, refreshing = refreshing,
+        ),
+        SpacesActions(
+            onRefresh = { refreshing = true; scope.launch { try { spaces?.refresh() } finally { refreshing = false } } },
+            onStop = { e -> scope.launch { spaces?.stop(e) } },
+            onDelete = { e -> scope.launch { spaces?.delete(e) } },
+            onReread = { n -> scope.launch { spaces?.reread(n) } },
+            onDismissNotice = { spaces?.dismissNotice() },
+            onStart = { f -> begin(SagaRequest(profile!!.hostId, host!!.sessionName, f.name, f.kind, f.workspaceId, f.branch, firstPrompt = f.prompt, repository = null)) },
+            onDismissProgress = { progressSince = null },
+            onOpenAgent = onOpenAgent,
+            onRetryName = { id, newName -> progressSince = now; scope.launch { try { saga?.retryWithName(id, newName) } catch (e: IllegalArgumentException) { onNotice(e.message ?: "That name cannot be used.") } } },
+            onCard = { id, action ->
+                when (action) {
+                    is CardAction.OpenPane -> action.terminalId?.let(onOpenAgent)
+                    is CardAction.Leave -> saga?.leave(id)
+                    is CardAction.CloseCreated -> scope.launch { saga?.closeCreated(id)?.let { onNotice(SagaCopyLine.closed(presenter, action.what, it)) } }
+                    is CardAction.StartAnyway -> saga?.requestOf(id)?.let { r -> saga.leave(id); begin(r.copy(skipAvailabilityCheck = true)) }
+                    is CardAction.TrustRepository -> saga?.requestOf(id)?.let { r -> saga.leave(id); begin(r.copy(trustRepository = true)) }
+                    CardAction.ChooseAnotherName -> Unit
+                }
+            },
+        ),
+    )
+}
+
+/** The sentence for the end of a "close what the saga created" operation. */
+private object SagaCopyLine {
+    fun closed(presenter: io.github.tuthan.paddock.ops.OperationPresenter, what: io.github.tuthan.paddock.ops.CloseTarget, r: io.github.tuthan.paddock.ops.OperationResult<Unit>): String {
+        val kind = when (what) {
+            is io.github.tuthan.paddock.ops.CloseTarget.Workspace -> io.github.tuthan.paddock.ops.OperationKind.CloseWorkspace
+            is io.github.tuthan.paddock.ops.CloseTarget.Tab -> io.github.tuthan.paddock.ops.OperationKind.CloseTab
+            is io.github.tuthan.paddock.ops.CloseTarget.Pane -> io.github.tuthan.paddock.ops.OperationKind.ClosePane
+        }
+        return presenter.line(kind, r).text
+    }
 }
 
 @Composable
@@ -820,7 +957,7 @@ private fun DecisionRoute(graph: AppGraph, terminalId: String?, onBack: () -> Un
             ScreenHeader("Permission request", onBack = onBack, compact = true)
             Column(Modifier.padding(PaddockTokens.spacing.gutter), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(what, style = PaddockTokens.type.body, color = PaddockTokens.colors.title)
-                PaddockButton("Back", onBack, kind = ButtonKind.Ghost, icon = PaddockIcons.Back)
+                PaddockButton("Back", onBack, kind = ButtonKind.Secondary, icon = PaddockIcons.Back)
             }
         }
     }

@@ -62,11 +62,11 @@ class DecisionSheetTest {
         newerToolName = newer, readError = readError, sending = sending,
     )
 
-    private fun show(m: DecisionModel, calls: Calls = Calls(), awaitsSettle: Boolean = false, fontScale: Float? = null, notice: String? = null, setUp: Boolean = false): Calls {
+    private fun show(m: DecisionModel, calls: Calls = Calls(), awaitsSettle: Boolean = false, fontScale: Float? = null, notice: String? = null, setUp: Boolean = false, dark: Boolean = true): Calls {
         rule.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
-                PaddockTheme(darkTheme = true) {
+                PaddockTheme(darkTheme = dark) {
                     DecisionSheet(
                         header, m, awaitsSettle,
                         DecisionActions(
@@ -244,4 +244,14 @@ class DecisionSheetTest {
         rule.onNodeWithTag("decision-entry").performClick()
         assertEquals(1, opened)
     }
+
+    /** What Yes approves must stay on screen at every font size: the request keeps 100 dp. */
+    private val REQUEST = SemanticsAudit.Options(regions = mapOf("request-slab" to 100f))
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditDecisionSheetDark() { show(model()); SemanticsAudit.expectClean(rule, "Decision sheet, dark", REQUEST) }
+    @Test fun auditDecisionSheetLight() { show(model(), dark = false); SemanticsAudit.expectClean(rule, "Decision sheet, light", REQUEST) }
+    @Test fun auditDecisionSheetExpiredDark() { show(model(canAnswer = false, whyNot = NotAnswerable.Expired.sentence, timeLeft = "Expired")); SemanticsAudit.expectClean(rule, "Decision sheet, expired, dark", REQUEST) }
+
 }

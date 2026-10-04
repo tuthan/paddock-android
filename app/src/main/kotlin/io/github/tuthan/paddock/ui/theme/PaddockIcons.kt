@@ -25,6 +25,8 @@ object PaddockIcons {
     val Chevron = icon("chevron", "M9 6l6 6-6 6")
     val Herd = icon("herd", "M12 3l9 5-9 5-9-5 9-5z", "M3 13l9 5 9-5")
     val Activity = icon("activity", "M3 12h4l3-8 4 16 3-8h4")
+    /** Spaces: four tiles, the machine's sessions, workspaces and tabs. */
+    val Spaces = icon("spaces", rect(3.5f, 3.5f, 7f, 7f, 1.5f), rect(13.5f, 3.5f, 7f, 7f, 1.5f), rect(3.5f, 13.5f, 7f, 7f, 1.5f), rect(13.5f, 13.5f, 7f, 7f, 1.5f))
     val Warning = icon("warning", "M12 3l10 18H2L12 3z", "M12 10v4M12 17.5v.5")
     val Copy = icon("copy", rect(9f, 9f, 11f, 11f, 2f), "M5 15V5h10")
     val Qr = icon("qr", rect(4f, 4f, 6f, 6f), rect(14f, 4f, 6f, 6f), rect(4f, 14f, 6f, 6f), "M14 14h3v3M20 14v6h-6")

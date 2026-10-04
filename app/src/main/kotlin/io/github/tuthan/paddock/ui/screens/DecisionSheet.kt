@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -35,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.answers.DecisionEntryModel
 import io.github.tuthan.paddock.answers.DecisionModel
 import io.github.tuthan.paddock.ops.ResultTone
+import io.github.tuthan.paddock.ui.components.FlexColumn
+import io.github.tuthan.paddock.ui.components.flexible
 import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.ButtonPair
@@ -60,6 +61,8 @@ data class DecisionActions(
     val onSetUp: (() -> Unit)? = null,
 )
 
+private val SLAB_MIN = 120.dp
+
 const val DECISION_FACT =
     "Yes or No answers this one request and nothing else. Paddock never sends \"always allow\". The dialog on the desktop stays open until somebody answers: whoever answers first wins."
 
@@ -84,11 +87,13 @@ fun DecisionSheet(
     notice: String? = null,
 ) {
     val c = PaddockTokens.colors
+    // The request is what Yes approves, so it keeps SLAB_MIN of its own: with a large font on a small phone the chips, the buttons and the notes are
+    // taller than the screen, and the sheet then scrolls instead of squeezing the request to nothing while Yes and No stay on screen.
     Column(modifier.fillMaxSize()) {
         ScreenHeader("Permission request", onBack = onBack, subtitle = header.title.ifEmpty { null }, compact = true, backDescription = "Back")
-        Column(
+        FlexColumn(
             Modifier.weight(1f).fillMaxWidth().padding(start = PaddockTokens.spacing.gutter, end = PaddockTokens.spacing.gutter, bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            flexMin = SLAB_MIN, spacing = 10.dp,
         ) {
             notice?.let { Note(it, icon = PaddockIcons.Eye, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
             model.readError?.let { Banner("Could not read the request: $it", actionLabel = actions.onSetUp?.let { "Set up" } ?: "Try again", onAction = actions.onSetUp ?: actions.onRefresh) }
@@ -115,7 +120,7 @@ private fun SettleBanner(actions: DecisionActions) =
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ColumnScope.RequestBody(model: DecisionModel, awaitsSettle: Boolean, actions: DecisionActions) {
+private fun RequestBody(model: DecisionModel, awaitsSettle: Boolean, actions: DecisionActions) {
     val c = PaddockTokens.colors
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
         Chip(model.toolName.orEmpty(), tone = c.needsYou, description = "Tool: ${model.toolName}")
@@ -124,7 +129,8 @@ private fun ColumnScope.RequestBody(model: DecisionModel, awaitsSettle: Boolean,
         model.timeLeft?.let { Chip(it, tone = if (it == "Expired") c.attention else null, description = it) }
     }
     val shape = RoundedCornerShape(PaddockTokens.radii.row)
-    Box(Modifier.weight(1f).fillMaxWidth().clip(shape).background(c.slab).border(1.dp, c.line(), shape)) {
+    // The request is what Yes approves: it never gets less than this, whatever the font and the screen.
+    Box(Modifier.flexible().fillMaxWidth().testTag("request-slab").clip(shape).background(c.slab).border(1.dp, c.line(), shape)) {
         Text(
             model.inputText.orEmpty(), style = PaddockTokens.type.monoFact, color = c.text,
             modifier = Modifier.testTag("tool-input").fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -143,7 +149,7 @@ private fun ColumnScope.RequestBody(model: DecisionModel, awaitsSettle: Boolean,
                 ResultTone.Unknown -> Banner(line, actionLabel = "Read the files", onAction = actions.onSettle)
                 else -> Banner(line, actionLabel = "Open terminal", onAction = actions.onOpenTerminal)
             }
-            if (model.resultTone != ResultTone.Unknown && model.resultTone != ResultTone.Ok) PaddockButton("Dismiss", actions.onDismissResult, kind = ButtonKind.Ghost, small = true, fillWidth = false)
+            if (model.resultTone != ResultTone.Unknown && model.resultTone != ResultTone.Ok) PaddockButton("Dismiss", actions.onDismissResult, kind = ButtonKind.Secondary, small = true, fillWidth = false)
         }
         if (awaitsSettle && model.resultTone != ResultTone.Unknown) SettleBanner(actions)
         model.status?.let { s ->

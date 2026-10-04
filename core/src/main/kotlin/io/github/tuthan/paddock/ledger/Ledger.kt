@@ -77,6 +77,11 @@ class Ledger(private val store: LedgerStore, private val now: () -> Long) {
         commit(data.copy(seen = data.seen + carried, epochs = data.epochs.filterNot { it === mark } + updated))
     }
 
+    /** The epoch of the last read installed for [host] and [session], or null when none was: what a background reader needs to ask [seenLookup]. */
+    fun installedEpoch(host: HostProfileId, session: String): Long? = synchronized(lock) {
+        data.epochs.firstOrNull { it.host == host.value && it.session == session }?.installed
+    }
+
     fun observations(): List<Observation> = synchronized(lock) { data.observations }
     fun actions(): List<PhoneAction> = synchronized(lock) { data.actions }
 

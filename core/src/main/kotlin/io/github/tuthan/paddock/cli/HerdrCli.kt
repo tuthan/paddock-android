@@ -25,6 +25,13 @@ class HerdrCli(private val herdr: String, private val session: String) {
     fun status() = scoped("status")
     /** Session catalogue is host-wide, so it is not scoped to one session. */
     fun sessionList() = listOf(herdr, "session", "list", "--json")
+    /**
+     * `session stop <name> --json` and `session delete <name> --json` (Phase 09). Host-wide like [sessionList]: the name is the
+     * only variable part, it is checked against [SESSION_NAME] here, and herdr itself refuses to delete a running session. Paddock
+     * never signals a process; a server that will not stop is reported with herdr's own error.
+     */
+    fun sessionStop(name: String) = listOf(herdr, "session", "stop", sessionArg(name), "--json")
+    fun sessionDelete(name: String) = listOf(herdr, "session", "delete", sessionArg(name), "--json")
     fun apiSnapshot() = scoped("api", "snapshot")
     fun agentList() = scoped("agent", "list")
     fun agentGet(paneId: String) = scoped("agent", "get", id(paneId))
@@ -64,7 +71,20 @@ class HerdrCli(private val herdr: String, private val session: String) {
         return scoped("agent", "read", id(paneId), "--source", source.wire, "--lines", lines.toString()) + if (ansi) listOf("--format", "ansi") else emptyList()
     }
 
+    /**
+     * `agent start <name> --kind <kind> --pane <pane> --timeout <ms>` (Phase 09). The CLI waits for the agent to be detected and ready,
+     * which the relay's `agent.start` does not (it answers in milliseconds with `launch_pending`), so the saga's start step uses this.
+     * [name] and [kind] are tokens, never free text; herdr refuses a timeout of 3000 ms or less.
+     */
+    fun agentStart(name: String, kind: String, paneId: String, timeoutMs: Int): List<String> {
+        require(AGENT_NAME.matches(name)) { "invalid agent name" }
+        require(AGENT_KIND.matches(kind)) { "invalid agent kind" }
+        require(timeoutMs in 3_001..300_000) { "timeout out of range" }
+        return scoped("agent", "start", name, "--kind", kind, "--pane", id(paneId), "--timeout", timeoutMs.toString())
+    }
+
     private fun id(value: String): String { require(ID.matches(value)) { "invalid id"}; return value }
+    private fun sessionArg(value: String): String { require(SESSION_NAME.matches(value)) { "invalid session name" }; return value }
 
     companion object {
         /**
@@ -80,6 +100,9 @@ class HerdrCli(private val herdr: String, private val session: String) {
         val ID = Regex("[A-Za-z0-9_][A-Za-z0-9_:.-]{0,63}")
         /** One rule for every place a session name is accepted (the profile form included): starts with a letter or digit. */
         val SESSION_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+        /** An agent's name (`agent start <name>`, `agent rename`): the same token the app's forms allow. */
+        val AGENT_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
+        val AGENT_KIND = Regex("[a-z][a-z0-9]{1,15}")
     }
 }
 

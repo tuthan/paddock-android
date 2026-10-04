@@ -67,6 +67,15 @@ class AttentionTest {
         assertEquals("fix the build", AttentionModel.title(agent("w1:p1", AgentStatus.Idle, title = "fix the build").copy(title = " ")))
     }
 
+    @Test fun anAgentsNameIsOnItsRowAndIsTheFallbackTitleBeforeItsKind() {
+        val named = agent("w1:p1", AgentStatus.Idle).copy(name = "worker-1")
+        assertEquals("worker-1 · proj", home(named).rows.single().context, "a rename shows even when the title comes from the terminal")
+        assertEquals("worker-1 · w1:p1", AttentionModel.title(named.copy(title = null, terminalTitleStripped = null)))
+        assertEquals("claude · w1:p1", AttentionModel.title(agent("w1:p1", AgentStatus.Idle, title = "\u202E\u200B")), "without a name the kind is used")
+        assertEquals("worker-1", home(named.copy(cwd = null, foregroundCwd = null)).rows.single().context, "the name alone, with no separator left over")
+        assertEquals("fix the build", AttentionModel.title(named.copy(title = "fix the build")), "the name does not outrank an integration's title")
+    }
+
     @Test fun contextIsWorkspaceAndTabElseTheWorkingDirectoryBasename() {
         assertEquals("proj", home(agent("w1:p1", AgentStatus.Idle)).rows.single().context)
         assertEquals("", home(agent("w1:p1", AgentStatus.Idle, cwd = null)).rows.single().context)

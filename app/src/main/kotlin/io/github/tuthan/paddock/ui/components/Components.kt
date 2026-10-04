@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -218,11 +219,13 @@ private fun rowDetail(model: AgentRowModel, nowMillis: Long, stale: Boolean): St
 /**
  * One agent: monogram, a one-line title, then where it is and when the phone saw it. Colour is spent only where
  * attention is: blocked and done rows are washed in their colour and lead to the agent with a chevron; working, ready
- * and unknown rows are plain with the state's dot. A [stale] row (its host is not live) is dimmed, says what it *was*,
- * and offers no action.
+ * and unknown rows are plain with the state's dot. A [stale] row (its host is not live) says what it *was*, offers no
+ * action, loses its wash, draws its title in the `dim` colour and its dot faded. Its text is never faded with alpha: that
+ * took the context line to 2.6:1 (the audit measured it), and the row is information the user still has to read.
  */
 @Composable
-fun AgentRow(model: AgentRowModel, nowMillis: Long, enabled: Boolean, modifier: Modifier = Modifier, stale: Boolean = !enabled, onClick: () -> Unit = {}) {
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+fun AgentRow(model: AgentRowModel, nowMillis: Long, enabled: Boolean, modifier: Modifier = Modifier, stale: Boolean = !enabled, onLongClick: (() -> Unit)? = null, onClick: () -> Unit = {}) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.row)
     val loud = !stale && (model.state == StateWord.Blocked || model.state == StateWord.Done)
@@ -230,11 +233,10 @@ fun AgentRow(model: AgentRowModel, nowMillis: Long, enabled: Boolean, modifier: 
     Row(
         modifier
             .fillMaxWidth()
-            .alpha(if (stale) 0.55f else 1f)
             .clip(shape)
             .background(if (loud && tone != null) c.wash(tone) else c.surface)
             .border(1.dp, if (loud && tone != null) c.washBorder(tone) else c.line(), shape)
-            .then(if (enabled) Modifier.clickable(role = Role.Button, onClickLabel = "Open ${model.title}", onClick = onClick) else Modifier)
+            .then(if (!enabled) Modifier else if (onLongClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = "Open ${model.title}", onLongClickLabel = "More actions for ${model.title}", onLongClick = onLongClick, onClick = onClick) else Modifier.clickable(role = Role.Button, onClickLabel = "Open ${model.title}", onClick = onClick))
             .heightIn(min = PaddockTokens.spacing.touchTarget)
             .padding(horizontal = 14.dp, vertical = if (loud) 12.dp else 10.dp)
             .semantics(mergeDescendants = true) { contentDescription = rowDescription(model, nowMillis, stale) },
@@ -245,11 +247,11 @@ fun AgentRow(model: AgentRowModel, nowMillis: Long, enabled: Boolean, modifier: 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             // One line as designed; two once the font is large, so a title is still recognisable.
             val lines = if (LocalDensity.current.fontScale >= 1.3f) 2 else 1
-            Text(model.title, style = PaddockTokens.type.rowTitle, color = c.title, maxLines = lines, overflow = TextOverflow.Ellipsis)
-            Text(rowDetail(model, nowMillis, stale), style = PaddockTokens.type.secondary, color = c.dim, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(model.title, style = PaddockTokens.type.rowTitle, color = if (stale) c.dim else c.title, maxLines = lines, overflow = TextOverflow.Ellipsis)
+            Text(rowDetail(model, nowMillis, stale), style = PaddockTokens.type.secondary, color = c.dim, maxLines = if (LocalDensity.current.fontScale >= 1.3f) 4 else 2, overflow = TextOverflow.Ellipsis)
         }
         if (loud && enabled) Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
-        else StateDot(model.state)
+        else StateDot(model.state, if (stale) Modifier.alpha(0.55f) else Modifier)
     }
 }
 

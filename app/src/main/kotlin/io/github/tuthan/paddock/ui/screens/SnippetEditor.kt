@@ -61,15 +61,15 @@ fun SnippetEditor(snippets: List<String>, onChange: (List<String>) -> Unit, onBa
                     { apply(editing?.let { Snippets.edit(snippets, it, draft) } ?: Snippets.add(snippets, draft)) },
                     Modifier.weight(1f), enabled = draft.isNotBlank(),
                 )
-                if (editing != null) PaddockButton("Cancel", { editing = null; draft = ""; error = null }, kind = ButtonKind.Ghost, fillWidth = false)
+                if (editing != null) PaddockButton("Cancel", { editing = null; draft = ""; error = null }, kind = ButtonKind.Secondary, fillWidth = false)
             }
             if (snippets.isEmpty()) Text("No snippets yet.", style = PaddockTokens.type.body, color = c.dim)
             snippets.forEachIndexed { i, s ->
                 Column(Modifier.card(c), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(s, style = PaddockTokens.type.body, color = c.title, maxLines = 4, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PaddockButton("Edit", { editing = i; draft = s; error = null }, kind = ButtonKind.Ghost, small = true, fillWidth = false)
-                        if (i > 0) PaddockButton("Move up", { onChange(Snippets.move(snippets, i, i - 1)) }, kind = ButtonKind.Ghost, small = true, fillWidth = false)
+                        PaddockButton("Edit", { editing = i; draft = s; error = null }, kind = ButtonKind.Secondary, small = true, fillWidth = false)
+                        if (i > 0) PaddockButton("Move up", { onChange(Snippets.move(snippets, i, i - 1)) }, kind = ButtonKind.Secondary, small = true, fillWidth = false)
                         PaddockButton("Remove", {
                             onChange(Snippets.remove(snippets, i))
                             if (editing == i) { editing = null; draft = "" } else if ((editing ?: -1) > i) editing = editing!! - 1

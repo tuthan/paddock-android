@@ -89,6 +89,8 @@ fun HerdHome(
     nowMillis: Long,
     modifier: Modifier = Modifier,
     onOpenAgent: (AgentRowModel) -> Unit = {},
+    /** Long-press on a live row: rename it, or show its workspace or tab on the desktop (Phase 09). Null leaves the gesture out. */
+    onRowMenu: ((AgentRowModel) -> Unit)? = null,
     onRecovery: () -> Unit = {},
     /** The captured prompt of the first blocked agent, when one was read. Only a live host expands that row. */
     preview: BlockedPreview? = null,
@@ -160,7 +162,7 @@ fun HerdHome(
                         } else items(rows, key = { it.key.target.terminalId }) { row ->
                             val expanded = preview != null && row.state == StateWord.Blocked && row.key.target.terminalId == preview.terminalId && row.key.target.terminalId == firstBlockedId
                             if (expanded) ExpandedAgentRow(row, nowMillis, preview!!.state, onOpen = { onOpenAgent(row) }, onReview = { onReview(row) }, modifier = Modifier.animateItem())
-                            else AgentRow(row, nowMillis, enabled = enabled, modifier = Modifier.animateItem(), onClick = { onOpenAgent(row) })
+                            else AgentRow(row, nowMillis, enabled = enabled, modifier = Modifier.animateItem(), onLongClick = onRowMenu?.let { menu -> { menu(row) } }, onClick = { onOpenAgent(row) })
                         }
                     }
                     if (model.quiet && model.rows.isNotEmpty() && onRefresh != null) {

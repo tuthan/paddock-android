@@ -90,6 +90,8 @@ class AppGraph(private val app: Application) {
     private val settingsStore = FileAppSettingsStore(File(files, "settings.json"))
     /** What the phone asked of each terminal, written before it asks. Never deleted for an unknown outcome. */
     val journal = OperationJournal(FileJournalStore(File(files, "operations.json")), clock)
+    /** Start-agent sagas with every id herdr returned (Phase 09); no prompt text is ever written here. */
+    private val sagaStore = io.github.tuthan.paddock.ops.FileSagaStore(File(files, "sagas.json"))
     private val snippetStore = FileSnippetStore(File(files, "snippets.json"))
     /** Manual input (Esc and Ctrl+C) lives as long as the process and is never restored: a killed app starts with it off. */
     val manualInput = ManualInputMode()
@@ -112,6 +114,14 @@ class AppGraph(private val app: Application) {
         hideOnLockScreen = { runCatching { settingsStore.load().hidePromptOnLockScreen }.getOrDefault(true) },
     )
     @Volatile private var alertWatcher: Job? = null
+
+    /** What the home-screen widgets draw (Phase 10): the last read of the watched machine, written by the open app and by [refreshWidgetCache]. */
+    private val widgetStore = io.github.tuthan.paddock.widget.WidgetCaches.store(app)
+    private val widgetRefresher = io.github.tuthan.paddock.widget.WidgetRefresher(widgetStore, clock) { host, session ->
+        ledger.installedEpoch(host, session)?.let { ledger.seenLookup(host, session, it) } ?: io.github.tuthan.paddock.attention.SeenLookup { null }
+    }
+    @Volatile private var widgetWatcher: Job? = null
+    @Volatile private var lastWidgetCache: io.github.tuthan.paddock.widget.WidgetCache? = null
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
     val owner = ConnectionOwner(scope, SessionFactory { profile -> connect(profile) }, clock)
@@ -259,18 +269,23 @@ class AppGraph(private val app: Application) {
         return FreshHerd(profile, host, installed?.snapshot)
     }
 
+    /** The saved sagas, for Activity while no host is being monitored (a restart, a lost connection). */
+    fun savedSagas(): List<io.github.tuthan.paddock.ops.SagaRecord> = runCatching { sagaStore.load().records }.getOrDefault(emptyList())
+
     /** Resumes the controller already watching [profile]; for any other profile, stops it and starts a new one. */
     private fun watch(profile: HostProfile) = synchronized(lock) {
         val c = controller
         if (c != null && c.profile == profile) { c.resume(); return@synchronized }
         c?.stop()
         val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin, journal = journal, alertScript = alertScript, alertSha256 = alertScriptSha256,
-            decideScript = decideScript, decideSha256 = decideScriptSha256, hookScript = hookScript, hookSha256 = hookScriptSha256)
+            decideScript = decideScript, decideSha256 = decideScriptSha256, hookScript = hookScript, hookSha256 = hookScriptSha256, sagaStore = sagaStore)
         controller = next
         hostUi.attach(next)
         next.start()
         alertWatcher?.cancel()
         alertWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) raiseAlerts(p.host) } }
+        widgetWatcher?.cancel()
+        widgetWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) trackWidgetCache(p.host) } }
     }
 
     /**
@@ -287,6 +302,45 @@ class AppGraph(private val app: Application) {
             ) ?: return@collect
             runCatching { notifier.show(AlertContent.of(alert, settings.hidePromptOnLockScreen)) }
         }
+    }
+
+    /**
+     * Keeps the widgets' cache as fresh as the open app's own herd: written when what the widgets show changes, and at most once a minute
+     * otherwise (so "as of" moves while nothing else does). The cache is only ever a copy of the herd list the user is looking at.
+     */
+    private suspend fun trackWidgetCache(host: MonitoredHost) {
+        host.home.collect { home ->
+            if (home == null) return@collect
+            val readAt = host.reconciler.installed.value?.readAtMillis ?: clock.nowMillis()
+            val next = io.github.tuthan.paddock.widget.WidgetCacheBuilder.from(home, host.profile.id, host.profile.name, host.sessionName, readAt)
+            val prev = lastWidgetCache
+            if (prev != null && prev.copy(readAtMillis = 0) == next.copy(readAtMillis = 0) && next.readAtMillis - prev.readAtMillis < WIDGET_TOUCH_MILLIS) return@collect
+            lastWidgetCache = next
+            if (runCatching { widgetStore.save(next) }.isSuccess) runCatching { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) }
+        }
+    }
+
+    /**
+     * The widgets' background read, run by the periodic job: one short SSH read of the machine the cache already knows, on a connection this
+     * claims and releases. It does nothing while the app is in front (its own read keeps the cache), nothing for a machine the phone has not
+     * read before (so it can never raise a first-trust prompt for a key nobody has seen), and nothing with a cache that is wrong when the
+     * read fails: the old cache stays and its time says so. Returns a line for the log.
+     */
+    suspend fun refreshWidgetCache(): String {
+        if (triggers.foreground.value) return "skipped: the app is in front and keeps the cache itself"
+        val all = runCatching { profiles.list() }.getOrDefault(emptyList())
+        val watched = runCatching { settingsStore.load().watchedProfileId }.getOrNull()
+        val profile = all.firstOrNull { it.id == watched } ?: all.firstOrNull() ?: return "skipped: no machine"
+        val cache = widgetStore.load()?.takeIf { it.hostId == profile.id } ?: return "skipped: nothing has been read from ${profile.name} yet"
+        val lease = owner.acquire(profile)
+        try {
+            val state = withTimeoutOrNull(WIDGET_CONNECT_MILLIS) { lease.state.first { it is io.github.tuthan.paddock.lifecycle.Connection.Connected || it is io.github.tuthan.paddock.lifecycle.Connection.Failed } }
+            val connected = state as? io.github.tuthan.paddock.lifecycle.Connection.Connected ?: return "skipped: not connected (${state ?: "timed out"})"
+            return when (val out = widgetRefresher.refresh(profile, connected.session, cache.session)) {
+                is io.github.tuthan.paddock.widget.WidgetRefresher.Outcome.Updated -> { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app); "updated: ${out.cache.counts}" }
+                is io.github.tuthan.paddock.widget.WidgetRefresher.Outcome.Unchanged -> "unchanged: ${out.reason}"
+            }
+        } finally { lease.release() }
     }
 
     /** "Try again": a setup problem on a healthy connection runs the setup again; anything else refreshes the connection. */
@@ -383,3 +437,8 @@ class AlertResolution(val outcome: AlertOutcome?, val machine: String, val row: 
 class MachineResolution(val outcome: MachineOutcome?, val machine: String, val unknownMachine: Boolean)
 
 const val IMPORTED_KEY_ID = "imported"
+
+/** The widget cache is rewritten when nothing changed only if its read is this much newer. */
+private const val WIDGET_TOUCH_MILLIS = 60_000L
+/** How long the widgets' background read waits for a connection before it gives up until the next period. */
+private const val WIDGET_CONNECT_MILLIS = 25_000L

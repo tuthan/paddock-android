@@ -23,6 +23,8 @@ data class HostView(
     val lastLoss: Throwable? = null,
     /** The herdr version of the last read, for Settings' About. */
     val herdrVersion: String? = null,
+    /** The machine's sessions for the Spaces screen (Phase 09); null while the connection is not up. */
+    val spaces: io.github.tuthan.paddock.live.HostSpaces? = null,
 )
 
 /** What tapping the degraded banner's action does. */

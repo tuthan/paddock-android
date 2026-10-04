@@ -31,9 +31,9 @@ class SnippetEditorTest {
     private var changes = 0
     private var backs = 0
 
-    private fun show(initial: List<String> = emptyList()) {
+    private fun show(initial: List<String> = emptyList(), dark: Boolean = true) {
         list = initial; changes = 0; backs = 0
-        rule.setContent { PaddockTheme(darkTheme = true) { SnippetEditor(list, { list = it; changes++ }, { backs++ }) } }
+        rule.setContent { PaddockTheme(darkTheme = dark) { SnippetEditor(list, { list = it; changes++ }, { backs++ }) } }
     }
 
     private fun type(text: String) = rule.onNode(hasSetTextAction()).performTextInput(text)
@@ -121,4 +121,10 @@ class SnippetEditorTest {
         show()
         rule.onNodeWithText("never synced", substring = true).assertIsDisplayed()
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditSnippetEditorDark() { show(listOf("continue", "run the tests")); SemanticsAudit.expectClean(rule, "Snippet editor, dark") }
+    @Test fun auditSnippetEditorLight() { show(listOf("continue", "run the tests"), dark = false); SemanticsAudit.expectClean(rule, "Snippet editor, light") }
+
 }

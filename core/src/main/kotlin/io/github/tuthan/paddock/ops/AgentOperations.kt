@@ -12,6 +12,7 @@ import io.github.tuthan.paddock.relay.RelayClient
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -120,6 +121,22 @@ class AgentOperations(
             relay.call("agent.focus", buildJsonObject { put("target", pane) }, timeout = sendTimeout, beforeWrite = before)
                 .decode<AgentInfoResult>("agent_info").agent.answeredFor(key)
         })
+
+    /**
+     * `agent rename`: a new name for the agent, or none ([name] null clears it). The name is a short token (see [SagaRules.NAME]); herdr
+     * refuses a name another agent in the session already holds, and that refusal is shown as herdr's. Like focus, it asks for no
+     * agent state: renaming a working or a blocked agent changes nothing about what it is doing.
+     */
+    suspend fun rename(key: TerminalKey, name: String?): OperationResult<Agent> {
+        name?.let { SagaRules.nameProblem(it)?.let { problem -> throw IllegalArgumentException(problem) } }
+        return Operation.run(journal, key, OperationKind.Rename, payload = name,
+            resolveTarget = { resolve(key) },
+            preflight = { pane -> identity(key, pane) },
+            send = { pane, before ->
+                relay.call("agent.rename", buildJsonObject { put("target", pane); if (name != null) put("name", name) else put("name", JsonNull) }, timeout = sendTimeout, beforeWrite = before)
+                    .decode<AgentInfoResult>("agent_info").agent.answeredFor(key)
+            })
+    }
 
     private suspend fun identity(key: TerminalKey, pane: String): Preflight {
         val agent = readPane(pane).agent

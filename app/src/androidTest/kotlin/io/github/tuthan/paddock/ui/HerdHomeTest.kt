@@ -295,4 +295,22 @@ class HerdHomeTest {
         rule.onNodeWithText("Review prompt").assertIsDisplayed()
         shoot("home-expanded-blocked-200")
     }
+
+    // ---- the accessibility audit (AC-10.3) ----------------------------------------------------------------------------------
+
+    @Test fun auditLiveHomeDarkAndLight() {
+        show(live(busy)); SemanticsAudit.expectClean(rule, "Home, busy, dark")
+    }
+
+    @Test fun auditLiveHomeLight() {
+        show(live(busy), dark = false); SemanticsAudit.expectClean(rule, "Home, busy, light")
+    }
+
+    @Test fun auditDegradedHome() {
+        show(HomeUiState.Degraded("laptop", busy, notAnswering, 125_000, recoveryLabel = "Retry")); SemanticsAudit.expectClean(rule, "Home, degraded, dark")
+    }
+
+    @Test fun auditDegradedHomeLight() {
+        show(HomeUiState.Degraded("laptop", busy, notAnswering, 125_000, recoveryLabel = "Retry"), dark = false); SemanticsAudit.expectClean(rule, "Home, degraded, light")
+    }
 }

@@ -175,7 +175,7 @@ internal fun OutcomeLine(line: ResultLine, onOpenTerminal: () -> Unit, onDismiss
             line.opensTerminal -> Banner(line.text, actionLabel = "Open terminal", onAction = onOpenTerminal)
             else -> Banner(line.text)
         }
-        if (!line.unknown) PaddockButton("Dismiss", onDismiss, kind = ButtonKind.Ghost, small = true, fillWidth = false)
+        if (!line.unknown) PaddockButton("Dismiss", onDismiss, kind = ButtonKind.Secondary, small = true, fillWidth = false)
     }
 }
 

@@ -274,4 +274,14 @@ class AgentOutputTest {
         show(showing())
         rule.onNodeWithText("Ask the agent…").assertDoesNotExist()
     }
+
+    /** The output is what the screen is for: it keeps 100 dp at every font size. */
+    private val OUTPUT = SemanticsAudit.Options(regions = mapOf("Terminal output" to 100f))
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditOutputDark() { show(showing()); SemanticsAudit.expectClean(rule, "Agent output, dark", OUTPUT) }
+    @Test fun auditOutputLight() { show(showing(), dark = false); SemanticsAudit.expectClean(rule, "Agent output, light", OUTPUT) }
+    @Test fun auditOutputStaleDark() { show(showing(stale = true)); SemanticsAudit.expectClean(rule, "Agent output, stale, dark", OUTPUT) }
+
 }

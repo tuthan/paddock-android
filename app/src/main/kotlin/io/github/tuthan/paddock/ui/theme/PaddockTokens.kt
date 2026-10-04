@@ -43,7 +43,7 @@ data class PaddockColors(
     fun bannerBorder(state: Color): Color = state.copy(alpha = 0.40f)
 }
 
-/** Dark is complete (tokyo-night seed); light is reviewed second. */
+/** Dark is the reviewed default (tokyo-night seed). Its contrast is measured with the light set in docs/contrast.md and pinned by `PaletteContrastTest`. */
 val PaddockDarkColors = PaddockColors(
     ground = Color(0xFF16161E),
     surface = Color(0xFF1A1B26),
@@ -61,7 +61,11 @@ val PaddockDarkColors = PaddockColors(
     isDark = true,
 )
 
-/** PLACEHOLDER VALUES, flagged for Phase 10: hues follow the dark set but no contrast review has been done. */
+/**
+ * The light set, derived from the dark hues and measured in Phase 10 (docs/contrast.md; `PaletteContrastTest` fails the build when a pair
+ * used by the app falls under 4.5:1 for text or 3:1 for icons, dots and the switch). Measured, two tokens came out too light and were darkened,
+ * never the rule: `dim` 5A607F to 525776 (it was 4.20:1 on a banner wash) and `attention` 8F5E15 to 7A5112 (it was 3.79:1).
+ */
 val PaddockLightColors = PaddockColors(
     ground = Color(0xFFE6E7ED),
     surface = Color(0xFFFFFFFF),
@@ -69,12 +73,12 @@ val PaddockLightColors = PaddockColors(
     slab = Color(0xFFF1F2F6),
     title = Color(0xFF1A1B26),
     text = Color(0xFF343B58),
-    dim = Color(0xFF5A607F),
+    dim = Color(0xFF525776),
     faint = Color(0xFF9699A3),
     accent = Color(0xFF34548A),
     needsYou = Color(0xFF8C4351),
     done = Color(0xFF485E30),
-    attention = Color(0xFF8F5E15),
+    attention = Color(0xFF7A5112),
     track = Color(0xFFB4B8CC),
     isDark = false,
 )

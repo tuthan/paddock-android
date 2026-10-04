@@ -111,4 +111,16 @@ class HerdrCliTest {
         assertFailsWith<ProtocolError.Decode> { StatusParser.parse("server:\n  status: running\n") }
         assertFailsWith<ProtocolError.Decode> { StatusParser.parse("client:\n  version: 0.9.1\n") }
     }
+
+    @Test fun agentStartIsOneScopedCommandWithTokensOnly() {
+        val cli = HerdrCli("/usr/bin/herdr", "paddock-test")
+        assertEquals(listOf("/usr/bin/herdr", "--session", "paddock-test", "agent", "start", "worker-1", "--kind", "claude", "--pane", "w1:p2", "--timeout", "30000"),
+            cli.agentStart("worker-1", "claude", "w1:p2", 30_000))
+        for (bad in listOf("", "-x", "a b", "a;b", "a'b", "a\nb")) assertFailsWith<IllegalArgumentException>("name <$bad>") { cli.agentStart(bad, "claude", "w1:p2", 5000) }
+        for (bad in listOf("", "Claude", "a", "claude;ls", "-claude")) assertFailsWith<IllegalArgumentException>("kind <$bad>") { cli.agentStart("a", bad, "w1:p2", 5000) }
+        assertFailsWith<IllegalArgumentException> { cli.agentStart("a", "claude", "-p", 5000) }
+        // herdr refuses 3000 ms or less, and the app never asks for more than five minutes.
+        assertFailsWith<IllegalArgumentException> { cli.agentStart("a", "claude", "w1:p2", 3000) }
+        assertFailsWith<IllegalArgumentException> { cli.agentStart("a", "claude", "w1:p2", 300_001) }
+    }
 }

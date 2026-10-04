@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The 4 x 2 summary: what needs the user, up to two blocked agents each with a Review button, and the time of the read. Inflated by
+     WidgetRenderer; the texts here are the "nothing read yet" state, which carries no number. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="10dp">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1">
+        <TextView
+            android:id="@+id/headline_needs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="@font/ibm_plex_sans_semibold"
+            android:maxLines="2"
+            android:text="@string/widget_unread"
+            android:textSize="18sp"
+            android:textColor="@color/widget_needs_you"
+            android:visibility="gone" />
+        <TextView
+            android:id="@+id/headline_quiet"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="@font/ibm_plex_sans_semibold"
+            android:maxLines="2"
+            android:text="@string/widget_unread"
+            android:textSize="18sp"
+            android:textColor="@color/widget_title" />
+        <TextView
+            android:id="@+id/headline_old"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="@font/ibm_plex_sans_semibold"
+            android:maxLines="2"
+            android:text="@string/widget_unread"
+            android:textSize="18sp"
+            android:textColor="@color/widget_dim"
+            android:visibility="gone" />
+        </FrameLayout>
+        <TextView
+            android:id="@+id/asof"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:fontFamily="@font/ibm_plex_sans_regular"
+            android:maxLines="1"
+            android:textColor="@color/widget_dim"
+            android:textSize="12sp"
+            android:visibility="gone" />
+    </LinearLayout>
+    <TextView
+        android:id="@+id/detail"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:fontFamily="@font/ibm_plex_sans_regular"
+        android:maxLines="1"
+        android:textColor="@color/widget_dim"
+        android:textSize="12sp"
+        android:visibility="gone" />
+    <LinearLayout
+        android:id="@+id/row1"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:visibility="gone">
+        <TextView
+            android:id="@+id/code1"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/widget_code_bg"
+            android:fontFamily="@font/jetbrains_mono_medium"
+            android:gravity="center"
+            android:minWidth="28dp"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="3dp"
+            android:textColor="@color/widget_text"
+            android:textSize="12sp" />
+        <TextView
+            android:id="@+id/title1"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:fontFamily="@font/ibm_plex_sans_medium"
+            android:maxLines="1"
+            android:textColor="@color/widget_title"
+            android:textSize="14sp" />
+        <TextView
+            android:id="@+id/review1"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/widget_button"
+            android:fontFamily="@font/ibm_plex_sans_semibold"
+            android:gravity="center"
+            android:minHeight="40dp"
+            android:minWidth="64dp"
+            android:paddingHorizontal="12dp"
+            android:text="@string/widget_review"
+            android:textColor="@color/widget_accent"
+            android:textSize="13sp" />
+    </LinearLayout>
+    <LinearLayout
+        android:id="@+id/row2"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:visibility="gone">
+        <TextView
+            android:id="@+id/code2"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/widget_code_bg"
+            android:fontFamily="@font/jetbrains_mono_medium"
+            android:gravity="center"
+            android:minWidth="28dp"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="3dp"
+            android:textColor="@color/widget_text"
+            android:textSize="12sp" />
+        <TextView
+            android:id="@+id/title2"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:fontFamily="@font/ibm_plex_sans_medium"
+            android:maxLines="1"
+            android:textColor="@color/widget_title"
+            android:textSize="14sp" />
+        <TextView
+            android:id="@+id/review2"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/widget_button"
+            android:fontFamily="@font/ibm_plex_sans_semibold"
+            android:gravity="center"
+            android:minHeight="40dp"
+            android:minWidth="64dp"
+            android:paddingHorizontal="12dp"
+            android:text="@string/widget_review"
+            android:textColor="@color/widget_accent"
+            android:textSize="13sp" />
+    </LinearLayout>
+</LinearLayout>

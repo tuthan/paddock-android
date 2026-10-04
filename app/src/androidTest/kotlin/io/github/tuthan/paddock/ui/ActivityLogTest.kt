@@ -190,4 +190,11 @@ class ActivityLogTest {
         rule.onNodeWithText("TODAY").assertIsDisplayed()
         shoot("activity-all-light-100")
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditActivityDark() { show(sections()); SemanticsAudit.expectClean(rule, "Activity, dark") }
+    @Test fun auditActivityLight() { show(sections(), dark = false); SemanticsAudit.expectClean(rule, "Activity, light") }
+    @Test fun auditActivityPhoneActionsWithAnUnknownRow() { show(sections(ActivityFilter.PhoneActions, journal), ActivityFilter.PhoneActions); SemanticsAudit.expectClean(rule, "Activity, phone actions, dark") }
+
 }

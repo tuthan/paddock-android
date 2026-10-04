@@ -11,7 +11,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 
 internal val LocalPaddockColors = staticCompositionLocalOf { PaddockDarkColors }
 
-/** Follows the system setting. Dark is the reviewed palette; light is a placeholder until Phase 10. */
+/** Follows the system setting. Both palettes are measured (docs/contrast.md); dark stays the reviewed default. */
 @Composable
 fun PaddockTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
     val c = if (darkTheme) PaddockDarkColors else PaddockLightColors

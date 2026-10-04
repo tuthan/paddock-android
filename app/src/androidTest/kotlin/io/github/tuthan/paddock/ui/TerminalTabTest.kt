@@ -551,4 +551,13 @@ class TerminalTabTest {
         screenNode().assertIsDisplayed()
         shoot("terminal-observing-dark-200")
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditTerminalControllingDark() { show(viewOf(TerminalMode.Controlling)); SemanticsAudit.expectClean(rule, "Terminal, controlling, dark", SemanticsAudit.Options(heading = false)) }
+    @Test fun auditTerminalControllingLight() { show(viewOf(TerminalMode.Controlling), dark = false); SemanticsAudit.expectClean(rule, "Terminal, controlling, light", SemanticsAudit.Options(heading = false)) }
+    @Test fun auditTerminalObservingDark() { show(viewOf(TerminalMode.Observing)); SemanticsAudit.expectClean(rule, "Terminal, observing, dark", SemanticsAudit.Options(heading = false)) }
+    /** Dense mode (the keyboard is up) is the one documented departure from 48 dp: buttons 36, strip keys 40 (docs/buttons.md). */
+    @Test fun auditTerminalDenseWithTheKeyboardUp() { show(viewOf(TerminalMode.Controlling), compact = true); SemanticsAudit.expectClean(rule, "Terminal, keyboard up, dark", SemanticsAudit.Options(heading = false, minTargetDp = 36f)) }
+
 }

@@ -4,6 +4,8 @@ import io.github.tuthan.paddock.attention.AgeText
 import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationOutcome
 import io.github.tuthan.paddock.ops.OperationPresenter
+import io.github.tuthan.paddock.ops.SagaState
+import io.github.tuthan.paddock.ops.Subject
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -89,7 +91,8 @@ class ActivityPresenter(
         }
         is ActivityItem.Operation -> {
             val r = item.record
-            val who = title(r.host, r.session, r.terminalId)
+            val who = if (r.aboutTerminal) title(r.host, r.session, r.terminalId) else ""
+            val subject = Subject.name(r.terminalId).orEmpty()
             val did = when (r.kind) {
                 OperationKind.Prompt -> "You prompted $who"
                 OperationKind.Esc -> "You sent Esc to $who"
@@ -97,6 +100,17 @@ class ActivityPresenter(
                 OperationKind.Focus -> "You focused $who on the desktop"
                 OperationKind.Allow -> "You answered Yes to a permission request from $who"
                 OperationKind.Deny -> "You answered No to a permission request from $who"
+                OperationKind.Rename -> "You renamed $who"
+                OperationKind.SessionStop -> "You stopped session $subject"
+                OperationKind.SessionDelete -> "You deleted session $subject"
+                OperationKind.FocusWorkspace -> "You focused workspace $subject on the desktop"
+                OperationKind.FocusTab -> "You focused tab $subject on the desktop"
+                OperationKind.WorktreeCreate -> "You created a worktree workspace to start an agent in"
+                OperationKind.TabCreate -> "You created a tab to start an agent in"
+                OperationKind.AgentStart -> "You started an agent in ${r.paneIdAtSend ?: "a new pane"}"
+                OperationKind.CloseWorkspace -> "You closed workspace $subject"
+                OperationKind.CloseTab -> "You closed tab $subject"
+                OperationKind.ClosePane -> "You closed pane $subject"
             }
             // The sentence says what was attempted; how it ended is in the suffix and, in full, in the detail. A prompt's text is
             // never here: the journal keeps a hash unless the user turned on keeping it, and Activity does not show it either way.
@@ -107,8 +121,20 @@ class ActivityPresenter(
                 OperationOutcome.NotSent -> " (not sent)"
                 OperationOutcome.Unknown -> " (outcome unknown)"
             }
-            val reread = r.id.takeIf { r.awaitsReread && canReread(r.host, r.session, r.terminalId) }
+            val reread = r.id.takeIf { r.awaitsReread && r.aboutTerminal && canReread(r.host, r.session, r.terminalId) }
             ActivityRow("op-${r.id}", clock(r.requestedAt), did + ended, ActivityRowKind.Acted, ActivityTone.Phone, operations.describe(r), rereadOperationId = reread)
+        }
+        is ActivityItem.Saga -> {
+            val r = item.record
+            val ids = listOfNotNull(r.createdWorkspaceId?.let { "workspace $it" }, r.createdTabId?.let { "tab $it" }, r.createdPaneId?.let { "pane $it" }, r.worktreePath?.let { "worktree $it" })
+            val text = when (r.state) {
+                SagaState.Succeeded -> "You started ${r.agentName} (${r.kind})"
+                SagaState.Running -> "Starting ${r.agentName} (${r.kind}) (in progress)"
+                SagaState.Failed -> "Starting ${r.agentName} (${r.kind}) stopped: ${r.step.label}"
+            }
+            val detail = listOfNotNull(r.message.takeIf { it.isNotBlank() }, if (ids.isEmpty()) null else "Created: ${ids.joinToString(" · ")}", r.promptNote)
+                .joinToString(" · ").ifEmpty { null }
+            ActivityRow("saga-${r.id}", clock(r.startedAt), text, ActivityRowKind.Acted, ActivityTone.Phone, detail)
         }
         is ActivityItem.Gap -> {
             val host = hostName(item.host).ifEmpty { "the host" }

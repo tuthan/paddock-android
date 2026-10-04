@@ -19,6 +19,37 @@ enum class OperationKind(val wire: String) {
     /** Phase 08: the phone's Yes or No for one Claude Code permission request, written by `paddock-decide.py`; never a key. */
     Allow("Yes"),
     Deny("No"),
+    /** Phase 09: operations on a session, a workspace, a tab or a saga rather than on one terminal; see [Subject]. */
+    SessionStop("session stop"),
+    SessionDelete("session delete"),
+    Rename("rename"),
+    FocusWorkspace("workspace focus"),
+    FocusTab("tab focus"),
+    WorktreeCreate("worktree create"),
+    TabCreate("tab create"),
+    AgentStart("agent start"),
+    CloseWorkspace("workspace close"),
+    CloseTab("tab close"),
+    ClosePane("pane close"),
+}
+
+/**
+ * What a Phase 09 row is about when it is not one terminal. The journal's identity is host, session and a string that names
+ * the thing; for a terminal that string is its terminal id (`term_…`, never containing a colon before its digits), and for
+ * these it is a prefixed token, so the one in-flight and unknown-outcome rule covers them all: a second stop of the same
+ * session waits for the first, and an unknown `session:x` blocks `session:x` until it is looked at.
+ */
+object Subject {
+    fun session(name: String) = "session:$name"
+    fun workspace(id: String) = "workspace:$id"
+    fun tab(id: String) = "tab:$id"
+    fun pane(id: String) = "pane:$id"
+    /** One start-agent saga: its steps run one after another, so one subject serializes them. */
+    fun saga(id: String) = "saga:$id"
+    private val PREFIXES = listOf("session:", "workspace:", "tab:", "pane:", "saga:")
+    fun isSubject(terminalId: String) = PREFIXES.any { terminalId.startsWith(it) }
+    /** The part after the prefix: the session name, the workspace id, and so on. Null for a terminal id. */
+    fun name(terminalId: String): String? = PREFIXES.firstOrNull { terminalId.startsWith(it) }?.let { terminalId.removePrefix(it) }
 }
 
 /**
@@ -61,6 +92,8 @@ data class OperationRecord(
     val requestId: String? = null,
 ) {
     val inFlight get() = outcome == OperationOutcome.Requested || outcome == OperationOutcome.Sent
+    /** True when the row is about a terminal (an agent); false for a session, workspace, tab, pane or saga row (Phase 09). */
+    val aboutTerminal get() = !Subject.isSubject(terminalId)
     val awaitsReread get() = outcome == OperationOutcome.Unknown && resolvedAt == null
     fun sameTerminal(other: TerminalKey) = host == other.target.host.value && session == other.target.session && terminalId == other.target.terminalId
 }

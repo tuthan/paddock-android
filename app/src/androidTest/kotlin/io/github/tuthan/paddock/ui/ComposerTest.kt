@@ -355,4 +355,10 @@ class ComposerTest {
         assertEquals(1, calls.gateAction)
         for (word in listOf("Resend", "Retry", "Try again")) rule.onNodeWithText(word, substring = true, ignoreCase = true).assertDoesNotExist()
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditComposerDark() { show(ComposerUi(header, open), initialText = "Continue with the plan"); SemanticsAudit.expectClean(rule, "Composer, dark") }
+    @Test fun auditComposerLight() { show(ComposerUi(header, open), initialText = "Continue with the plan", dark = false); SemanticsAudit.expectClean(rule, "Composer, light") }
+
 }

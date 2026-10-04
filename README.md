@@ -2,7 +2,7 @@
 
 A phone companion for [herdr](https://herdr.dev): answer the herd, do not operate it. Native Kotlin, SSH only, no server of its own. Plan and phase notes live in the docs vault under `herdr-android/`.
 
-Status: Phase 06 implemented (composer and operation journal): prompts to a ready agent, Esc and Ctrl+C only in Manual input (the composer's Esc is the way in), the Android keyboard and a sticky Ctrl in the Terminal tab while this phone controls it (`docs/terminal-control.md`), desktop focus with a first-time question, and a write-ahead journal whose unknown outcomes are re-read and never resent; see `docs/operations.md`. Phase 05 (manual terminal, `docs/terminal-control.md`) and Phase 04 (monitor UI) come before it. `:core` is JVM only (enforced); `:app` is the Android shell. Device-only acceptance is open (Phase 04: AC-04.8 recents thumbnail, AC-04.9 cold start, TalkBack; Phase 05: airplane mode and the scroll timing on a physical phone; Phase 06: the link cut on a physical phone); see the vault's evidence reports.
+Status: Phases 00 to 12 are implemented (Phase 09's multi-host slices are held; Phase 08 and the optional Phases 11 and 12 are built). The Phase 10 release cut has been rehearsed with a throwaway key and nothing is published (`docs/release.md`). `:core` is JVM only (enforced); `:app` is the Android shell. Acceptance that needs a physical phone or other people is open: TalkBack, the real-radio link cuts, widgets on a real launcher, the usability test and a second person following `docs/host-setup.md`; the vault's evidence reports list each item. The notes for what each part does are in `docs/` (`widgets.md`, `accessibility.md`, `contrast.md`, `release.md`, `host-setup.md`, `operations.md`, `spaces.md`, `alerts.md`, `terminal-control.md`).
 
 ## Requirements
 
@@ -18,6 +18,8 @@ tools/check.sh --offline                     # the CI gate: wrapper, SDK revisio
 ./tools/check-pins.sh --pins-only            # the same hash and coverage rule without herdr (part of tools/check.sh)
 ./tools/test-scripts.sh                      # self-tests of the fixture and pin scripts against a fake herdr
 python3 tools/test-blackhole-proxy.py        # self-test of the link-cut proxy the device flows use (part of tools/check.sh)
+tools/release-build.sh --offline             # two clean release builds compared byte for byte (docs/release.md); then release-sign.sh, check-release-apk.py, run-release-smoke.py
+tools/run-a11y-large.sh <serial>             # the accessibility audit at 200 % font on a 360 x 640 dp screen (docs/accessibility.md)
 ```
 
 `FixturePinTest` and `tools/check-pins.sh` fail if a file pinned in `protocol/SOURCE.json` is missing or differs, or if any file under `protocol/` (except `SOURCE.json` itself) or `fixtures/` is not pinned there. A fixture change is a deliberate pin update: recapture, `git rm` the previous version's corpus and schema if herdr moved, run `tools/pin-source.sh <date> <host>` (it reads the herdr version and protocol from the corpus and refuses stale files), review the diff, commit schema, fixtures and manifest together.

@@ -1,4 +1,15 @@
 <resources>
-    <!-- Window chrome only; Compose paints from PaddockTokens. Light values are placeholders until Phase 10. -->
+    <!-- Window chrome only; Compose paints from PaddockTokens. -->
     <color name="window_ground">#E6E7ED</color>
+
+    <!-- The widgets draw with RemoteViews, which cannot read PaddockTokens, so these are the light tokens again.
+         WidgetColorsTest fails when any of them differs from PaddockLightColors; docs/contrast.md measures the pairs. -->
+    <color name="widget_surface">#FFFFFF</color>
+    <color name="widget_edge">#14343B58</color>
+    <color name="widget_title">#1A1B26</color>
+    <color name="widget_text">#343B58</color>
+    <color name="widget_dim">#525776</color>
+    <color name="widget_accent">#34548A</color>
+    <color name="widget_accent_edge">#5934548A</color>
+    <color name="widget_needs_you">#8C4351</color>
 </resources>

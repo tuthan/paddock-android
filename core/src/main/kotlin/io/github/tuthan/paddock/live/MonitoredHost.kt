@@ -80,6 +80,8 @@ class MonitoredHost(
     val alertRelay: io.github.tuthan.paddock.alerts.AlertRelayHost? = null,
     /** The permission-request writer and hook on this host (Phase 08); null on a build that ships neither, which leaves Claude Code prompts to the terminal. */
     val answerHost: io.github.tuthan.paddock.answers.AnswerHost? = null,
+    /** Where start-agent sagas are kept (Phase 09); null leaves the host without the start-agent flow. */
+    sagaStore: io.github.tuthan.paddock.ops.SagaStore? = null,
 ) {
     private val relay = RelayClient(session, relayPath, socketPath)
     private val readSnapshot = SessionMonitor.snapshotReader(relay)
@@ -95,6 +97,37 @@ class MonitoredHost(
 
     /** Prompt, Esc, Ctrl+C and desktop focus for this host's agents, journaled; null when no journal was given. */
     val operations: AgentOperations? = journal?.let { AgentOperations(relay, it, { reconciler.installed.value }, clock) }
+
+    /** Workspace and tab focus (Phase 09), journaled; null when no journal was given. */
+    val spaceOps: io.github.tuthan.paddock.ops.SpaceOperations? = journal?.let { io.github.tuthan.paddock.ops.SpaceOperations(relay, it, { reconciler.installed.value }, profile.hostId, sessionName) }
+
+    /**
+     * The start-agent saga (Phase 09): a place, a check, `agent start`, an optional first prompt, each step journaled with its ids
+     * kept on disk. Its first prompt goes through [operations], after the new agent shows in the installed read. Null without a
+     * journal or a saga store.
+     */
+    val saga: io.github.tuthan.paddock.ops.StartAgentSaga? = if (journal != null && sagaStore != null) io.github.tuthan.paddock.ops.StartAgentSaga(
+        io.github.tuthan.paddock.ops.RelaySagaHost(relay, session, HerdrCli(herdr, sessionName)), { terminalId, text -> promptNewAgent(terminalId, text) }, journal, sagaStore, clock,
+        epoch = { reconciler.installed.value?.epoch ?: 0L },
+    ) else null
+
+    /** Waits (a few seconds) for the herd to list a just-started agent, then sends the first prompt by the Phase 06 path, readiness check included. */
+    private suspend fun promptNewAgent(terminalId: String, text: String): io.github.tuthan.paddock.ops.PromptStep {
+        val ops = operations ?: return io.github.tuthan.paddock.ops.PromptStep.Held("This host cannot send prompts. Nothing was sent.")
+        var installed = reconciler.installed.value
+        var waited = 0
+        while (installed?.snapshot?.agents?.any { it.terminalId == terminalId } != true && waited < 15_000) {
+            if (waited % 3_000 == 0) refresh()
+            kotlinx.coroutines.delay(500); waited += 500
+            installed = reconciler.installed.value
+        }
+        val i = installed?.snapshot?.agents?.any { it.terminalId == terminalId } == true
+        if (!i) return io.github.tuthan.paddock.ops.PromptStep.Held("The new agent did not show in the herd within 15 seconds, so the first prompt was not sent.")
+        val key = io.github.tuthan.paddock.identity.TerminalKey(io.github.tuthan.paddock.identity.TargetRef(profile.hostId, sessionName, terminalId), installed!!.epoch)
+        val result = ops.prompt(key, text)
+        return if (result is io.github.tuthan.paddock.ops.OperationResult.Acknowledged<*>) io.github.tuthan.paddock.ops.PromptStep.Sent
+        else io.github.tuthan.paddock.ops.PromptStep.Held(io.github.tuthan.paddock.ops.OperationPresenter().line(io.github.tuthan.paddock.ops.OperationKind.Prompt, result).text)
+    }
 
     /** Runs those operations in this host's scope and keeps the newest outcome per terminal; null with [operations]. */
     val sends: SendController? = operations?.let { SendController(scope, it) }

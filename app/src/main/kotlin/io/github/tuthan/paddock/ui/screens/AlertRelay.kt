@@ -207,6 +207,6 @@ private fun PushSection(ui: AlertRelayUi, onRegister: (String) -> Unit, onShare:
     )
     val connected = ui.host !is AlertRelayHostState.NotConnected && ui.host !is AlertRelayHostState.Reading
     PaddockButton(if (reg.shared) "Send the address again…" else "Send the address to ${ui.machine}…", onShare, enabled = reg.hasEndpoint && connected && !push.busy, kind = if (reg.shared) ButtonKind.Ghost else ButtonKind.Primary)
-    PaddockButton("Unregister", onRemove, enabled = !push.busy, kind = ButtonKind.Ghost)
+    PaddockButton("Unregister", onRemove, enabled = !push.busy, kind = ButtonKind.Danger)
     Note(AlertDelivery.BEST_EFFORT)
 }

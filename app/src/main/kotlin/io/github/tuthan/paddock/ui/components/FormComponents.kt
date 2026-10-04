@@ -218,7 +218,14 @@ fun Fact(label: String, value: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** The design's four actions: Primary for the one thing to do, Secondary for the safe choice, Ghost to open or inspect, Danger to replace or stop. */
+/**
+ * The design's four actions (design note, System sheet), by what the button means and never by where it sits or how many share a row:
+ *  - Primary: the one thing this screen is for (Connect, Send prompt, Install the relay, Yes).
+ *  - Secondary: a neutral action and the safe choice (Cancel, Back, Close, Done, Dismiss, Copy, Share, Keyboard, Release, Request control).
+ *  - Ghost: open, inspect, retry or fall back to another way (Open terminal, Re-read, Try again, Check the setup, Trust and connect).
+ *  - Danger: interrupt, stop, forget or replace (Esc, Ctrl+C, Remove, Reset the record, Unregister).
+ * A row of controls uses one kind unless its buttons mean different things. `ButtonRolesTest` pins the labels named in docs/buttons.md.
+ */
 enum class ButtonKind { Primary, Secondary, Ghost, Danger }
 
 /**

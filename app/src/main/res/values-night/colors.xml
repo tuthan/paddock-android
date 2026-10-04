@@ -1,3 +1,13 @@
 <resources>
     <color name="window_ground">#16161E</color>
+
+    <!-- The dark tokens, for RemoteViews (see values/colors.xml). -->
+    <color name="widget_surface">#1A1B26</color>
+    <color name="widget_edge">#14C0CAF5</color>
+    <color name="widget_title">#E2E6FB</color>
+    <color name="widget_text">#C0CAF5</color>
+    <color name="widget_dim">#8B95C0</color>
+    <color name="widget_accent">#7AA2F7</color>
+    <color name="widget_accent_edge">#597AA2F7</color>
+    <color name="widget_needs_you">#F7768E</color>
 </resources>

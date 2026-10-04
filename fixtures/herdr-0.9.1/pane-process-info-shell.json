@@ -1,0 +1,1 @@
+{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":732217,"foreground_processes":[{"argv":["/usr/bin/bash"],"cmdline":"/usr/bin/bash","cwd":"/tmp/paddock-test-ws/repo","name":"bash","pid":732217}],"pane_id":"w2:p3","shell_pid":732217},"type":"pane_process_info"}}

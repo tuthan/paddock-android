@@ -40,12 +40,12 @@ class GuardedAnswersTest {
 
     private fun known(hook: RelayState, decide: RelayState = hook) = GuardedHostState.Known(AnswerSetup(decide, hook, decidePath, hookPath))
 
-    private fun show(host: GuardedHostState, calls: Calls = Calls(), window: Int = 60, fontScale: Float? = null, installError: String? = null, installing: Boolean = false, copied: GuardedCopied = GuardedCopied.None): Calls {
+    private fun show(host: GuardedHostState, calls: Calls = Calls(), window: Int = 60, fontScale: Float? = null, dark: Boolean = true, installError: String? = null, installing: Boolean = false, copied: GuardedCopied = GuardedCopied.None): Calls {
         val known = (host as? GuardedHostState.Known)?.setup
         rule.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
-                PaddockTheme(darkTheme = true) {
+                PaddockTheme(darkTheme = dark) {
                     GuardedAnswers(
                         GuardedAnswersUi("Laptop", decideSha, hookSha, host, installing, installError, window, AnswerSetupText.configCommand(window), known?.let { AnswerSetupText.settingsSnippet(it.hookDestination, window) }, copied),
                         onBack = { calls.back++ }, onInstall = { calls.install++ }, onCheck = { calls.check++ }, onWindow = { calls.windows += it },
@@ -150,4 +150,11 @@ class GuardedAnswersTest {
         rule.onNodeWithText("Install the scripts…").performScrollTo().assertIsDisplayed().assertIsEnabled()
         rule.onNodeWithText("Copy the registration").performScrollTo().assertIsDisplayed()
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditGuardedAnswersDark() { show(known(RelayState.Current)); SemanticsAudit.expectClean(rule, "Guarded answers, installed, dark") }
+    @Test fun auditGuardedAnswersLight() { show(known(RelayState.Current), dark = false); SemanticsAudit.expectClean(rule, "Guarded answers, installed, light") }
+    @Test fun auditGuardedAnswersMissingDark() { show(known(RelayState.Missing)); SemanticsAudit.expectClean(rule, "Guarded answers, not installed, dark") }
+
 }

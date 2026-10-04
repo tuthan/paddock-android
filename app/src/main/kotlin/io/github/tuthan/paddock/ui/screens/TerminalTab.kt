@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -159,7 +158,7 @@ fun TerminalTab(
         when (view.mode) {
             TerminalMode.Observing -> if (notice !is TerminalNotice.HelperNeeded) PaddockButton(
                 "Request control", { if (view.controlWouldResizeDesktop) asking = Ask.TakeControlResizes(fitCells.first, fitCells.second) else actions.onRequestControl() },
-                kind = ButtonKind.Ghost, small = true, fillWidth = false, icon = PaddockIcons.Keyboard, dense = compact,
+                kind = ButtonKind.Secondary, small = true, fillWidth = false, icon = PaddockIcons.Keyboard, dense = compact,
             )
             TerminalMode.Controlling -> {
                 PaddockButton(
@@ -168,22 +167,22 @@ fun TerminalTab(
                         if (keyboardShown) { keyboard?.hide(); runCatching { focus.requestFocus() } }
                         else { runCatching { keyboardFocus.requestFocus() }; keyboard?.show() }
                     },
-                    kind = ButtonKind.Ghost, small = true, fillWidth = false, dense = compact,
+                    kind = ButtonKind.Secondary, small = true, fillWidth = false, dense = compact,
                 )
                 PaddockButton("Release", actions.onRelease, kind = ButtonKind.Secondary, small = true, fillWidth = false, dense = compact)
-                PaddockButton("Resize to fit", { asking = Ask.Resize(fitCells.first, fitCells.second) }, kind = ButtonKind.Ghost, small = true, fillWidth = false, dense = compact)
+                PaddockButton("Resize to fit", { asking = Ask.Resize(fitCells.first, fitCells.second) }, kind = ButtonKind.Secondary, small = true, fillWidth = false, dense = compact)
             }
             else -> Unit
         }
     }
 
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp)) {
-        // One line while the keyboard is up (it scrolls sideways if the four do not fit); wraps otherwise.
-        if (compact) Row(
+        // One line, like the key strip under the grid: it scrolls sideways when the pill and the three buttons do not fit, instead of
+        // wrapping Resize to fit onto a row of its own (56 dp of the grid's height).
+        Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp), verticalAlignment = Alignment.CenterVertically,
         ) { controls() }
-        else FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) { controls() }
         NoticeBanner(notice, actions)
         if (ended != null) {
             val (what, why) = endedText(ended.reason)

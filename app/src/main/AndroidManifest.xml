@@ -66,6 +66,24 @@
                 <action android:name="org.unifiedpush.android.connector.TEMP_UNAVAILABLE" />
             </intent-filter>
         </receiver>
+
+        <!-- Home-screen widgets (Phase 10). They draw only what the cache file holds and hold no connection; the provider ignores the ids and
+             extras of any intent and asks the system for its own. The category is home screen only, so none can be put on the lock screen. -->
+        <receiver android:name=".widget.SummaryWidgetProvider" android:exported="true" android:label="@string/widget_summary_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_summary_info" />
+        </receiver>
+        <receiver android:name=".widget.CountWidgetProvider" android:exported="true" android:label="@string/widget_count_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_count_info" />
+        </receiver>
+        <receiver android:name=".widget.StripWidgetProvider" android:exported="true" android:label="@string/widget_strip_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_strip_info" />
+        </receiver>
+
+        <!-- The widgets' cache refresh. Only the system's job scheduler may bind it. -->
+        <service android:name=".widget.WidgetRefreshJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 
 </manifest>

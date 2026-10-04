@@ -1,0 +1,166 @@
+{
+  "version": 3,
+  "workspaces": [
+    {
+      "id": "w2",
+      "custom_name": "repo",
+      "identity_cwd": "/tmp/paddock-test-ws/repo",
+      "worktree_space": {
+        "key": "/tmp/paddock-test-ws/repo/.git",
+        "label": "repo",
+        "repo_root": "/tmp/paddock-test-ws/repo",
+        "checkout_path": "/tmp/paddock-test-ws/repo",
+        "is_linked_worktree": false
+      },
+      "public_pane_numbers": {
+        "8": 6,
+        "3": 2,
+        "5": 3,
+        "7": 5,
+        "6": 4,
+        "2": 1
+      },
+      "next_public_pane_number": 7,
+      "public_tab_numbers": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7
+      ],
+      "next_public_tab_number": 8,
+      "tabs": [
+        {
+          "custom_name": null,
+          "layout": {
+            "Pane": 2
+          },
+          "panes": {
+            "2": {
+              "cwd": "/tmp/paddock-test-ws/repo"
+            }
+          },
+          "zoomed": false,
+          "focused": 2,
+          "root_pane": 2
+        },
+        {
+          "custom_name": null,
+          "layout": {
+            "Pane": 3
+          },
+          "panes": {
+            "3": {
+              "cwd": "/tmp/paddock-test-ws/repo"
+            }
+          },
+          "zoomed": false,
+          "focused": 3,
+          "root_pane": 3
+        },
+        {
+          "custom_name": null,
+          "layout": {
+            "Pane": 6
+          },
+          "panes": {
+            "6": {
+              "cwd": "/tmp/paddock-test-ws/repo"
+            }
+          },
+          "zoomed": false,
+          "focused": 6,
+          "root_pane": 6
+        },
+        {
+          "custom_name": null,
+          "layout": {
+            "Pane": 7
+          },
+          "panes": {
+            "7": {
+              "cwd": "/tmp/paddock-test-ws/repo"
+            }
+          },
+          "zoomed": false,
+          "focused": 7,
+          "root_pane": 7
+        },
+        {
+          "custom_name": null,
+          "layout": {
+            "Pane": 8
+          },
+          "panes": {
+            "8": {
+              "cwd": "/tmp/paddock-test-ws/repo"
+            }
+          },
+          "zoomed": false,
+          "focused": 8,
+          "root_pane": 8
+        },
+        {
+          "custom_name": null,
+          "layout": {
+            "Pane": 5
+          },
+          "panes": {
+            "5": {
+              "cwd": "/tmp/paddock-test-ws/repo",
+              "agent_name": "fxtwo",
+              "managed_agent_kind": "claude"
+            }
+          },
+          "zoomed": false,
+          "focused": 5,
+          "root_pane": 5
+        }
+      ],
+      "active_tab": 0
+    },
+    {
+      "id": "w3",
+      "custom_name": null,
+      "identity_cwd": "/tmp/paddock-test-ws/.herdr/worktrees/repo/fx-branch",
+      "worktree_space": {
+        "key": "/tmp/paddock-test-ws/repo/.git",
+        "label": "repo",
+        "repo_root": "/tmp/paddock-test-ws/repo",
+        "checkout_path": "/tmp/paddock-test-ws/.herdr/worktrees/repo/fx-branch",
+        "is_linked_worktree": true
+      },
+      "public_pane_numbers": {
+        "4": 1
+      },
+      "next_public_pane_number": 2,
+      "public_tab_numbers": [
+        1
+      ],
+      "next_public_tab_number": 2,
+      "tabs": [
+        {
+          "custom_name": null,
+          "layout": {
+            "Pane": 4
+          },
+          "panes": {
+            "4": {
+              "cwd": "/tmp/paddock-test-ws/.herdr/worktrees/repo/fx-branch"
+            }
+          },
+          "zoomed": false,
+          "focused": 4,
+          "root_pane": 4
+        }
+      ],
+      "active_tab": 0
+    }
+  ],
+  "active": 0,
+  "selected": 0,
+  "sidebar_width": null,
+  "sidebar_section_split": null,
+  "collapsed_space_keys": []
+}

@@ -1,0 +1,1 @@
+{"error":{"code":"agent_name_taken","message":"agent name fxone is already used; candidates: terminal_id=term_65ce839a38d125 pane_id=w2:p3 workspace_id=w2 tab_id=w2:t3 cwd=/tmp/paddock-test-ws/repo status=Idle"},"id":"cli:agent:start"}

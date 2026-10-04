@@ -131,6 +131,13 @@ class SettingsTest {
         rule.onNodeWithText("Every notification has two buttons, Open and Review.", substring = true).performScrollTo().assertIsDisplayed()
     }
 
+    @Test fun theRelayModeNamesItsProviderInSettings() {
+        // The privacy checklist: relay mode says who carries the message, in the row that opens the alert relay screen, not only inside it.
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState())
+        rule.onNodeWithText(io.github.tuthan.paddock.alerts.AlertDelivery.MODE).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Alerts via ntfy app").assertIsDisplayed()
+    }
+
     @Test fun theSwitchesReportTheirNewValues() {
         var alerts: Boolean? = null; var hide: Boolean? = null
         showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState(), onAlerts = { alerts = it }, onHide = { hide = it })
@@ -395,4 +402,15 @@ class SettingsTest {
         rule.onNodeWithText("Pictures for the common agents, letters for the rest.").assertIsDisplayed()
         shoot("settings-agent-icons-light-200")
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditSettingsDark() { show(); SemanticsAudit.expectClean(rule, "Settings, dark") }
+    @Test fun auditSettingsLight() { show(dark = false); SemanticsAudit.expectClean(rule, "Settings, light") }
+
+    @Test fun auditSettingsAlertsOnWithARecoveryRowDark() {
+        val recovery = io.github.tuthan.paddock.alerts.NotificationAccessRules.recovery(io.github.tuthan.paddock.alerts.NotificationAccess.NeedsPermission(canAsk = true))
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState(localAlerts = true, recovery = recovery)); SemanticsAudit.expectClean(rule, "Settings, alerts on with recovery, dark")
+    }
+
 }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +30,8 @@ import io.github.tuthan.paddock.attention.AgeText
 import io.github.tuthan.paddock.answers.DecisionEntryModel
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.output.OutputState
+import io.github.tuthan.paddock.ui.components.FlexColumn
+import io.github.tuthan.paddock.ui.components.flexible
 import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.Chip
@@ -104,16 +107,20 @@ fun AgentOutput(
     val c = PaddockTokens.colors
     val gone = output == OutputState.PaneGone || output == OutputState.AgentGone
     val focus = terminalFocus && tab == AgentTab.Terminal && !gone
+    // At a large font the header, the chips, the tabs and the notes around the output can be taller than a small phone, and the output, which has
+    // the leftover room, was squeezed to nothing. On the Output tab the body is a FlexColumn: the output keeps OUTPUT_MIN of its own, and the body
+    // scrolls only when the rest plus that minimum does not fit. On a screen with room it lays out as it always did.
+    val scrollBody = tab == AgentTab.Output && !gone && !focus
     Column(modifier.fillMaxSize()) {
         if (focus) TerminalFocusBar(header, onBack)
         else ScreenHeader(header.title, onBack = onBack, subtitle = header.context.ifEmpty { null }, compact = true, backDescription = "Back")
-        Column(
+        FlexColumn(
             Modifier.weight(1f).fillMaxWidth().padding(start = PaddockTokens.spacing.gutter, end = PaddockTokens.spacing.gutter, bottom = if (focus) 4.dp else 12.dp),
-            verticalArrangement = Arrangement.spacedBy(if (focus) 6.dp else 10.dp),
+            flexMin = if (scrollBody) OUTPUT_MIN else 0.dp, spacing = if (focus) 6.dp else 10.dp, scrollable = scrollBody,
         ) {
             if (gone) {
                 Gone(output, onBack)
-                return@Column
+                return@FlexColumn
             }
             if (!focus) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
@@ -128,14 +135,14 @@ fun AgentOutput(
             if (tab == AgentTab.Output && decision != null && onOpenDecision != null && header.state == StateWord.Blocked) {
                 DecisionEntry(decision, onOpenDecision)
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                when (tab) {
-                    AgentTab.Terminal -> terminal?.invoke() ?: Text(
+            when (tab) {
+                AgentTab.Terminal -> Box(Modifier.flexible().fillMaxWidth()) {
+                    terminal?.invoke() ?: Text(
                         "The terminal is not available here. Output shows what the agent is writing.",
                         style = PaddockTokens.type.body, color = c.dim, modifier = Modifier.padding(top = 4.dp),
                     )
-                    AgentTab.Output -> OutputBody(output, nowMillis, following, onUserScrolledUp)
                 }
+                AgentTab.Output -> OutputParts(output, nowMillis, following, onUserScrolledUp)
             }
             if (tab == AgentTab.Output) {
                 if (onCompose != null) PromptEntry(header.agentKind, onCompose)
@@ -177,16 +184,22 @@ private fun TerminalFocusBar(header: AgentHeader, onBack: () -> Unit) {
     }
 }
 
+private val OUTPUT_MIN = 140.dp
+
+/**
+ * The Output tab's content as direct children of the body's [FlexColumn]: the slab is the flexible one, so a banner above it and the footnote below it
+ * are taken out of the screen's room and never out of the slab's minimum.
+ */
 @Composable
-private fun OutputBody(output: OutputState, nowMillis: Long, following: Boolean, onUserScrolledUp: () -> Unit) {
+private fun OutputParts(output: OutputState, nowMillis: Long, following: Boolean, onUserScrolledUp: () -> Unit) {
     val c = PaddockTokens.colors
     when (output) {
-        OutputState.Loading -> Text("Reading output…", style = PaddockTokens.type.body, color = c.dim)
-        is OutputState.Unavailable -> Banner("Output is unavailable: ${output.message}")
-        OutputState.PaneGone, OutputState.AgentGone -> Unit
-        is OutputState.Showing -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutputState.Loading -> Box(Modifier.flexible().fillMaxWidth()) { Text("Reading output…", style = PaddockTokens.type.body, color = c.dim) }
+        is OutputState.Unavailable -> Box(Modifier.flexible().fillMaxWidth()) { Banner("Output is unavailable: ${output.message}") }
+        OutputState.PaneGone, OutputState.AgentGone -> Box(Modifier.flexible().fillMaxWidth()) {}
+        is OutputState.Showing -> {
             if (output.stale) Banner("Last read failed. Showing the output from ${AgeText.span(nowMillis - output.readAtMillis)}.")
-            Box(Modifier.weight(1f)) { OutputSlab(output.lines, following, onUserScrolledUp) }
+            Box(Modifier.flexible().fillMaxWidth()) { OutputSlab(output.lines, following, onUserScrolledUp) }
             Note("The last 200 lines, read again every second while following.")
         }
     }
@@ -201,5 +214,5 @@ private fun Gone(output: OutputState, onBack: () -> Unit) {
         Text(what, style = PaddockTokens.type.rowTitle, color = c.title)
         Text(why, style = PaddockTokens.type.secondary, color = c.dim)
     }
-    PaddockButton("Back to the herd", onBack, kind = ButtonKind.Ghost, icon = PaddockIcons.Back)
+    PaddockButton("Back to the herd", onBack, kind = ButtonKind.Secondary, icon = PaddockIcons.Back)
 }

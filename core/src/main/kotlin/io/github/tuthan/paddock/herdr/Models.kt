@@ -77,6 +77,8 @@ data class Pane(
     @Serializable(with = LenientString::class) @SerialName("terminal_title") val terminalTitle: String? = null,
     @Serializable(with = LenientString::class) @SerialName("terminal_title_stripped") val terminalTitleStripped: String? = null,
     @Serializable(with = LenientString::class) val title: String? = null,
+    /** The agent herdr detected in this pane (`claude`), absent for a plain shell. Phase 09 reads it to see that a new pane has none. */
+    @Serializable(with = LenientString::class) val agent: String? = null,
 )
 
 /**
@@ -93,6 +95,8 @@ data class Agent(
     @SerialName("tab_id") val tabId: String,
     /** The agent's name as herdr reports it, for example `claude`. */
     @Serializable(with = LenientString::class) val agent: String? = null,
+    /** The name given by `agent start <name>` or `agent rename`, when there is one. Phase 09 shows and changes it. */
+    @Serializable(with = LenientString::class) val name: String? = null,
     @SerialName("agent_status") val agentStatus: AgentStatus = AgentStatus.Unknown,
     val revision: Long = 0,
     /** A Done is acknowledged at this value; a wrong shape disables that, it does not fail the read. */
@@ -154,6 +158,13 @@ data class Snapshot(
 @Serializable data class SnapshotResult(val snapshot: Snapshot)
 
 @Serializable data class AgentInfoResult(val agent: Agent)
+/** `agent_started`: the agent as herdr now sees it, plus the argv it launched. */
+@Serializable data class AgentStartedResult(val agent: Agent)
+/** `tab_created`: the tab and its root pane. */
+@Serializable data class TabCreatedResult(@SerialName("root_pane") val rootPane: Pane, val tab: Tab)
+/** `worktree_created`: the workspace herdr opened for the checkout, its tab and root pane, and where the checkout is. */
+@Serializable data class WorktreeCreatedResult(@SerialName("root_pane") val rootPane: Pane, val tab: Tab, val workspace: Workspace, val worktree: WorktreeInfo)
+@Serializable data class WorktreeInfo(val path: String, val branch: String? = null, val label: String? = null)
 @Serializable data class AgentListResult(val agents: List<Agent> = emptyList())
 @Serializable data class PaneInfoResult(val pane: Pane)
 @Serializable data class TabListResult(val tabs: List<Tab> = emptyList())

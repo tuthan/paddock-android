@@ -40,11 +40,11 @@ class AlertRelayScreenTest {
 
     private fun status(script: RelayState, check: RelayCheck? = null, service: ServiceState = ServiceState.NotInstalled) = AlertRelayHostState.Known(AlertRelayStatus(script, path, check, service))
 
-    private fun show(host: AlertRelayHostState, calls: Calls = Calls(), commands: String? = "mkdir -p ~/.config/paddock\nsystemctl --user enable --now paddock-alert-relay.service", fontScale: Float? = null, installError: String? = null, installing: Boolean = false): Calls {
+    private fun show(host: AlertRelayHostState, calls: Calls = Calls(), commands: String? = "mkdir -p ~/.config/paddock\nsystemctl --user enable --now paddock-alert-relay.service", fontScale: Float? = null, dark: Boolean = true, installError: String? = null, installing: Boolean = false): Calls {
         rule.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
-                PaddockTheme(darkTheme = true) {
+                PaddockTheme(darkTheme = dark) {
                     AlertRelay(AlertRelayUi("Laptop", "laptop", hash, host, installing, installError, commands), { calls.back++ }, { calls.install++ }, { calls.check++ }, { calls.copy++ })
                 }
             }
@@ -216,4 +216,11 @@ class AlertRelayScreenTest {
         rule.onNodeWithText("Send the address to Laptop…").performScrollTo().assertIsNotEnabled()
         rule.onNodeWithText("Unregister").performScrollTo().assertIsNotEnabled()
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditAlertRelayMissingDark() { show(status(RelayState.Missing)); SemanticsAudit.expectClean(rule, "Alert relay, not installed, dark") }
+    @Test fun auditAlertRelayMissingLight() { show(status(RelayState.Missing), dark = false); SemanticsAudit.expectClean(rule, "Alert relay, not installed, light") }
+    @Test fun auditAlertRelayFailedCheckDark() { show(status(RelayState.Current, RelayCheck(2, listOf("config: profile must be lowercase letters")), ServiceState.Failed)); SemanticsAudit.expectClean(rule, "Alert relay, failed check, dark") }
+
 }

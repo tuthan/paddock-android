@@ -1,3 +1,12 @@
 <resources>
     <string name="app_name">Paddock</string>
+    <string name="widget_summary_label">Paddock herd summary</string>
+    <string name="widget_summary_description">The agents that need you, with a Review button for each, and when the phone last read them.</string>
+    <string name="widget_count_label">Paddock count</string>
+    <string name="widget_count_description">How many agents need you, and when the phone last read them.</string>
+    <string name="widget_strip_label">Paddock strip</string>
+    <string name="widget_strip_description">One quiet line: whether anything needs you, and when the phone last read.</string>
+    <string name="widget_unread">Open Paddock to read your herd</string>
+    <string name="widget_unread_short">Open Paddock</string>
+    <string name="widget_review">Review</string>
 </resources>

@@ -26,6 +26,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
@@ -427,7 +431,13 @@ class ManualInputPanelTest {
         shoot("unknown-row-screen-dark-200")
         rule.onNodeWithText("Re-read").performScrollTo().assertIsDisplayed().performClick()
         assertEquals(1, calls.reread)
-        rule.onNodeWithText("Done").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Done").performScrollTo()
+        // On a short screen at 200 % the agent screen's body scrolls as well (the output keeps its own room, so the rest may not fit): a user swipes it up.
+        repeat(4) {
+            if (runCatching { rule.onNodeWithText("Done").assertIsDisplayed() }.isSuccess) return@repeat
+            rule.onAllNodes(hasScrollAction()).onFirst().performTouchInput { swipeUp() }
+        }
+        rule.onNodeWithText("Done").assertIsDisplayed()
     }
 
     @Test fun theOpenPanelOnTheAgentScreenInLightTheme() {
@@ -436,4 +446,10 @@ class ManualInputPanelTest {
         rule.onNodeWithText("Ask claude…").assertIsDisplayed()
         shoot("manual-screen-light-100")
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditManualInputDark() { showPanel(ManualInputUi(gate(), readAtMillis = now - 2_000)); SemanticsAudit.expectClean(rule, "Manual input, dark", SemanticsAudit.Options(heading = false)) }
+    @Test fun auditManualInputLight() { showPanel(ManualInputUi(gate(), readAtMillis = now - 2_000), dark = false); SemanticsAudit.expectClean(rule, "Manual input, light", SemanticsAudit.Options(heading = false)) }
+
 }

@@ -53,12 +53,12 @@ class ImportKeyTest {
         onChooseFile = { calls.chose++ }, onClearFile = { calls.cleared++ }, onImport = { pem, pass -> calls.imported = pem to pass }, onBack = { calls.back++ },
     )
 
-    private fun show(picked: PickedKeyFile? = null, pickError: String? = null, busy: Boolean = false, result: ImportCheck? = null, fontScale: Float? = null): Calls {
+    private fun show(picked: PickedKeyFile? = null, pickError: String? = null, busy: Boolean = false, result: ImportCheck? = null, fontScale: Float? = null, dark: Boolean = true): Calls {
         val calls = Calls()
         rule.setContent {
             val base = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
-                PaddockTheme(darkTheme = true) { Screen(calls, picked, pickError, busy, result) }
+                PaddockTheme(darkTheme = dark) { Screen(calls, picked, pickError, busy, result) }
             }
         }
         return calls
@@ -147,4 +147,10 @@ class ImportKeyTest {
         rule.onNode(hasContentDescription("Back")).assertHeightIsAtLeast(48.dp).performClick()
         assertEquals(1, calls.back)
     }
+
+    // ---- the accessibility audit (AC-10.3): SemanticsAudit over this screen, both themes ------------------------------------------
+
+    @Test fun auditImportKeyDark() { show(picked = PickedKeyFile("id_ed25519", "FILE-TEXT-PLACEHOLDER")); SemanticsAudit.expectClean(rule, "Import key, dark") }
+    @Test fun auditImportKeyLight() { show(picked = PickedKeyFile("id_ed25519", "FILE-TEXT-PLACEHOLDER"), dark = false); SemanticsAudit.expectClean(rule, "Import key, light") }
+
 }

@@ -1,6 +1,7 @@
 package io.github.tuthan.paddock.ledger
 
 import io.github.tuthan.paddock.ops.OperationRecord
+import io.github.tuthan.paddock.ops.SagaRecord
 
 enum class ActivityFilter { All, StateChanges, Connection, PhoneActions }
 
@@ -13,6 +14,9 @@ sealed interface ActivityItem {
     /** Something this phone asked a host to do (a prompt, a key, desktop focus), from the operation journal. [at] is when the user asked. */
     data class Operation(val record: OperationRecord) : ActivityItem { override val at get() = record.requestedAt }
 
+    /** A start-agent saga (Phase 09), with every id it created; one row for the whole saga, beside the row of each step's operation. [at] is when it began. */
+    data class Saga(val record: SagaRecord) : ActivityItem { override val at get() = record.startedAt }
+
     /** Time the phone had no link to the host. [to] is null while the host is still disconnected. */
     data class Gap(val from: Long, val to: Long?, val host: String = "", val session: String = "") : ActivityItem { override val at get() = from }
 }
@@ -22,7 +26,7 @@ object Activity {
     private val stateKinds = setOf(ObservationKind.AgentAppeared, ObservationKind.StateChanged, ObservationKind.AgentGone)
     private val connectionKinds = setOf(ObservationKind.Connected, ObservationKind.Disconnected)
 
-    fun build(observations: List<Observation>, actions: List<PhoneAction>, filter: ActivityFilter, operations: List<OperationRecord> = emptyList()): List<ActivityItem> {
+    fun build(observations: List<Observation>, actions: List<PhoneAction>, filter: ActivityFilter, operations: List<OperationRecord> = emptyList(), sagas: List<SagaRecord> = emptyList()): List<ActivityItem> {
         val items = ArrayList<ActivityItem>()
         val kinds = when (filter) {
             ActivityFilter.All -> ObservationKind.entries.toSet()
@@ -35,6 +39,7 @@ object Activity {
         if (filter == ActivityFilter.All || filter == ActivityFilter.PhoneActions) {
             actions.mapTo(items) { ActivityItem.Acted(it) }
             operations.mapTo(items) { ActivityItem.Operation(it) }
+            sagas.mapTo(items) { ActivityItem.Saga(it) }
         }
         return items.sortedByDescending { it.at }
     }

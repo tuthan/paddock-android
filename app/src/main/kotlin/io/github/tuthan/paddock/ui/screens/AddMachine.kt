@@ -252,8 +252,8 @@ private fun PhoneKeySection(
         }
         Fact("Public key to authorize", line)
         ButtonPair(
-            { m -> PaddockButton("Copy key only", { onCopy(line) }, m, kind = ButtonKind.Ghost, small = true, icon = PaddockIcons.Copy) },
-            { m -> PaddockButton(if (showQr) "Hide QR" else "Show as QR", { onShowQr(!showQr) }, m, kind = ButtonKind.Ghost, small = true, icon = PaddockIcons.Qr) },
+            { m -> PaddockButton("Copy key only", { onCopy(line) }, m, kind = ButtonKind.Secondary, small = true, icon = PaddockIcons.Copy) },
+            { m -> PaddockButton(if (showQr) "Hide QR" else "Show as QR", { onShowQr(!showQr) }, m, kind = ButtonKind.Secondary, small = true, icon = PaddockIcons.Qr) },
         )
         if (command == null) Note(withMono("Append it to ~/.ssh/authorized_keys on the machine, from a shell you already trust.", "~/.ssh/authorized_keys"))
         if (showQr) {

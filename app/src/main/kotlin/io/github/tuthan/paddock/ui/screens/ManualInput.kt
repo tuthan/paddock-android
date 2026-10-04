@@ -107,7 +107,7 @@ fun ManualInput(ui: ManualInputUi, nowMillis: Long, actions: ManualInputActions,
             Column(Modifier.card(c).semantics { contentDescription = "Manual input is on" }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Kicker("Manual input · on", Modifier.weight(1f))
-                    PaddockButton("Done", actions.onLeave, kind = ButtonKind.Ghost, small = true, fillWidth = false)
+                    PaddockButton("Done", actions.onLeave, kind = ButtonKind.Secondary, small = true, fillWidth = false)
                 }
                 val reading = (ui.gate as? OperationGate.Closed)?.block == SendBlock.Reading
                 Text(
@@ -136,7 +136,7 @@ internal fun RereadReport(lines: List<String>, onDismiss: () -> Unit) {
     val c = PaddockTokens.colors
     Column(Modifier.fillMaxWidth().card(c).semantics { liveRegion = LiveRegionMode.Polite }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         lines.forEach { Text(it, style = PaddockTokens.type.secondary, color = c.text) }
-        PaddockButton("Dismiss", onDismiss, kind = ButtonKind.Ghost, small = true, fillWidth = false)
+        PaddockButton("Dismiss", onDismiss, kind = ButtonKind.Secondary, small = true, fillWidth = false)
     }
 }
 

@@ -28,7 +28,7 @@ object AnsiPalette {
         AnsiColor.BrightWhite to PaddockDarkColors.title,
     )
 
-    /** Placeholder with the rest of the light theme (Phase 10 reviews it); the contrast floor already holds. */
+    /** The light terminal palette, from the light tokens (measured in Phase 10, docs/contrast.md); the contrast floor is pinned by `AnsiPaletteTest`. */
     private val light: Map<AnsiColor, Color> = mapOf(
         AnsiColor.Black to PaddockLightColors.dim,
         AnsiColor.Red to Color(0xFF8C4351),

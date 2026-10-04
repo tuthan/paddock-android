@@ -89,9 +89,13 @@ object AttentionModel {
         AgentStatus.Unknown -> StateWord.Unknown to Section.Unknown
     }
 
-    /** The title chain: the presentation title an integration set, then the terminal's own title with its prompt stripped, else the agent kind and pane id. */
+    /**
+     * The title chain: the presentation title an integration set, then the terminal's own title with its prompt stripped, else the agent's
+     * name (`agent start <name>`, `agent rename`) or kind and the pane id. The name is also the first thing of the context line, so a rename
+     * is visible on a row whose title comes from the terminal.
+     */
     fun title(a: Agent): String =
-        (a.title.shown() ?: a.terminalTitleStripped.shown() ?: "${a.displayAgent.shown() ?: a.agent.shown() ?: "agent"} · ${a.paneId}").boundedForUi(120)
+        (a.title.shown() ?: a.terminalTitleStripped.shown() ?: "${a.name.shown() ?: a.displayAgent.shown() ?: a.agent.shown() ?: "agent"} · ${a.paneId}").boundedForUi(120)
 
     /**
      * "workspace › tab" from the snapshot, as herdr labels them; a tab still carrying its default label (its number)
@@ -114,7 +118,7 @@ object AttentionModel {
     private fun row(a: Agent, s: Snapshot, readAt: Long, host: HostProfileId, session: String, epoch: Long, observedAt: ObservedAt, seen: SeenLookup): AgentRowModel {
         val (word, section) = section(a, seen)
         return AgentRowModel(
-            key = TerminalKey(TargetRef(host, session, a.terminalId), epoch), paneId = a.paneId, title = title(a), context = context(a, s).boundedForUi(80),
+            key = TerminalKey(TargetRef(host, session, a.terminalId), epoch), paneId = a.paneId, title = title(a), context = listOfNotNull(a.name.shown(), context(a, s).ifEmpty { null }).joinToString(" · ").boundedForUi(80),
             state = word, section = section, observedAtMillis = observedAt.of(a.terminalId) ?: readAt, stateChangeSeq = a.stateChangeSeq,
             agentKind = a.agent.shown(),
         )
