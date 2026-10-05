@@ -68,7 +68,7 @@ data class WakeReadiness(
     val verdict: Verdict get() = when {
         wakeup == "disabled" -> Verdict.NotReady
         wifi -> when {
-            wowlan == null -> Verdict.Unknown
+            wowlan == null || wowlan.startsWith("unknown") -> Verdict.Unknown
             "magic" in wowlan.lowercase() && !wowlan.lowercase().startsWith("disabled") -> Verdict.Ready
             else -> Verdict.NotReady
         }
