@@ -399,15 +399,16 @@ class AppGraph(private val app: Application) {
 
     /**
      * Keeps what a bring-up read about waking the machine, with the relay the user saved. Skipped when the stored profile is no longer
-     * the machine that was read (the user edited its address meanwhile).
+     * the machine that was read (the user edited its address meanwhile). What to keep is [WakeTarget.afterReading]: a run that failed
+     * never replaces a hardware address already read, and a reading that says what is stored is not a write. One critical section in
+     * the store, so a profile edit or a relay save made meanwhile is not overwritten with a stale copy.
      */
-    private suspend fun saveWake(read: HostProfile, target: io.github.tuthan.paddock.wake.WakeTarget) {
-        val stored = profiles.get(read.id) ?: return
-        if (!stored.host.equals(read.host, ignoreCase = true) || stored.port != read.port) return
-        val merged = stored.copy(wake = target.copy(relay = stored.wake?.relay))
-        if (merged == stored) return
-        profiles.put(merged)
-        if (_profile.value?.id == merged.id) _profile.value = merged
+    private suspend fun saveWake(read: HostProfile, reading: io.github.tuthan.paddock.wake.WakeReading) {
+        val written = profiles.update(read.id) { stored ->
+            if (!stored.host.equals(read.host, ignoreCase = true) || stored.port != read.port) null
+            else io.github.tuthan.paddock.wake.WakeTarget.afterReading(stored.wake, reading)?.let { stored.copy(wake = it) }
+        } ?: return
+        if (_profile.value?.id == written.id) _profile.value = written
     }
 
     /**
@@ -479,11 +480,11 @@ class AppGraph(private val app: Application) {
      * that carries only the relay; the next bring-up fills in the rest and keeps it.
      */
     suspend fun setWakeRelay(profileId: String, relay: io.github.tuthan.paddock.wake.WakeRelay?) {
-        val stored = profiles.get(profileId) ?: return
-        val base = stored.wake ?: io.github.tuthan.paddock.wake.WakeTarget.unavailable("Not read yet: connect once so Paddock can read the machine's network interface.", clock.nowMillis())
-        val merged = stored.copy(wake = base.copy(relay = relay))
-        profiles.put(merged)
-        if (_profile.value?.id == merged.id) _profile.value = merged
+        val written = profiles.update(profileId) { stored ->
+            val base = stored.wake ?: io.github.tuthan.paddock.wake.WakeTarget.unavailable("Not read yet: connect once so Paddock can read the machine's network interface.", clock.nowMillis())
+            stored.copy(wake = base.copy(relay = relay))
+        } ?: return
+        if (_profile.value?.id == written.id) _profile.value = written
     }
 
     /**

@@ -57,7 +57,7 @@ class HostSessionControllerTest {
     // ---- the phases, against a scripted host ----
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val target = io.github.tuthan.paddock.wake.WakeTarget(available = true, mac = "02:00:5e:10:00:01", iface = "wlp0s20f3", capturedAtMillis = 1)
+    private val target = io.github.tuthan.paddock.wake.WakeReading(io.github.tuthan.paddock.wake.WakeTarget(available = true, mac = "02:00:5e:10:00:01", iface = "wlp0s20f3", capturedAtMillis = 1), answered = true)
 
     @Test fun theWakeReadingRunsOncePerBringUpAfterTheRelayCheckAndIsExposed() = runBlocking<Unit> {
         herdrFound = false
@@ -100,7 +100,7 @@ class HostSessionControllerTest {
 
     private fun controller(
         lease: FakeLease,
-        wakeCapture: (suspend (io.github.tuthan.paddock.ports.SshSession) -> io.github.tuthan.paddock.wake.WakeTarget)? = null,
+        wakeCapture: (suspend (io.github.tuthan.paddock.ports.SshSession) -> io.github.tuthan.paddock.wake.WakeReading)? = null,
         wakeTimeout: Long = 5_000,
     ) = HostSessionController(scope, profile, { lease }, ledger, clock, MutableStateFlow(true), script, sha, wakeCapture = wakeCapture, wakeCaptureTimeoutMillis = wakeTimeout)
 

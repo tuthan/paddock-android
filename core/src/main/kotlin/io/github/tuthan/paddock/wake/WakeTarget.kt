@@ -118,3 +118,21 @@ data class WakeTarget(
             WakeTarget(available = false, capturedAtMillis = capturedAtMillis, reason = reason.take(200), gateway = gateway, relay = relay)
     }
 }
+
+        /** The read time is rewritten only when this long has passed, so a connection that reads the same thing again is not a write. */
+        const val REFRESH_MILLIS = 24 * 60 * 60 * 1000L
+
+        /**
+         * What to store after a bring-up read [reading] while [stored] is what the profile holds, or null to leave the profile as it
+         * is. The relay is always the saved one (the user may have changed it since the read began). A run that failed or said nothing
+         * ([WakeReading.answered] false) never replaces an available target: a machine that is asleep is exactly when the stored
+         * hardware address is needed. A reading that says the same as what is stored changes nothing, except that the stored time is
+         * refreshed once it is a day old.
+         */
+        fun afterReading(stored: WakeTarget?, reading: WakeReading): WakeTarget? {
+            val read = reading.target.copy(relay = stored?.relay)
+            if (stored == null) return read
+            if (!reading.answered && stored.available) return null
+            if (read.copy(capturedAtMillis = stored.capturedAtMillis) != stored) return read
+            return read.takeIf { it.capturedAtMillis - stored.capturedAtMillis >= REFRESH_MILLIS }
+        }

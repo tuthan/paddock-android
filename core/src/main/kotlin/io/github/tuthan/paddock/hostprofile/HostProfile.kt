@@ -72,6 +72,14 @@ interface HostProfileStore {
     /** Adds or replaces by id. */
     suspend fun put(profile: HostProfile)
 
+    /**
+     * Reads profile [id], applies [transform] and writes the result, all in one critical section, so a change made meanwhile by
+     * another caller is never overwritten with a stale copy (a get followed by a put is two). [transform] must be quick and must not
+     * call the store. Returns the profile as written, or null when nothing was written: there is no such profile, [transform]
+     * returned null, or it returned an equal profile (no rewrite of the file).
+     */
+    suspend fun update(id: String, transform: (HostProfile) -> HostProfile?): HostProfile?
+
     /** Removes only the profile. The caller removes the pin, the imported key and the ledger rows that hang off it. */
     suspend fun remove(id: String)
 }
@@ -81,6 +89,10 @@ class InMemoryHostProfileStore : HostProfileStore {
     override suspend fun list() = synchronized(profiles) { profiles.values.sortedBy { it.name.lowercase() } }
     override suspend fun get(id: String) = synchronized(profiles) { profiles[id] }
     override suspend fun put(profile: HostProfile) { synchronized(profiles) { profiles[profile.id] = profile } }
+    override suspend fun update(id: String, transform: (HostProfile) -> HostProfile?): HostProfile? = synchronized(profiles) {
+        val current = profiles[id] ?: return@synchronized null
+        transform(current)?.takeIf { it != current }?.also { require(it.id == id) { "update cannot rename a profile" }; profiles[id] = it }
+    }
     override suspend fun remove(id: String) { synchronized(profiles) { profiles.remove(id) } }
 }
 
@@ -97,6 +109,16 @@ class FileHostProfileStore(private val file: File) : HostProfileStore {
 
     override suspend fun put(profile: HostProfile) {
         lock.withLock { val all = load().toMutableMap(); all[profile.id] = profile; store(all) }
+    }
+
+    override suspend fun update(id: String, transform: (HostProfile) -> HostProfile?): HostProfile? = lock.withLock {
+        val all = load().toMutableMap()
+        val current = all[id] ?: return@withLock null
+        val next = transform(current)?.takeIf { it != current } ?: return@withLock null
+        require(next.id == id) { "update cannot rename a profile" }
+        all[id] = next
+        store(all)
+        next
     }
 
     override suspend fun remove(id: String) {

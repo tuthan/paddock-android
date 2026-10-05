@@ -106,15 +106,15 @@ class HostSessionController(
     private val sagaStore: io.github.tuthan.paddock.ops.SagaStore? = null,
     /**
      * Reads which network interface this phone reached the machine on and whether it can be woken (Phase 14); null skips it. Run once
-     * per bring-up, after the relay check and before the first read, over the connection already open. Best effort: whatever it does
-     * (fail, hang, answer badly) never changes the phase.
+     * per bring-up, after the relay check and before the first read, over the connection already open, so a slow host delays the first
+     * read by up to [wakeCaptureTimeoutMillis]. Best effort: whatever it does (fail, hang, answer badly) never changes the phase.
      */
-    private val wakeCapture: (suspend (SshSession) -> io.github.tuthan.paddock.wake.WakeTarget)? = null,
+    private val wakeCapture: (suspend (SshSession) -> io.github.tuthan.paddock.wake.WakeReading)? = null,
     private val wakeCaptureTimeoutMillis: Long = 5_000,
 ) {
-    private val _wake = MutableStateFlow<io.github.tuthan.paddock.wake.WakeTarget?>(null)
-    /** What the last bring-up read about waking this machine; null until a capture has finished. */
-    val wake: StateFlow<io.github.tuthan.paddock.wake.WakeTarget?> = _wake.asStateFlow()
+    private val _wake = MutableStateFlow<io.github.tuthan.paddock.wake.WakeReading?>(null)
+    /** What the last bring-up read about waking this machine; null until a capture has finished (a capture cut off at the timeout leaves it as it was). */
+    val wake: StateFlow<io.github.tuthan.paddock.wake.WakeReading?> = _wake.asStateFlow()
 
     private val _phase = MutableStateFlow<HostPhase>(HostPhase.Connecting)
     val phase: StateFlow<HostPhase> = _phase.asStateFlow()

@@ -54,18 +54,29 @@ object WakeCapture {
         "if [ \"~defdev\" != \"~dev\" ]; then emit \"~defdev\"; fi",
     ).joinToString("; ").replace('~', '$')
 
-    /** Runs [COMMAND] and reads its answer. Never throws for a machine that answers badly: that is "not available", with the reason. */
-    suspend fun capture(session: SshSession, clock: Clock, previousRelay: WakeRelay?): WakeTarget {
+    /**
+     * Runs [COMMAND] and reads its answer. Never throws for a machine that answers badly: that is "not available", with the reason,
+     * and [WakeReading.answered] says whether the machine actually said so or the run failed.
+     */
+    suspend fun capture(session: SshSession, clock: Clock, previousRelay: WakeRelay?): WakeReading {
         val r = try {
             session.exec(listOf("sh", "-c", COMMAND), limits = ExecLimits(stdoutMax = 16 shl 10, stderrMax = 4 shl 10, deadline = 10.seconds))
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Exception) {
-            return WakeTarget.unavailable("The machine could not be asked about its network interface.", clock.nowMillis(), previousRelay)
+            return WakeReading(WakeTarget.unavailable("The machine could not be asked about its network interface.", clock.nowMillis(), previousRelay), answered = false)
         }
-        return WakeCaptureParser.parse(String(r.stdout, Charsets.UTF_8), clock.nowMillis(), previousRelay)
+        return WakeCaptureParser.read(String(r.stdout, Charsets.UTF_8), clock.nowMillis(), previousRelay)
     }
 }
+
+/**
+ * What one capture came to. [target] is what to show, available or not. [answered] is true when the command ran and its output
+ * said what the machine has, so a "not available" [target] is a finding (a VPN-only route, no usable hardware address); false when
+ * the run failed, was cut off or printed nothing that can be read, so [target] only carries the reason and says nothing new about
+ * the machine: it must never replace what an earlier run found.
+ */
+data class WakeReading(val target: WakeTarget, val answered: Boolean)
 
 object WakeCaptureParser {
     private val MAC = Regex("[0-9a-f]{2}(:[0-9a-f]{2}){5}")
@@ -74,7 +85,15 @@ object WakeCaptureParser {
 
     private class Block(val dev: String, val fields: Map<String, String>)
 
-    fun parse(output: String, nowMillis: Long, previousRelay: WakeRelay?): WakeTarget {
+    fun parse(output: String, nowMillis: Long, previousRelay: WakeRelay?): WakeTarget = read(output, nowMillis, previousRelay).target
+
+    /**
+     * The command's output as a [WakeReading]. The command always starts by printing `client=`, so output without it is not this
+     * command's (empty, garbage, a shell error), and output with no complete interface block was cut off or came from a machine
+     * where `ip` said nothing: neither is the machine saying it has no wake-capable interface, so neither counts as [answered].
+     */
+    fun read(output: String, nowMillis: Long, previousRelay: WakeRelay?): WakeReading {
+        var ran = false
         var gateway: String? = null
         val blocks = ArrayList<Block>()
         var dev: String? = null
@@ -87,23 +106,28 @@ object WakeCaptureParser {
             val key = line.substring(0, eq)
             val value = line.substring(eq + 1).trim().take(300)
             when {
+                key == "client" && dev == null -> ran = true
                 key == "gateway" && dev == null -> gateway = value.takeIf { Ipv4Subnet.literal(it) != null }
                 key == "dev" -> { dev = value.takeIf { IFACE.matches(it) }; fields = LinkedHashMap() }
                 dev != null -> fields[key] = value
             }
         }
-        if (blocks.isEmpty()) {
-            return WakeTarget.unavailable("The machine did not say which network interface this phone reached it on.", nowMillis, previousRelay, gateway)
+        if (!ran || blocks.isEmpty()) {
+            val said = WakeTarget.unavailable("The machine did not say which network interface this phone reached it on.", nowMillis, previousRelay, gateway)
+            return WakeReading(said, answered = false)
         }
         val chosen = blocks.firstOrNull { it.fields["physical"] == "yes" && MAC.matches(it.fields["mac"].orEmpty()) && it.fields["mac"] != "00:00:00:00:00:00" }
-            ?: return WakeTarget.unavailable(
-                if (blocks.any { it.fields["physical"] == "yes" }) "The network interface has no usable hardware address."
-                else "This phone reached the machine over a VPN or a virtual network, and the machine has no physical interface on that route.",
-                nowMillis, previousRelay, gateway,
+            ?: return WakeReading(
+                WakeTarget.unavailable(
+                    if (blocks.any { it.fields["physical"] == "yes" }) "The network interface has no usable hardware address."
+                    else "This phone reached the machine over a VPN or a virtual network, and the machine has no physical interface on that route.",
+                    nowMillis, previousRelay, gateway,
+                ),
+                answered = true,
             )
         val f = chosen.fields
         val wifi = f["phy"].orEmpty().isNotEmpty() && PHY.matches(f["phy"].orEmpty())
-        return WakeTarget(
+        val target = WakeTarget(
             available = true, mac = f.getValue("mac"), iface = chosen.dev,
             sourceAddress = f["addr"]?.takeIf { Ipv4Subnet.literal(it) != null },
             capturedAtMillis = nowMillis, gateway = gateway, relay = previousRelay,
@@ -114,6 +138,7 @@ object WakeCaptureParser {
                 wifi = wifi, phy = if (wifi) f["phy"] else null,
             ),
         )
+        return WakeReading(target, answered = true)
     }
 
     private fun wowlanWords(raw: String?): String? = when {
