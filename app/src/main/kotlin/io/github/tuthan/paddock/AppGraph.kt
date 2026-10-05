@@ -422,10 +422,15 @@ class AppGraph(private val app: Application) {
         return true
     }
 
-    /** True when this phone can send a wake packet for [profile]: its hardware address is read, and a LAN path or a saved relay can carry it. */
+    /**
+     * True when this phone could send a wake packet for [profile] from where it is now: its hardware address is read, and either a
+     * network holding the machine can carry a broadcast or a VPN can carry the packet to a saved relay. A relay alone is not enough
+     * (cellular and a non-VPN network away from the machine never use it), and neither is a network the machine is not on.
+     */
     fun wakeReady(profile: HostProfile): Boolean {
         val target = profile.wake?.takeIf { it.available } ?: return false
-        return target.relay != null || io.github.tuthan.paddock.wake.WakePaths.candidates(lanPaths.paths(), profile.host, target.iface).any { !it.tunnel && it.hasIpv4 }
+        val candidates = io.github.tuthan.paddock.wake.WakePaths.candidates(lanPaths.paths(), profile.host, target.iface)
+        return io.github.tuthan.paddock.wake.WakePaths.canSend(candidates, target.relay)
     }
 
     /** One Wake tap on the watched machine: send, show the three facts, ask for a reconnect at once. A second tap inside the guard does nothing. */

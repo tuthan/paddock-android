@@ -12,6 +12,7 @@ import java.net.InetAddress
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -69,9 +70,89 @@ class WakePathsTest {
         assertEquals(listOf("wg"), WakePaths.candidates(listOf(lan(), tunnel()), "100.64.0.9", null).map { it.id })
     }
 
-    @Test fun aNameTriesEveryNetworkPreferringTheRecordedInterface() {
-        val c = WakePaths.candidates(listOf(lan("eth", "10.0.0.5"), lan("wlp0s20f3")), "box.example.net", "wlp0s20f3")
-        assertEquals(listOf("wlp0s20f3", "eth"), c.map { it.id })
+    @Test fun aNameTriesEveryLanInThePhonesOrderWhenNoneIsNamedLikeTheMachinesInterface() {
+        // The machine's interface (wlp0s20f3) and the phone's (eth0, wlan0) are two devices' names: in practice they differ.
+        val c = WakePaths.candidates(listOf(lan("eth0", "10.0.0.5"), lan("wlan0")), "box.example.net", "wlp0s20f3")
+        assertEquals(listOf("eth0", "wlan0"), c.map { it.id })
+    }
+
+    @Test fun aNetworkNamedLikeTheMachinesInterfaceIsOnlyATiebreak() {
+        // A Raspberry Pi and a phone both say wlan0: with two LANs and only a name to go on, that one is tried first.
+        val c = WakePaths.candidates(listOf(lan("eth0", "10.0.0.5"), lan("wlan0")), "pi.local", "wlan0")
+        assertEquals(listOf("wlan0", "eth0"), c.map { it.id })
+    }
+
+    @Test fun aNameWithAnAlwaysOnVpnStillTriesTheLanBeforeTheTunnel() {
+        val c = WakePaths.candidates(listOf(tunnel(), lan("wlan0")), "desktop.local", "wlp0s20f3")
+        assertEquals(listOf("wlan0", "wg"), c.map { it.id })
+    }
+
+    @Test fun aNameWithAVpnUpIsBroadcastOnTheLanWithoutARelay() = runBlocking {
+        val s = RecordingUdp()
+        val c = WakePaths.candidates(listOf(tunnel(), lan("wlan0")), "desktop.local", "wlp0s20f3")
+        val r = WakeSender(s, packets = 1, gapMillis = 0).send(TARGET, c, null)
+        assertTrue(r is WakeSendResult.Sent && !r.viaRelay, r.toString())
+        assertTrue(s.sent.isNotEmpty() && s.sent.all { it == "wlan0" })
+    }
+
+    @Test fun aNameWithOnlyATunnelTriesTheTunnel() {
+        assertEquals(listOf("wg"), WakePaths.candidates(listOf(tunnel()), "desktop.local", null).map { it.id })
+    }
+
+    @Test fun anIpv4AddressOnNoneOfTheNetworksIsNeverBroadcastToAnUnrelatedLan() {
+        // The machine's own 192.168.1.x while the phone is on a hotel's 10.20.0.x: a broadcast there cannot reach it.
+        assertEquals(emptyList(), WakePaths.candidates(listOf(lan("wlan0", "10.20.0.5")), "192.168.1.50", null))
+        assertEquals(listOf("wg"), WakePaths.candidates(listOf(lan("wlan0", "10.20.0.5"), tunnel()), "192.168.1.50", null).map { it.id })
+    }
+
+    private val relay = WakeRelay("10.8.0.1")
+
+    @Test fun wakeIsOfferedOnALanHoldingTheMachineWithOrWithoutARelay() {
+        val c = WakePaths.candidates(listOf(lan("wlan0")), "192.168.1.50", null)
+        assertTrue(WakePaths.canSend(c, null))
+        assertTrue(WakePaths.canSend(c, relay))
+    }
+
+    @Test fun aSavedRelayAloneOffersNothingWhenNoTunnelCanCarryIt() {
+        // On cellular (no path at all) or a non-VPN network away from the machine's LAN the relay is never used.
+        assertFalse(WakePaths.canSend(WakePaths.candidates(emptyList(), "192.168.1.50", null), relay))
+        assertFalse(WakePaths.canSend(WakePaths.candidates(listOf(lan("wlan0", "10.20.0.5")), "192.168.1.50", null), relay))
+    }
+
+    @Test fun aTunnelOffersWakeOnlyWithARelaySaved() {
+        val c = WakePaths.candidates(listOf(lan("wlan0", "10.20.0.5"), tunnel()), "192.168.1.50", null)
+        assertFalse(WakePaths.canSend(c, null))
+        assertTrue(WakePaths.canSend(c, relay))
+    }
+
+    @Test fun aLanWithoutAnIpv4AddressCannotSend() {
+        val v6 = LanPath("wlan0", "wlan0", tunnel = false, subnets = emptyList())
+        assertFalse(WakePaths.canSend(WakePaths.candidates(listOf(v6), "desktop.local", null), relay))
+    }
+
+    @Test fun aNameOnTheLanIsOfferedWakeEvenWithAnAlwaysOnVpnAndNoRelay() {
+        assertTrue(WakePaths.canSend(WakePaths.candidates(listOf(tunnel(), lan("wlan0")), "desktop.local", null), null))
+    }
+
+    @Test fun anIpv4AddressOnNoneOfTheNetworksSendsNothingAndSaysSo() = runBlocking {
+        val s = RecordingUdp()
+        val c = WakePaths.candidates(listOf(lan("wlan0", "10.20.0.5")), "192.168.1.50", null)
+        assertEquals(WakeSendResult.Failed(WakeSendFailure.NetworkMissing), WakeSender(s, packets = 1, gapMillis = 0).send(TARGET, c, null))
+        assertEquals(0, s.opened)
+    }
+}
+
+/** Records the path id of each datagram, for the path-selection tests. */
+private class RecordingUdp : Sockets {
+    val sent = mutableListOf<String?>()
+    var opened = 0
+    override fun tcp(): TcpConnection = error("not used")
+    override fun udp(path: LanPath?): UdpSender {
+        opened++
+        return object : UdpSender {
+            override fun send(payload: ByteArray, address: InetAddress, port: Int, broadcast: Boolean) { sent += path?.id }
+            override fun close() {}
+        }
     }
 }
 
