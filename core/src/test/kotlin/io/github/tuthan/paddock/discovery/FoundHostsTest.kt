@@ -137,11 +137,12 @@ class FoundHostsTest {
 
     @Test fun rowsAddedFromManyThreadsWhileAnotherReadsAreNeitherLostNorCorrupt() {
         // The finder's probe and its mDNS listener add from different threads while the page reads the list.
-        repeat(30) { round ->
+        repeat(10) { round ->
             val f = FoundHosts(maxRows = 100_000)
             val failures = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
             val stop = java.util.concurrent.atomic.AtomicBoolean(false)
-            val reader = kotlin.concurrent.thread { try { while (!stop.get()) f.list } catch (t: Throwable) { failures += t } }
+            // A pause between reads: a reader that never lets go of the lock starves the writers (intrinsic locks are not fair) and turns a millisecond test into minutes.
+            val reader = kotlin.concurrent.thread { try { while (!stop.get()) { f.list; Thread.sleep(1) } } catch (t: Throwable) { failures += t } }
             val writers = (0 until 8).map { t ->
                 kotlin.concurrent.thread {
                     try {

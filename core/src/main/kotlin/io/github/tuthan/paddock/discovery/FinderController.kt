@@ -118,7 +118,7 @@ class FinderController(
                     if (listening != null) delay(mdnsGraceMillis)
                 } catch (e: CancellationException) { throw e }
                 // This job runs on the app's scope, which has no handler: a bug here must end the scan, not the process.
-                catch (e: Exception) { failed = true }
+                catch (e: Exception) { failed = true; release() }
                 change(found) { s ->
                     s.copy(phase = FinderPhase.Done, rows = found.list, done = if (failed) s.done else s.total, note = if (failed) SCAN_FAILED else s.note, canStart = true)
                 }
