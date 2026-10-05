@@ -71,10 +71,26 @@ class WakeCaptureCommandTest {
         argvToCommand(argv)
     }
 
-    @Test fun itHasNoInterpolation() {
-        // A constant: nothing the phone or the machine says can reach it.
-        assertTrue("SSH_CONNECTION" in WakeCapture.COMMAND)
-        assertTrue(WakeCapture.COMMAND.startsWith("PATH=\"\$PATH:/usr/sbin:/sbin\""))
+    @Test fun nothingFromTheCallerCanEnterTheCommand() {
+        val command = WakeCapture.COMMAND
+        // No format placeholder is left for a caller to fill.
+        assertFalse(Regex("%[0-9]*\\\$?[sd]|\\{[0-9]+}").containsMatchIn(command), command)
+        // Every shell variable the command expands is either one of the two the SSH server and the login set (PATH, SSH_CONNECTION),
+        // a positional parameter, or is assigned inside the command itself: no other value from outside can reach a shell word.
+        val used = Regex("\\$\\{?([A-Za-z_][A-Za-z0-9_]*|[0-9#])").findAll(command).map { it.groupValues[1] }.toSet()
+        assertTrue(used.containsAll(listOf("SSH_CONNECTION", "PATH")), used.toString())
+        val outside = used.filter { name ->
+            name != "PATH" && name != "SSH_CONNECTION" && !name.first().isDigit() && name != "#" &&
+                !Regex("(^|[ ;])${Regex.escape(name)}=").containsMatchIn(command)
+        }
+        assertEquals(emptyList(), outside)
+    }
+
+    @Test fun whatTheCallerPassesNeverChangesTheCommandSent() = runBlocking {
+        val session = ScriptedSession { result(WIFI) }
+        WakeCapture.capture(session, Clock { 1 }, null)
+        WakeCapture.capture(session, Clock { 2 }, RELAY)
+        assertEquals(listOf(listOf("sh", "-c", WakeCapture.COMMAND), listOf("sh", "-c", WakeCapture.COMMAND)), session.commands)
     }
 
     private fun run(shell: String, ssh: String): Pair<Int, String> {
@@ -292,22 +308,6 @@ end
     }
 }
 
-class WakeCommandsTest {
-    private fun target(readiness: WakeReadiness) = WakeTarget(available = true, mac = "02:00:5e:10:00:01", iface = "wlp0s20f3", readiness = readiness, capturedAtMillis = 1)
-
-    @Test fun aReadyWifiMachineOnlyGetsThePersistCommand() {
-        val cmds = WakeCommands.forTarget(target(WakeReadiness(wakeup = "enabled", wowlan = "enabled: magic packet", wifi = true, phy = "phy0")))
-        assertEquals(1, cmds.size)
-        assertTrue("nmcli connection modify" in cmds[0].text && "wake-on-wlan magic" in cmds[0].text)
-    }
-
-    @Test fun aWifiMachineWithWowlanOffGetsEnableAndPersist() {
-        val cmds = WakeCommands.forTarget(target(WakeReadiness(wakeup = "enabled", wowlan = "disabled", wifi = true, phy = "phy0")))
-        assertEquals(listOf("sudo iw phy phy0 wowlan enable magic-packet"), cmds.map { it.text }.filter { it.startsWith("sudo") })
-        assertEquals(2, cmds.size)
-    }
-
-    @Test fun aDisabledWakeupNodeGetsItsOwnCommandFirst() {
 class WakeReadingTest {
     private fun read(text: String) = WakeCaptureParser.read(text, 99, null)
     private suspend fun capture(answer: () -> ExecResult) = WakeCapture.capture(ScriptedSession(answer), Clock { 99 }, RELAY)
@@ -425,6 +425,22 @@ class WakeAfterReadingTest {
     }
 }
 
+class WakeCommandsTest {
+    private fun target(readiness: WakeReadiness) = WakeTarget(available = true, mac = "02:00:5e:10:00:01", iface = "wlp0s20f3", readiness = readiness, capturedAtMillis = 1)
+
+    @Test fun aReadyWifiMachineOnlyGetsThePersistCommand() {
+        val cmds = WakeCommands.forTarget(target(WakeReadiness(wakeup = "enabled", wowlan = "enabled: magic packet", wifi = true, phy = "phy0")))
+        assertEquals(1, cmds.size)
+        assertTrue("nmcli connection modify" in cmds[0].text && "wake-on-wlan magic" in cmds[0].text)
+    }
+
+    @Test fun aWifiMachineWithWowlanOffGetsEnableAndPersist() {
+        val cmds = WakeCommands.forTarget(target(WakeReadiness(wakeup = "enabled", wowlan = "disabled", wifi = true, phy = "phy0")))
+        assertEquals(listOf("sudo iw phy phy0 wowlan enable magic-packet"), cmds.map { it.text }.filter { it.startsWith("sudo") })
+        assertEquals(2, cmds.size)
+    }
+
+    @Test fun aDisabledWakeupNodeGetsItsOwnCommandFirst() {
         val cmds = WakeCommands.forTarget(target(WakeReadiness(wakeup = "disabled", wowlan = "disabled", wifi = true, phy = "phy0")))
         assertEquals("echo enabled | sudo tee /sys/class/net/wlp0s20f3/device/power/wakeup", cmds.first().text)
     }
@@ -434,6 +450,36 @@ class WakeAfterReadingTest {
         val cmds = WakeCommands.forTarget(t).map { it.text }
         assertTrue("sudo ethtool -s enp3s0 wol g" in cmds)
         assertTrue(cmds.any { "802-3-ethernet.wake-on-lan magic" in it })
+    }
+
+    // From the real captures: the wakeup node and the magic-packet setting are two readings, and each command follows its own.
+    private fun read(text: String) = WakeCaptureParser.parse(text, 99, null)
+    private fun texts(t: WakeTarget) = WakeCommands.forTarget(t).map { it.text }
+
+    @Test fun aWifiMachineWithOnlyItsWakeupNodeOffIsNotToldToEnableWowlanAgain() {
+        val cmds = texts(read(WIFI.replace("wakeup=enabled", "wakeup=disabled")))
+        assertTrue(cmds.any { "power/wakeup" in it }, cmds.toString())
+        assertTrue(cmds.none { "iw phy" in it }, cmds.toString())
+        assertTrue(cmds.any { "wake-on-wlan magic" in it }, cmds.toString())
+    }
+
+    @Test fun anEthernetMachineWithOnlyItsWakeupNodeOffIsNotToldToSetWakeOnGAgain() {
+        val cmds = texts(read(ETHERNET_G.replace("wakeup=enabled", "wakeup=disabled")))
+        assertTrue(cmds.any { "power/wakeup" in it }, cmds.toString())
+        assertTrue(cmds.none { "ethtool" in it }, cmds.toString())
+        assertTrue(cmds.any { "wake-on-lan magic" in it }, cmds.toString())
+    }
+
+    @Test fun eachEnableCommandIsShownWhenItsOwnReadingSaysItIsNeeded() {
+        val wifi = texts(read(WIFI.replace("wakeup=enabled", "wakeup=disabled").replace("WoWLAN is enabled: * wake up on magic packet", "WoWLAN is disabled.")))
+        assertTrue(wifi.any { "power/wakeup" in it } && wifi.any { "iw phy phy0 wowlan enable magic-packet" in it }, wifi.toString())
+        val eth = texts(read(ETHERNET_G.replace("wakeup=enabled", "wakeup=disabled").replace("wol=g", "wol=d")))
+        assertTrue(eth.any { "power/wakeup" in it } && eth.any { "ethtool -s enp3s0 wol g" in it }, eth.toString())
+    }
+
+    @Test fun anUnreadSettingStillGetsItsCommandBecauseNothingSaysItIsOn() {
+        val wifi = texts(read(WIFI.replace(Regex("wowlan=.*"), "wowlan=missing")))
+        assertTrue(wifi.any { "iw phy phy0 wowlan enable magic-packet" in it }, wifi.toString())
     }
 
     @Test fun nothingIsShownForAnUnavailableTarget() {

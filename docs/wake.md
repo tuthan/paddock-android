@@ -18,10 +18,12 @@ It says what was read in words, with when: *Ready · 3c:… on wlp0s20f3 · wake
 
 | What the reading says | Command shown |
 | --- | --- |
-| the interface is not allowed to wake the machine | `echo enabled \| sudo tee /sys/class/net/<iface>/device/power/wakeup` |
+| the interface is not allowed to wake the machine (`power/wakeup` is `disabled`) | `echo enabled \| sudo tee /sys/class/net/<iface>/device/power/wakeup` |
 | Wi-Fi wake is off | `sudo iw phy <phy> wowlan enable magic-packet` (until the next reboot) |
 | Ethernet Wake-on is not `g` | `sudo ethtool -s <iface> wol g` (until the next reboot) |
 | to keep it across reboots | `nmcli connection modify "<connection name>" 802-11-wireless.wake-on-wlan magic` (or `802-3-ethernet.wake-on-lan magic`), the connection name from `nmcli -t -f NAME,DEVICE connection show --active` |
+
+Each enable command follows its own reading: a disabled `power/wakeup` alone shows only that command, and Wi-Fi wake or Ethernet Wake-on that is already on (`magic packet`, `g`) is not told to be set again. A setting that could not be read (no `iw`, no `ethtool`) still gets its command, because nothing says it is on.
 
 Whether a given laptop wakes from `s2idle` on a magic packet over Wi-Fi depends on the hardware and firmware; "ready" means the settings say so, not that it has been proven (the spike S2 is a device check, see the evidence report).
 
@@ -49,6 +51,6 @@ No wake from shutdown, no wake over the internet without your relay, nothing run
 
 ## Checked
 
-- Unit (`:core`): the packet bytes against a known vector and the destinations and counts (`WakeTest`), the capture command's quoting for `argvToCommand` and a run through a real `sh` with fake tools, the parser over a real Wi-Fi capture and the hostile cases (`WakeCaptureTest`), the relay parser and the path order (`WakeTest`), the three facts and the guard (`WakeFactsTest`), profile validation, the Home row and its words (`HomeUiMapperTest`, `WakeWordsMapperTest`), and the capture being best effort (`HostSessionControllerTest`).
+- Unit (`:core`): the packet bytes against a known vector and the destinations and counts (`WakeTest`), the capture command's quoting for `argvToCommand`, what can and cannot enter it, and a run through a real `sh` with fake tools, the parser over a real Wi-Fi capture and the hostile cases, failed run against genuine "not available" and what is stored after each (`WakeCaptureTest`), the relay parser, the path order (a name with a VPN up, an IPv4 address on none of the networks) and when Wake is offered (`WakeTest`), the three facts and the guard (`WakeFactsTest`), one tap, two quick taps, and what counts as a fact after the tap (`WakeTapTest`), the atomic profile update (`HostProfileStoreTest`), profile validation, the Home row and its words (`HomeUiMapperTest`, `WakeWordsMapperTest`), and the capture being best effort (`HostSessionControllerTest`).
 - The capture command was run for real on the author's laptop and matched the stored Wi-Fi fixture byte for byte.
 - Not run here, and said so in the evidence report: S2 (a magic packet waking this laptop from `s2idle` over Wi-Fi: it would suspend the machine the work runs on), AC-14.9 (a real phone waking it three times with `tcpdump` on the host), and the relay run over Tailscale from cellular.

@@ -64,16 +64,26 @@ data class WakeReadiness(
         listOf(wakeup, wowlan, ethtool).forEach { require(it == null || it.length <= 120) { "readiness text too long" } }
     }
 
+    /**
+     * True when this reading itself says the magic-packet setting is on (Wi-Fi: WoWLAN lists magic packets; Ethernet: `Wake-on` has
+     * `g`). It says nothing of `power/wakeup`, which is a separate setting with its own command.
+     */
+    val magicPacketOn: Boolean get() = if (wifi) {
+        wowlan != null && !wowlan.startsWith("unknown") && !wowlan.lowercase().startsWith("disabled") && "magic" in wowlan.lowercase()
+    } else {
+        ethtool != null && !ethtool.startsWith("unknown") && 'g' in ethtool
+    }
+
     /** `ready`, `not ready` or `unknown`, for the Settings row. */
     val verdict: Verdict get() = when {
         wakeup == "disabled" -> Verdict.NotReady
         wifi -> when {
             wowlan == null || wowlan.startsWith("unknown") -> Verdict.Unknown
-            "magic" in wowlan.lowercase() && !wowlan.lowercase().startsWith("disabled") -> Verdict.Ready
+            magicPacketOn -> Verdict.Ready
             else -> Verdict.NotReady
         }
         ethtool == null || ethtool.startsWith("unknown") -> Verdict.Unknown
-        'g' in ethtool -> Verdict.Ready
+        magicPacketOn -> Verdict.Ready
         else -> Verdict.NotReady
     }
 
@@ -116,8 +126,6 @@ data class WakeTarget(
 
         fun unavailable(reason: String, capturedAtMillis: Long, relay: WakeRelay? = null, gateway: String? = null) =
             WakeTarget(available = false, capturedAtMillis = capturedAtMillis, reason = reason.take(200), gateway = gateway, relay = relay)
-    }
-}
 
         /** The read time is rewritten only when this long has passed, so a connection that reads the same thing again is not a write. */
         const val REFRESH_MILLIS = 24 * 60 * 60 * 1000L
@@ -136,3 +144,5 @@ data class WakeTarget(
             if (read.copy(capturedAtMillis = stored.capturedAtMillis) != stored) return read
             return read.takeIf { it.capturedAtMillis - stored.capturedAtMillis >= REFRESH_MILLIS }
         }
+    }
+}

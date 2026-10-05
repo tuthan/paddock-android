@@ -13,13 +13,13 @@ object WakeCommands {
         val iface = target.iface ?: return emptyList()
         val r = target.readiness ?: return emptyList()
         val out = ArrayList<WakeCommand>()
-        val ready = r.verdict == WakeReadiness.Verdict.Ready
+        // Each enable command follows its own reading: the wakeup node being off says nothing about the magic-packet setting.
         if (r.wakeup == "disabled") out += WakeCommand("Let the interface wake the machine, until the next reboot", "echo enabled | sudo tee /sys/class/net/$iface/device/power/wakeup")
         if (r.wifi && r.phy != null) {
-            if (!ready) out += WakeCommand("Wake on a magic packet, until the next reboot", "sudo iw phy ${r.phy} wowlan enable magic-packet")
+            if (!r.magicPacketOn) out += WakeCommand("Wake on a magic packet, until the next reboot", "sudo iw phy ${r.phy} wowlan enable magic-packet")
             out += WakeCommand("Keep it after a reboot (name from `nmcli -t -f NAME,DEVICE connection show --active`)", "nmcli connection modify \"<connection name>\" 802-11-wireless.wake-on-wlan magic")
         } else if (!r.wifi) {
-            if (!ready) out += WakeCommand("Wake on a magic packet, until the next reboot", "sudo ethtool -s $iface wol g")
+            if (!r.magicPacketOn) out += WakeCommand("Wake on a magic packet, until the next reboot", "sudo ethtool -s $iface wol g")
             out += WakeCommand("Keep it after a reboot (name from `nmcli -t -f NAME,DEVICE connection show --active`)", "nmcli connection modify \"<connection name>\" 802-3-ethernet.wake-on-lan magic")
         }
         return out
