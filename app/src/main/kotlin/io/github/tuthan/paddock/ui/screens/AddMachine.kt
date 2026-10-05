@@ -307,12 +307,30 @@ private fun PhoneKeySection(
         if (sendKeyTo != null) {
             PaddockButton("Send the key to $sendKeyTo", onSendKey, kind = ButtonKind.Secondary, icon = PaddockIcons.Send)
             Note("The desktop shows this phone's fingerprint and asks its owner to approve it. Only this phone's public key is sent.")
+            // The desktop's camera reads the same QR that Show as QR draws below; this is the same switch, put where the pairing path is.
+            PaddockButton(if (showQr) "Hide the QR" else "Show the key to the desktop's camera", { onShowQr(!showQr) }, kind = ButtonKind.Secondary, icon = PaddockIcons.Qr)
         }
         if (command == null) Note(withMono("Append it to ~/.ssh/authorized_keys on the machine, from a shell you already trust.", "~/.ssh/authorized_keys"))
         if (showQr) {
+            BrightnessBoost()
             val qr = remember(line) { runCatching { QrCode.encodeText(line) }.getOrNull() }
             if (qr != null) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { QrView(qr, "QR code of this phone's public key") }
             else Text("This key is too long for a QR code. Use Copy key only.", style = PaddockTokens.type.secondary, color = c.dim)
         }
+    }
+}
+
+/**
+ * Full screen brightness for as long as it is composed, then the window's own setting again. A QR held up to a camera is read far more
+ * reliably from a bright screen than from one dimmed by the phone's auto-brightness. It touches this window only, never the system setting.
+ */
+@Composable
+fun BrightnessBoost() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.DisposableEffect(context) {
+        val window = generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }.firstOrNull { it is android.app.Activity }?.let { (it as android.app.Activity).window }
+        val before = window?.attributes?.screenBrightness
+        if (window != null) window.attributes = window.attributes.also { it.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL }
+        onDispose { if (window != null && before != null) window.attributes = window.attributes.also { it.screenBrightness = before } }
     }
 }

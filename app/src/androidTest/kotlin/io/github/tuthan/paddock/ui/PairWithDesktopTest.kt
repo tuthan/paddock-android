@@ -114,6 +114,23 @@ class PairWithDesktopTest {
         rule.onNode(hasContentDescription("Command to run on the machine", substring = true)).performScrollTo().assertIsDisplayed()
     }
 
+    @Test fun showingTheKeyToTheCameraRaisesTheBrightnessAndHidingItRestoresIt() {
+        form("192.168.42.86")
+        fun brightness(): Float {
+            var b = -2f
+            rule.runOnUiThread { b = (rule as androidx.compose.ui.test.junit4.AndroidComposeTestRule<*, *>).activity.window.attributes.screenBrightness }
+            return b
+        }
+        val before = brightness()
+        rule.onNodeWithText("Show the key to the desktop's camera").performScrollTo().performClick()
+        rule.waitForIdle()
+        assertEquals(android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL, brightness(), 0f)
+        rule.onNode(hasContentDescription("QR code of this phone's public key")).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Hide the QR").performScrollTo().performClick()
+        rule.waitForIdle()
+        assertEquals(before, brightness(), 0f)
+    }
+
     @Test fun withoutAnOfferThereIsNoSendButton() {
         form(null)
         rule.onAllNodesWithText("Send the key to", substring = true).assertCountEquals(0)
