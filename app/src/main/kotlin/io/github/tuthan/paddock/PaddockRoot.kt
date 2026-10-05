@@ -937,7 +937,16 @@ private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () 
         }
     }
     val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "unknown" }
-    val machine = profile?.let { p -> MachineSummary(p.name, "${p.user}@${p.host}:${p.port}", p.session) }
+    val wakeFacts by graph.wakeFacts.collectAsState()
+    val settingsNow = rememberNow()
+    val machine = profile?.let { p ->
+        val wake = io.github.tuthan.paddock.host.WakeWordsMapper.words(
+            p, wakeFacts, settingsNow, wakeReady = remember(p, resumes) { graph.wakeReady(p) },
+            phoneSuggestion = remember(resumes) { io.github.tuthan.paddock.wake.WakeRelay.suggestionFrom(graph.lanPaths.paths()) },
+            clockLabel = { m -> if (java.time.LocalDate.ofEpochDay(m / 86_400_000L) == java.time.LocalDate.ofEpochDay(settingsNow / 86_400_000L)) clockLabel(m) else java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm").withZone(java.time.ZoneId.systemDefault()).format(java.time.Instant.ofEpochMilli(m)) },
+        )
+        MachineSummary(p.name, "${p.user}@${p.host}:${p.port}", p.session, wake)
+    }
     val journalUnreadable by graph.journal.unreadable.collectAsState()
     // Read again on every return from system settings and after the dialog answers: the user can change any of it out of our sight.
     var accessTick by remember { mutableIntStateOf(0) }
@@ -958,6 +967,9 @@ private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () 
         ),
         onRestorePurchase = { graph.restorePurchases() },
         onBuyTip = { graph.buyTip(it) },
+        onCopyWakeCommand = { cmd -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock wake command", cmd)) },
+        onSaveWakeRelay = { relay -> profile?.let { p -> scope.launch { graph.setWakeRelay(p.id, relay) } } },
+        onWake = { graph.wake() },
         onProtectSensitive = { scope.launch { graph.setProtectSensitive(it) } },
         onAgentGlyphs = { graph.setAgentGlyphs(it) },
         onOpenSystemSettings = { ctx.startActivity(graph.gate.settingsIntent()) },

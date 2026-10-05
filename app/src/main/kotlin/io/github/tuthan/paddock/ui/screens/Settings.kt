@@ -52,7 +52,7 @@ import io.github.tuthan.paddock.ui.theme.PaddockTokens
 enum class LocalAccess { NotRequired, Granted, Denied }
 
 /** The watched machine as Settings shows it: its name, `user@host:port`, and the herdr session (null for the default). */
-data class MachineSummary(val name: String, val endpoint: String, val session: String?)
+data class MachineSummary(val name: String, val endpoint: String, val session: String?, val wake: WakeWords? = null)
 
 data class SettingsState(
     val protectSensitiveScreens: Boolean,
@@ -129,6 +129,9 @@ fun Settings(
     onAgentGlyphs: (Boolean) -> Unit = {},
     onRestorePurchase: () -> Unit = {},
     onBuyTip: (String) -> Unit = {},
+    onCopyWakeCommand: (String) -> Unit = {},
+    onSaveWakeRelay: (io.github.tuthan.paddock.wake.WakeRelay?) -> Unit = {},
+    onWake: () -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     var reconnectOpen by rememberSaveable { mutableStateOf(false) }
@@ -161,6 +164,7 @@ fun Settings(
             if (state.machine != null) {
                 Fixed(state.machine.name, null, listOfNotNull(state.machine.endpoint, state.machine.session?.let { "session $it" } ?: "default session").joinToString(" · "), mono = true)
             }
+            state.machine?.wake?.let { WakeOnLanSection(it, onCopyWakeCommand, onSaveWakeRelay, onWake) }
             PaddockButton(if (state.machine == null) "Add a machine" else "Add another machine", onAddMachine, kind = ButtonKind.Ghost, icon = PaddockIcons.Plus)
             if (state.machine != null) Note2("Paddock watches one machine at a time; adding another makes it the watched one.")
 
