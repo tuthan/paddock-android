@@ -2,7 +2,7 @@
 
 A phone companion for [herdr](https://herdr.dev): answer the herd, do not operate it. Native Kotlin, SSH only, no server of its own. Plan and phase notes live in the docs vault under `herdr-android/`.
 
-Status: Phases 00 to 12 are implemented (Phase 09's multi-host slices are held; Phase 08 and the optional Phases 11 and 12 are built). The Phase 10 release cut has been rehearsed with a throwaway key and nothing is published (`docs/release.md`). `:core` is JVM only (enforced); `:app` is the Android shell. Acceptance that needs a physical phone or other people is open: TalkBack, the real-radio link cuts, widgets on a real launcher, the usability test and a second person following `docs/host-setup.md`; the vault's evidence reports list each item. The notes for what each part does are in `docs/` (`widgets.md`, `accessibility.md`, `contrast.md`, `release.md`, `host-setup.md`, `operations.md`, `spaces.md`, `alerts.md`, `terminal-control.md`).
+Status: Phases 00 to 12 are implemented (Phase 09's multi-host slices are held; Phase 08 and the optional Phases 11 and 12 are built), and Phase 14 (first run, pairing and waking) is built with its real-phone checks open. The Phase 10 release cut has been rehearsed with a throwaway key and nothing is published (`docs/release.md`). `:core` is JVM only (enforced); `:app` is the Android shell. Acceptance that needs a physical phone or other people is open: TalkBack, the real-radio link cuts, widgets on a real launcher, the usability test and a second person following `docs/host-setup.md`; the vault's evidence reports list each item. The notes for what each part does are in `docs/` (`widgets.md`, `accessibility.md`, `contrast.md`, `release.md`, `host-setup.md`, `operations.md`, `spaces.md`, `alerts.md`, `terminal-control.md`).
 
 ## Licence, and the free and full versions
 
@@ -46,6 +46,10 @@ tools/validate-fixtures.sh                   # corpus completeness, no leaks, `d
 ```
 
 **No test ever touches the default session or a real agent.** Only sessions whose name matches `^paddock-test(-[a-z0-9]+)?$` (`paddock-test`, or `paddock-test-` plus lowercase letters and digits) may be mutated; the scripts and the integration harness refuse any other name, and any socket path whose real path (symlinks resolved; on the host for the over-SSH test) is not that same session's `sessions/<name>/herdr.sock`.
+
+## First run, pairing and waking (Phase 14)
+
+`docs/onboarding.md` (Welcome, Connect staying on the form with each failure beside its fix, Find on this network, Scan the code on the desktop), `docs/pairing.md` (Send the key to the desktop's `pair` popup and the wire), `docs/wake.md` (Wake-on-LAN from the Home banner, with a relay for waking from away). The traditional steps (this phone's key and its authorize command, an imported key, Paste a pairing link) stay on Add machine whatever else is used.
 
 ## Dependencies
 

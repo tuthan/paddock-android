@@ -162,6 +162,9 @@ class GuardedAnswersLockTest {
         show()
         rule.waitUntil(5_000) { reads.get() > 0 }
         rule.runOnIdle { locked = true }
+        // The recomposition that ends the watch runs when the test clock is advanced, and Thread.sleep does not advance it: without this the
+        // screen still said "enabled" for the whole pause and the test failed on every API level (found in the Phase 14 regression run).
+        rule.waitForIdle()
         pause(200) // a read that was already on its way may still land
         val settled = reads.get()
         pause(400)

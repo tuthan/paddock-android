@@ -1,5 +1,7 @@
 # Adding a machine without typing the key (Phase 11)
 
+Phase 14 adds more ways in on top of these three, none replacing them: **Find on this network** and **Scan the code on the desktop** (`onboarding.md`), **Send the key** to the desktop's `pair` popup (`pairing.md`), and **Wake** (`wake.md`).
+
 Three ways to get the phone's key onto a machine and the machine into the phone. None of them connects, trusts or writes anything by itself.
 
 ## Copy and Share: the authorize command

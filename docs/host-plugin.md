@@ -1,4 +1,4 @@
-# The herdr plugin and how the app uses it (Phase 11)
+# The herdr plugin and how the app uses it (Phase 11, with the `pair` action of Phase 14)
 
 The host side of enrollment is a herdr plugin kept in its own repository (`herdr-plugin-paddock`, id `paddock`, local only until it is published: see [Not published](#not-published)). It is optional. Everything it does has a path without it: the copy command, a pairing link written by hand, and the consented push install of the relay.
 
@@ -7,6 +7,7 @@ The host side of enrollment is a herdr plugin kept in its own repository (`herdr
 | What | How |
 | --- | --- |
 | `authorize-phone` | A herdr action that opens a popup; paste the phone's key line, read with echo off. It writes `~/.ssh/authorized_keys` exactly as the app's copy command does, only for one valid `ecdsa-sha2-nistp256` line, and refuses a symlink or a group- or world-writable target. |
+| `pair` | One popup for the whole enrollment: the pairing link and its QR, then **one** public key from the phone's LAN listener (Send the key), the desktop webcam reading the app's key QR, or paste; the key's fingerprint is shown and `authorized_keys` is written only after you approve (Reject is the default). Nothing received is run or written anywhere else. See `pairing.md`. |
 | `show-pairing` | Prints a `paddock://pair?...` link for this machine (host, port, user, the host keys' SHA-256 fingerprints, session), no key and no secret. |
 | `host/paddock-relay.py`, `host/paddock-control.py` | Byte-identical copies of the two scripts the app pins in `host/SOURCE.json`. `herdr plugin install` puts them in a directory herdr knows, so nothing has to be pushed over SSH. |
 
@@ -33,7 +34,11 @@ The app never runs `herdr plugin install` on the host. It shows the user what to
 - `PluginLocatorTest`, `RelayInstallerPluginTest`, `HostSessionControllerTest` (plugin cases), `RelayInstallTest` (the note): the table of hostile directories, the order above, nothing written for a pinned plugin copy, a mismatched copy never run, a change after connecting refused.
 - `fixtures/herdr-0.9.1/plugin-list-paddock.json`: herdr 0.9.1's own listing of a linked plugin, captured under `env -i` with an isolated HOME; only the plugin path was replaced.
 - `Phase11PluginLiveTest` (set `PADDOCK_TEST_PLUGIN_DIR` to a plugin checkout): the real herdr and the real plugin files through a wrapper that runs herdr with an isolated HOME. Finds the plugin and accepts its relay by hash; a copy of the plugin with an edited relay is found, reported and not run, and the push install still works.
-- In the plugin repository: 70 Python tests, `tools/check_pins.py` (the plugin's copies against this repository's pins, which live in two places), and `tools/live_check.py` against a real herdr 0.9.1 in isolation.
+- In the plugin repository: 200 Python tests (the 70 above plus the `pair` popup, its listener and the open-pane wrapper), `tools/check_pins.py` (the plugin's copies against this repository's pins, which live in two places), and `tools/live_check.py` against a real herdr 0.9.1 in isolation.
+
+## The `pair` action (Phase 14)
+
+Plugin version 0.2.0 adds `paddock.pair` and a pane for it (`bin/pair.py`, `PairListener` in `lib/paddock_plugin.py`, `PROTOCOL.md`). The app side is the pairing page and its coordinator (`docs/pairing.md`). The app learns two optional link parameters, `pair=<port>` and `sid=<22 characters>`; an older app ignores both and pairs the old way, and a link without them is exactly what `show-pairing` always printed. Nothing about the discovery order above changes: the pair popup does not install or replace any script.
 
 ## Not published
 

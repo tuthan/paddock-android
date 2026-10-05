@@ -11,7 +11,7 @@ On the phone: **Add machine**. The screen shows this phone's key (a P-256 key ma
 1. Copy the command (or **Share** it to a message to yourself), and run it on the machine, as the user the phone will log in as. It creates `~/.ssh` and `authorized_keys` with the right modes if they are missing, and appends the phone's key line unless the exact line is already there. Every other line is left alone and running it twice changes nothing. To see it worked: `tail -n 2 ~/.ssh/authorized_keys` ends with `paddock@phone`.
 2. Back on the phone, fill in the machine's name or address, the port (22) and the user, then **Connect**.
 3. The phone shows the machine's host key fingerprint. Compare it with what the machine says: `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. Only when they are equal, **Trust and connect**. A fingerprint that differs means the phone is not talking to your machine; press Cancel.
-4. Optional: instead of typing the address, make a pairing link on the machine and open it on the phone (see `enrollment.md`).
+4. Optional: instead of typing the address, make a pairing link on the machine and open it on the phone (see `enrollment.md`), or let the phone find the machine on the same network (**Find on this network**, `onboarding.md`).
 
 To undo: delete the `paddock@phone` line from `~/.ssh/authorized_keys`.
 
@@ -50,6 +50,28 @@ Off until you set it up. When on, Claude Code's own dialog stays on the desktop 
 3. Register the hook yourself: merge the JSON the screen shows under `hooks.PermissionRequest` in `~/.claude/settings.json`. Paddock never edits that file. Claude Code's `timeout` there is the window plus five seconds.
 
 To undo: remove that entry from `~/.claude/settings.json` and delete `~/.config/paddock/hook.toml`.
+
+## 5. Pair from the desktop, and wake the machine (optional)
+
+Neither is needed: section 1 always works. Both are additions (Phase 14).
+
+**Pair from the desktop** saves running the authorize command by hand. It needs the herdr plugin (`docs/host-plugin.md`), which is optional and local until published.
+
+1. On the machine, run **Paddock: pair a phone** in herdr (`herdr plugin action invoke pair --plugin paddock`, or a key bound to `paddock.pair`). The popup prints a pairing link and a QR, opens a LAN listener on this machine's address, and waits 120 seconds.
+2. On the phone: **Scan the code on the desktop** (or **Paste a pairing link**), then **Send the key**. The popup shows the key's fingerprint; compare it with the phone's and press `a`.
+3. Only then is the key line appended to `~/.ssh/authorized_keys`; the phone connects by itself. Anything else (Reject is the default, a time-out, a different key) writes nothing. To undo, delete the `paddock@phone` line, as in section 1.
+
+The listener is plaintext and LAN-only, and exists only while the popup is open; what crosses it is the phone's public key, a session handle and one result word. If the machine has several addresses, the link's host has to be the one the listener is bound to (`--listen-ip` or `--host` on the plugin's `bin/pair.py`). `docs/pairing.md` has the whole flow and the wire.
+
+**Wake the machine** needs the machine's network interface to accept a magic packet while the machine sleeps. Paddock reads the state over SSH (read-only) and shows the commands to run, when something has to change, under **Settings > the machine**; it never runs them. Typical on a laptop with Wi-Fi:
+
+```sh
+echo enabled | sudo tee /sys/class/net/<iface>/device/power/wakeup       # allow the interface to wake the machine
+sudo iw phy <phy> wowlan enable magic-packet                              # until the next reboot
+nmcli connection modify "<connection name>" 802-11-wireless.wake-on-wlan magic   # keep it across reboots
+```
+
+Waking from away (over a VPN) needs a relay on the machine's network that re-broadcasts the packet; save its IPv4 address in Settings. `docs/wake.md` says what is read, what is sent, and what a failed wake looks like.
 
 ## Checking the whole thing
 
