@@ -9,6 +9,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.ButtonKind
@@ -41,7 +43,7 @@ fun Welcome(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = PaddockTokens.spacing.gutter).padding(top = 24.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title)
+        Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title, modifier = Modifier.semantics { heading() })
         Text(WELCOME_INTRO, style = PaddockTokens.type.body, color = PaddockTokens.colors.dim)
         Kicker("Before you start")
         Fact("herdr is running on the machine. Check with", "herdr session list")

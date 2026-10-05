@@ -46,6 +46,8 @@ import io.github.tuthan.paddock.answers.Behavior
 import io.github.tuthan.paddock.answers.DecisionEntryModel
 import io.github.tuthan.paddock.answers.DecisionModel
 import io.github.tuthan.paddock.answers.DecisionPresenter
+import io.github.tuthan.paddock.ui.screens.AUTHORIZE_INTRO_IMPORTED
+import io.github.tuthan.paddock.hostprofile.KeyKind
 import io.github.tuthan.paddock.ui.screens.DecisionActions
 import io.github.tuthan.paddock.ui.screens.DecisionSheet
 import io.github.tuthan.paddock.ui.screens.GateNoticeBar
@@ -128,7 +130,10 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
+import io.github.tuthan.paddock.host.PairingLinkSaver
 import io.github.tuthan.paddock.host.ConnectAttempt
 import io.github.tuthan.paddock.host.ConnectOutcome
 import io.github.tuthan.paddock.host.ConnectOutcomes
@@ -140,6 +145,7 @@ import io.github.tuthan.paddock.ui.screens.PairWithDesktop
 import io.github.tuthan.paddock.ui.screens.PairingTarget
 import io.github.tuthan.paddock.pairing.PairingState
 import io.github.tuthan.paddock.pairing.PairingText
+import io.github.tuthan.paddock.pairing.pendingOrNull
 import io.github.tuthan.paddock.live.SpacesState
 import io.github.tuthan.paddock.ops.CardAction
 import io.github.tuthan.paddock.ops.SagaCard
@@ -288,7 +294,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     }
 
     // A pairing link (a tap, or Paste a pairing link): Add machine opens pre-filled. Nothing connects and nothing is trusted from here.
-    var pairing by remember { mutableStateOf<PairingLink?>(null) }
+    var pairing by rememberSaveable(stateSaver = PairingLinkSaver) { mutableStateOf<PairingLink?>(null) }
     val pairingEvent by graph.pairing.event.collectAsState()
     LaunchedEffect(pairingEvent, boot) {
         val e = pairingEvent ?: return@LaunchedEffect
@@ -310,21 +316,33 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
         boot == Boot.NoMachines -> Route.AddMachine
         else -> route
     }
-    // Follows the phase the connection reaches after Connect: a live or set-up-needing host ends the attempt; a refusal stays on the form with its fix.
-    val waitingFor = attempt?.takeIf { it.connecting }?.profileId
-    LaunchedEffect(waitingFor) {
-        if (waitingFor == null) return@LaunchedEffect
-        var sawConnecting = false
-        val outcome = withTimeoutOrNull(CONNECT_WAIT_MILLIS) {
-            graph.hostUi.view.map { it.phase }.distinctUntilChanged().map { p ->
-                if (ConnectOutcomes.waiting(p)) sawConnecting = true
-                ConnectOutcomes.outcome(p, sawConnecting)
-            }.filterNotNull().first()
-        }
-        when (outcome) {
-            ConnectOutcome.Connected -> { attempt = null; editing = false; authorizeIntro = false; pairing = null; route = Route.Home; relayDismissed = false }
-            is ConnectOutcome.Failed -> attempt = ConnectAttempt(waitingFor, DownReasonText.sentence(outcome.reason), DownReasonText.fix(outcome.reason))
-            null -> attempt = ConnectAttempt(waitingFor, ConnectOutcomes.STILL_WAITING, ConnectFix.Retry)
+    // Follows the connection from Connect until it is live: a live or set-up-needing host ends the attempt, a failure stays on the form with its fix.
+    // It keeps following after a failure (a retry that succeeds, or a host key trusted late, must still end the attempt) and after the wait ran out.
+    val attemptKey = attempt?.let { it.profileId to it.connecting }
+    LaunchedEffect(attemptKey) {
+        val (id, connecting) = attemptKey ?: return@LaunchedEffect
+        coroutineScope {
+            // The time is counted only while no question is on screen: comparing a fingerprint with the desktop's takes as long as the user needs.
+            if (connecting) launch {
+                graph.broker.firstTrust.map { it != null }.distinctUntilChanged().collectLatest { asking ->
+                    if (!asking) {
+                        delay(CONNECT_WAIT_MILLIS)
+                        if (attempt?.profileId == id && attempt?.connecting == true) attempt = ConnectAttempt(id, ConnectOutcomes.STILL_WAITING, ConnectFix.Retry)
+                    }
+                }
+            }
+            graph.hostUi.view.map { it.phase }.distinctUntilChanged().collect { phase ->
+                when (val outcome = ConnectOutcomes.outcome(phase, id, graph.hostUi.phaseBeforeAttempt)) {
+                    ConnectOutcome.Connected -> {
+                        attempt = null; editing = false; authorizeIntro = false; pairing = null; route = Route.Home; relayDismissed = false
+                        this@coroutineScope.cancel()
+                    }
+                    // Only a form that is still waiting (or only said it was) takes a failure: a sentence already shown stays put while the owner retries.
+                    is ConnectOutcome.Failed -> attempt?.takeIf { it.profileId == id && (it.connecting || it.error == ConnectOutcomes.STILL_WAITING) }
+                        ?.let { attempt = ConnectAttempt(id, DownReasonText.sentence(outcome.reason), DownReasonText.fix(outcome.reason)) }
+                    null -> {}
+                }
+            }
         }
     }
     // Manual input belongs to the agent screen and the composer opened from it; leaving them, or opening another agent, ends it.
@@ -334,7 +352,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     // Registered before the screens', so a screen's own back handling (the import screen's) is asked first.
     BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { attempt = null; authorizeIntro = false; route = backTo }
     // With no machine yet, Back from the form returns to Welcome instead of leaving the app.
-    BackHandler(enabled = boot == Boot.NoMachines && attempt == null && welcomeChoice && pairing == null) { welcomeChoice = false }
+    BackHandler(enabled = boot == Boot.NoMachines && attempt == null && (welcomeChoice || pairing != null)) { welcomeChoice = false; pairing = null }
     BackHandler(enabled = welcomeFinder && effective == Route.Welcome) { welcomeFinder = false }
     BackHandler(enabled = welcomeScan && effective == Route.Welcome) { welcomeScan = false }
     ProGateHost(graph, pendingAnswerOnScreen = effective == Route.Decision || effective == Route.GuardedAnswers)
@@ -396,10 +414,12 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                 Route.AlertRelay -> AlertRelayRoute(graph, onBack = { route = Route.Settings })
                 Route.GuardedAnswers -> GuardedAnswersRoute(graph, onBack = { route = guardedFrom })
                 Route.AddMachine -> AddMachineRoute(
-                    graph, canGoBack = boot == Boot.Ready, editing = editing && boot == Boot.Ready, pairing = pairing,
-                    onBack = { attempt = null; editing = false; authorizeIntro = false; pairing = null; route = backTo },
+                    graph, editing = editing && boot == Boot.Ready, pairing = pairing,
+                    // With no machine the header arrow is the system Back: it returns to Welcome.
+                    onBack = { attempt = null; editing = false; authorizeIntro = false; pairing = null; if (boot == Boot.Ready) route = backTo else welcomeChoice = false },
                     attempt = attempt, onAttempt = { attempt = it }, authorizeIntro = authorizeIntro,
-                    onPairing = { pairing = it }, onNotice = { alertNotice = it },
+                    // A link or a pick replaces the form's machine: an error that belonged to the one before is not this one's.
+                    onPairing = { attempt = null; pairing = it }, onNotice = { alertNotice = it },
                     picked = found, onPicked = { found = it },
                 )
             }
@@ -1343,7 +1363,7 @@ private fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
 
 @Composable
 private fun AddMachineRoute(
-    graph: AppGraph, canGoBack: Boolean, editing: Boolean, pairing: PairingLink?, onBack: () -> Unit,
+    graph: AppGraph, editing: Boolean, pairing: PairingLink?, onBack: () -> Unit,
     attempt: ConnectAttempt?, onAttempt: (ConnectAttempt?) -> Unit, authorizeIntro: Boolean,
     onPairing: (PairingLink) -> Unit, onNotice: (String) -> Unit,
     picked: AddMachineInput?, onPicked: (AddMachineInput?) -> Unit,
@@ -1361,7 +1381,8 @@ private fun AddMachineRoute(
     LaunchedEffect(resumes) { if (denied && !graph.gate.lanAccessMissing()) denied = false }
     var pending by remember { mutableStateOf<AddMachineInput?>(null) }
     // Send the key waits for the local-network grant the way Connect does; kept here so the answer to the dialog can pick it up.
-    var pendingSend by remember { mutableStateOf<AddMachineInput?>(null) }
+    // It keeps the offer it was asked for with the form: the dialog can stay up while another link arrives, and the key goes to the desktop that was tapped, never to whichever link is current when the dialog is answered.
+    var pendingSend by remember { mutableStateOf<Pair<AddMachineInput, PairingLink>?>(null) }
     // The form as typed when the key was sent: what Connect uses once the desktop approves (or when the window ended unheard).
     var sentInput by remember { mutableStateOf<AddMachineInput?>(null) }
 
@@ -1373,6 +1394,8 @@ private fun AddMachineRoute(
             val already = known.any { it.id == profile.id }
             // Set or cleared on every Connect: a link's fingerprints are compared with the key this machine presents, and never outlive the form that carried them.
             graph.broker.expectPairing(profile.id, input.pairedFingerprints)
+            // What is on screen now is the last attempt's: only a phase that is not that one can be this attempt's answer.
+            graph.hostUi.beginAttempt()
             graph.addMachine(profile)
             // The same profile is resumed, not rebuilt: ask for the reconnect that picks up the new key.
             if (already) graph.retry()
@@ -1380,10 +1403,11 @@ private fun AddMachineRoute(
             onAttempt(ConnectAttempt(profile.id))
         }
     }
-    fun beginSend(input: AddMachineInput) {
-        val offer = pairing?.takeIf { it.pairPort != null && it.sid != null } ?: return
+    fun beginSend(input: AddMachineInput, offer: PairingLink) {
+        val port = offer.pairPort ?: return
+        val sid = offer.sid ?: return
         sentInput = input
-        scope.launch { if (!graph.sendPairingKey(offer.host, offer.pairPort!!, offer.sid!!)) onNotice("Create this phone's key first, then send it.") }
+        scope.launch { if (!graph.sendPairingKey(offer.host, port, sid)) onNotice("Create this phone's key first, then send it.") }
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         denied = !granted
@@ -1393,7 +1417,7 @@ private fun AddMachineRoute(
         if (granted && input != null) finish(input)
         val send = pendingSend
         pendingSend = null
-        if (granted && send != null) beginSend(send)
+        if (granted && send != null) beginSend(send.first, send.second)
     }
     // Keystore reads and key generation can take a while on some phones: off the main thread. An unreadable key (lost
     // Keystore entry, corrupt store) reads as "no key" here; connecting reports it with its own recovery.
@@ -1424,7 +1448,7 @@ private fun AddMachineRoute(
     var finding by rememberSaveable { mutableStateOf(false) }
     if (finding) {
         BackHandler { finding = false }
-        FindRoute(graph, onPick = { onPicked(it); finding = false }, onBack = { finding = false })
+        FindRoute(graph, onPick = { onAttempt(null); onPicked(it); finding = false }, onBack = { finding = false })
         return
     }
     val state = AddMachineState(
@@ -1456,9 +1480,10 @@ private fun AddMachineRoute(
         if (input != null) finish(input) else onNotice("The desktop approved this phone's key. Press Connect to sign in.")
     }
     if (pairView != null && !pairView.approved) {
-        val p = (pairState as? PairingState.Sending)?.pending ?: (pairState as? PairingState.Waiting)?.pending ?: (pairState as? PairingState.Unreachable)?.pending
-            ?: (pairState as? PairingState.Rejected)?.pending ?: (pairState as? PairingState.Expired)?.pending ?: (pairState as? PairingState.Refused)?.pending
-            ?: (pairState as? PairingState.Busy)?.pending ?: (pairState as? PairingState.NotConfirmed)?.pending ?: (pairState as? PairingState.CannotReach)?.pending
+        val p = pairState.pendingOrNull
+        // The system Back gesture is the header arrow's twin: a request that is still going is cancelled (so a late approval cannot connect a
+        // phone that has left this page), a finished one is dismissed.
+        BackHandler { scope.launch { if (pairView.active) graph.pairingCoordinator.cancel() else graph.pairingCoordinator.clear() } }
         PairWithDesktop(
             pairView, PairingTarget(p?.let { "${it.host}:${it.port}" }.orEmpty(), p?.fingerprint.orEmpty()),
             onCancel = { scope.launch { graph.pairingCoordinator.cancel() } },
@@ -1475,9 +1500,11 @@ private fun AddMachineRoute(
                 // Decided from where the name resolves (a LAN hostname needs the grant too); the lookup is bounded and off the main thread.
                 scope.launch { if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input) }
             },
-            onSendKey = { input ->
+            onSendKey = onSendKey@{ input ->
+                // The offer is read now, at the tap: what is sent and to whom is what was on screen when it was pressed.
+                val offer = pairing?.takeIf { it.pairPort != null && it.sid != null } ?: return@onSendKey
                 // The TCP connect to the desktop is a LAN connection like Connect's: ask for the local-network grant first, then send.
-                scope.launch { if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pendingSend = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else beginSend(input) }
+                scope.launch { if (graph.gate.needsRequest(AddMachineForm.normalizeHost(offer.host))) { pendingSend = input to offer; permission.launch(LocalNetworkPolicy.PERMISSION) } else beginSend(input, offer) }
             },
             onGenerateKey = { scope.launch { graph.createPhoneKey(); keyTick++ } },
             onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },
@@ -1490,22 +1517,22 @@ private fun AddMachineRoute(
                 }
             },
             onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
-            onBack = { if (canGoBack) onBack() },
+            onBack = onBack,
             onImportKey = { importing = true },
             // Not while a key is being set up for the watched machine, or under a pairing link: the host there is already decided.
             onFind = if (fixing == null && pairing == null) ({ finding = true }) else null,
             onScan = if (fixing == null) ({ scanning = true }) else null,
             picked = picked, onPickedApplied = { onPicked(null) },
             initial = fixing?.let { AddMachineInput(it.host, it.port.toString(), it.user, it.key, it.importedKeyId, it.session ?: "") } ?: pairing?.toInput() ?: AddMachineInput(),
-            title = when { fixing != null && authorizeIntro -> "Authorize this phone"; fixing != null -> "Set up the key"; else -> "Add a machine" },
-            intro = when { fixing != null && authorizeIntro -> AUTHORIZE_INTRO; fixing != null -> SET_UP_KEY_INTRO; else -> ADD_MACHINE_INTRO },
+            title = when { fixing != null && authorizeIntro -> if (fixing.key == KeyKind.Imported) "Authorize the key" else "Authorize this phone"; fixing != null -> "Set up the key"; else -> "Add a machine" },
+            intro = when { fixing != null && authorizeIntro -> if (fixing.key == KeyKind.Imported) AUTHORIZE_INTRO_IMPORTED else AUTHORIZE_INTRO; fixing != null -> SET_UP_KEY_INTRO; else -> ADD_MACHINE_INTRO },
         )
     }
 }
 
 private const val MAX_KEY_FILE_BYTES = 64 * 1024
 
-/** How long Add machine waits for the connection to decide before saying it is still waiting. The connect has its own, shorter deadline. */
+/** How long Add machine waits for the connection to decide before saying it is still waiting. Not counted while a host key question is on screen (the connector allows that its own, longer time). */
 private const val CONNECT_WAIT_MILLIS = 45_000L
 
 /** The user asked for this read. Only a token that starts with the pairing scheme is looked at, and the text is never echoed. */

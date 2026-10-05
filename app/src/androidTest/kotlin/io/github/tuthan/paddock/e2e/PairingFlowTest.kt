@@ -11,6 +11,9 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onLast
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ActivityScenario
@@ -178,7 +181,9 @@ class PairingFlowTest {
 
         waitFor("the refusal") { hasNode(text("$host:$port is not the machine in the pairing link")) }
         rule.onNodeWithText(hostFp).assertIsDisplayed()
-        rule.onNodeWithText(other).assertIsDisplayed()
+        // The form behind the dialog shows the link's fingerprint too (to compare), so the text is on screen twice: once in each window.
+        rule.onAllNodesWithText(other).assertCountEquals(2)
+        rule.onAllNodesWithText(other).onLast().assertIsDisplayed()
         assertFalse("no way to trust a key the link does not name", hasNode(text("Trust and connect")))
         assertFalse("no first-trust question was asked", hasNode(text("New host: $host:$port")))
         rule.onNodeWithText("Close").performClick()

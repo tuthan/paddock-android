@@ -52,8 +52,11 @@ class FilePendingPairingStore(private val file: File) : PendingPairingStore {
     override suspend fun save(pending: PendingPairing?) { withContext(Dispatchers.IO) {
         if (pending == null) { file.delete(); return@withContext }
         file.absoluteFile.parentFile?.let { check(it.isDirectory || it.mkdirs()) { "cannot create ${it.path}" } }
-        val tmp = File(file.absolutePath + ".tmp")
-        tmp.writeText(json.encodeToString(FileDto.serializer(), FileDto(pending = pending)))
-        Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        // A name of its own: two writers racing on one temporary name make the second move throw because the first already moved it.
+        val tmp = File(file.absolutePath + "." + java.util.UUID.randomUUID() + ".tmp")
+        try {
+            tmp.writeText(json.encodeToString(FileDto.serializer(), FileDto(pending = pending)))
+            Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally { tmp.delete() }
     } }
 }

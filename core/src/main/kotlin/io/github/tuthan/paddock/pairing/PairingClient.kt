@@ -4,6 +4,7 @@ import io.github.tuthan.paddock.ports.Sockets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.net.Inet4Address
 import java.net.InetAddress
 
 /** What one exchange with the desktop came to. [NoReply] is the lost-reply case: the line may or may not have arrived. */
@@ -22,7 +23,9 @@ open class PairingClient(private val sockets: Sockets, private val connectTimeou
     open suspend fun status(host: String, port: Int, sid: String): ClientResult = exchange(host, port, PairingWire.statusRequest(sid))
 
     private suspend fun exchange(host: String, port: Int, request: ByteArray): ClientResult = withContext(Dispatchers.IO) {
-        val address = try { InetAddress.getByName(host) } catch (e: IOException) { return@withContext ClientResult.Unreachable("unknown host") }
+        // The desktop's listener is IPv4 only (PROTOCOL.md): on a dual-stack network the first address of a name can be an IPv6 one it never answers on.
+        val address = try { InetAddress.getAllByName(host).filterIsInstance<Inet4Address>().firstOrNull() } catch (e: IOException) { null }
+            ?: return@withContext ClientResult.Unreachable("unknown host")
         try {
             sockets.tcp().use { c ->
                 try { c.connect(address, port, connectTimeoutMillis) } catch (e: IOException) { return@withContext ClientResult.Unreachable(e.javaClass.simpleName) }

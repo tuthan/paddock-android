@@ -32,18 +32,19 @@ sealed interface ConnectOutcome {
 }
 
 object ConnectOutcomes {
-    /** True while the connection is still being made; a caller remembers that it saw this before it trusts a later answer. */
+    /** True while the connection is still being made. */
     fun waiting(phase: HostPhase?): Boolean = phase == null || phase == HostPhase.Connecting || phase == HostPhase.InstallingRelay
 
     /**
-     * What [phase] means for the attempt, or null while it is not decided. A failure or a setup problem seen before any "connecting"
-     * is the previous attempt's, so it is not an answer ([sawConnecting]); a live monitor is, wherever it came from.
+     * What [phase] means for the attempt on [profileId], or null while it is not decided. [before] is the phase on screen when Connect
+     * was pressed: a failure or a setup problem that is that very object is the previous attempt's and is not an answer, however late
+     * this is asked (a rotation, or a failure that came before anyone was looking). A live monitor is an answer when it is this machine's.
      */
-    fun outcome(phase: HostPhase?, sawConnecting: Boolean): ConnectOutcome? = when (phase) {
+    fun outcome(phase: HostPhase?, profileId: String, before: HostPhase?): ConnectOutcome? = when (phase) {
         null, HostPhase.Connecting, HostPhase.InstallingRelay -> null
-        is HostPhase.Monitoring -> ConnectOutcome.Connected
-        is HostPhase.NeedsRelayInstall, is HostPhase.Problem -> if (sawConnecting) ConnectOutcome.Connected else null
-        is HostPhase.Failed -> if (sawConnecting) ConnectOutcome.Failed(phase.reason) else null
+        is HostPhase.Monitoring -> if (phase.host.profile.id == profileId) ConnectOutcome.Connected else null
+        is HostPhase.NeedsRelayInstall, is HostPhase.Problem -> if (phase !== before) ConnectOutcome.Connected else null
+        is HostPhase.Failed -> if (phase !== before) ConnectOutcome.Failed(phase.reason) else null
     }
 
     const val STILL_WAITING = "Still waiting for the machine to answer. It is saved: check the address, then press Connect again."

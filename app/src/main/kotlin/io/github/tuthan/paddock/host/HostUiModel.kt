@@ -24,6 +24,12 @@ class HostUiModel(private val scope: CoroutineScope) {
     private var spacesJob: Job? = null
     private var profileId: String? = null
 
+    /** The phase on screen when the latest Connect was pressed: a failure that is this very object is the previous attempt's, not the new one's. */
+    @Volatile var phaseBeforeAttempt: HostPhase? = null
+        private set
+
+    fun beginAttempt() { phaseBeforeAttempt = _view.value.phase }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     fun attach(controller: HostSessionController) {
         job?.cancel(); spacesJob?.cancel()

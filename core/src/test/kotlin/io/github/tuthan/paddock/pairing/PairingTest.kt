@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -65,6 +66,16 @@ class PendingPairingStoreTest {
                 store.save(null)
                 assertNull(store.load())
             }
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun writersRacingOnTheSameFileDoNotTripOverEachOthersTemporaryFile() = runBlocking {
+        val dir = Files.createTempDirectory("pdk-pending").toFile()
+        try {
+            val store = FilePendingPairingStore(File(dir, "pending.json"))
+            kotlinx.coroutines.coroutineScope { (1..200).map { i -> launch(Dispatchers.IO) { store.save(pending.copy(generation = i.toLong())) } } }
+            assertNotNull(store.load())
+            assertEquals(listOf("pending.json"), dir.list()!!.toList(), "no temporary file is left behind")
         } finally { dir.deleteRecursively() }
     }
 
@@ -140,7 +151,7 @@ class PairingCoordinatorTest {
 
     private fun reply(r: PairingReply) = ClientResult.Reply(r)
 
-    private fun coordinator(client: PairingClient, windowMillis: Long = 120_000): PairingCoordinator {
+    private fun coordinator(client: PairingClient, windowMillis: Long = 120_000, store: PendingPairingStore = this.store): PairingCoordinator {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { scopes += it }
         return PairingCoordinator(store, client, clock, scope, pollMillis = 1, windowMillis = windowMillis)
     }
@@ -226,6 +237,70 @@ class PairingCoordinatorTest {
         val p = coordinator(c)
         p.start()
         assertTrue(p.terminal() is PairingState.Expired)
+    }
+
+    @Test fun aDesktopThatAnsweredAndThenWentQuietIsNotConfirmedNeverExpired() = runBlocking {
+        // The owner approved and closed the popup: its listener is gone, so every later ask is unreachable. "The desktop did not approve in
+        // time" would be false (the key may be authorized already); the truthful end is the one that offers Connect to find out.
+        val c = Script({ reply(PairingReply.Pending) }, { now.addAndGet(60_000); ClientResult.Unreachable("ConnectException") })
+        val p = coordinator(c)
+        p.start()
+        assertTrue(p.terminal() is PairingState.NotConfirmed)
+    }
+
+    @Test fun aDesktopStillSayingPendingAtTheEndOfTheWindowIsExpired() = runBlocking {
+        val c = Script({ reply(PairingReply.Pending) }, { now.addAndGet(60_000); reply(PairingReply.Pending) })
+        val p = coordinator(c)
+        p.start()
+        assertTrue(p.terminal() is PairingState.Expired)
+    }
+
+    /** A store whose write of [blockOn] (null clears) waits until [release] completes, and says when it got there. */
+    private class GatedStore(private val blockOnClear: Boolean) : PendingPairingStore {
+        @Volatile var saved: PendingPairing? = null
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        override suspend fun load() = saved
+        override suspend fun save(pending: PendingPairing?) {
+            if ((pending == null) == blockOnClear) { entered.complete(Unit); release.await() }
+            saved = pending
+        }
+    }
+
+    @Test fun aCancelThatIsStillBeingSavedStillDiscardsALateOk() = runBlocking {
+        // The generation is raised before the record is cleared; with the order the other way round, an ok that arrives while the clear is
+        // still being written would pass the generation check and turn Cancelled into Approved.
+        val gated = GatedStore(blockOnClear = true)
+        val late = CompletableDeferred<Unit>()
+        val c = object : PairingClient(JavaSockets()) {
+            override suspend fun key(host: String, port: Int, sid: String, keyLine: String): ClientResult { withContext(NonCancellable) { late.await() }; return ClientResult.Reply(PairingReply.Ok) }
+        }
+        val p = coordinator(c, store = gated)
+        p.start()
+        withTimeout(2_000) { p.state.first { it is PairingState.Sending } }
+        val cancelling = launch(Dispatchers.Default) { p.cancel() }
+        withTimeout(2_000) { gated.entered.await() }
+        late.complete(Unit)
+        delay(150)
+        assertTrue(p.state.value is PairingState.Cancelled, "the ok that arrived during the clear changed nothing: ${p.state.value}")
+        gated.release.complete(Unit)
+        cancelling.join()
+        assertNull(gated.saved)
+    }
+
+    @Test fun aStartWhoseWriteIsSlowCannotComeBackAfterACancel() = runBlocking {
+        // start() writes the record, the user cancels while that write is still in flight: the cancel's clear must land after it, not before,
+        // or the cancelled request is on disk for resume() to reopen.
+        val gated = GatedStore(blockOnClear = false)
+        val p = coordinator(Script({ reply(PairingReply.Pending) }, { reply(PairingReply.Pending) }), store = gated)
+        val starting = launch(Dispatchers.Default) { p.start() }
+        withTimeout(2_000) { gated.entered.await() }
+        val cancelling = launch(Dispatchers.Default) { p.cancel() }
+        delay(100)
+        gated.release.complete(Unit)
+        starting.join(); cancelling.join()
+        assertNull(gated.saved, "a cancelled request is not left on disk")
+        assertTrue(p.state.value is PairingState.Cancelled)
     }
 
     @Test fun cancelRaisesTheGenerationFirstSoALateOkStoresNothing() = runBlocking {

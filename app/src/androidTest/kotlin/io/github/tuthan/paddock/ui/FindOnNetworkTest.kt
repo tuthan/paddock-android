@@ -15,6 +15,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import org.junit.Assert.assertTrue
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.Density
 import io.github.tuthan.paddock.discovery.FinderPhase
@@ -152,13 +154,14 @@ class FindOnNetworkTest {
 
     private class Form { var connected: AddMachineInput? = null; var applied = 0; var found = 0 }
 
-    private fun form(pick: androidx.compose.runtime.MutableState<AddMachineInput?>, withFind: Boolean = true): Form {
+    private fun form(pick: androidx.compose.runtime.MutableState<AddMachineInput?>, withFind: Boolean = true, withLinkWays: Boolean = false): Form {
         val f = Form()
         content(null) {
             AddMachine(
                 AddMachineState({ AddMachineForm.route(it, GateDecision.NotRequired) }, line, KeyBacking.Tee),
                 onConnect = { f.connected = it }, onGenerateKey = {}, onCopyPublicKey = {}, onOpenSettings = {}, onBack = {},
                 onFind = if (withFind) ({ f.found++ }) else null,
+                onPastePairingLink = if (withLinkWays) ({}) else null, onScan = if (withLinkWays) ({}) else null,
                 picked = pick.value, onPickedApplied = { f.applied++; pick.value = null },
             )
         }
@@ -171,6 +174,20 @@ class FindOnNetworkTest {
         assertEquals(1, f.found)
         rule.onNodeWithText("Copy key only").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Connect").assertIsDisplayed()
+    }
+
+    @Test fun findSitsDirectlyUnderTheHostFieldAndPasteAndScanStayInTheirRowAbove() {
+        form(mutableStateOf(null), withLinkWays = true)
+        fun top(label: String) = rule.onNodeWithText(label).getUnclippedBoundsInRoot().top
+        val host = rule.onNodeWithText("Host or IP address").getUnclippedBoundsInRoot()
+        val find = rule.onNodeWithText("Find on this network").getUnclippedBoundsInRoot()
+        assertTrue("Find is below the Host field ($host vs $find)", find.top >= host.bottom)
+        assertTrue("Find is above User", find.bottom <= rule.onNodeWithText("User").getUnclippedBoundsInRoot().top)
+        // Paste and Scan share a row above the Host field: both there, and in one row (the same top).
+        rule.onNodeWithText("Paste a pairing link").assertIsDisplayed()
+        rule.onNodeWithText("Scan the code on the desktop").assertIsDisplayed()
+        assertEquals(top("Paste a pairing link").value, top("Scan the code on the desktop").value, 1f)
+        assertTrue(top("Scan the code on the desktop") < host.top)
     }
 
     @Test fun withoutAFinderThereIsNoFindButton() {

@@ -27,11 +27,13 @@ Connect saves the machine, starts the connection and stays on Add machine until 
 | --- | --- | --- |
 | The host refused this phone's key | The host did not accept this phone's key. Authorize it on the host, then try again. | the screen scrolls to this phone's authorize command, with the sentence directly above it |
 | Local-network access is off | Local-network access is off, so Paddock cannot reach this address. | Open settings |
-| The host's key changed | The host's key changed. Nothing was signed in. | the host-key review |
+| The host's key changed | The host's key changed. Nothing was signed in. Go back to Home and choose Review the key. | the host-key review, on Home (the form has no control for it, so the sentence says where) |
 | The stored key cannot be read | The key stored on this phone can't be read. … | Set up the key |
 | Timeout, network error, refused, closed | the reason, with "Trying again in N s." when Paddock will | Connect again |
 
-Home says the same sentences (one source), and its authorization failure has **Show the command**, which opens Add machine for that machine with the command first ("Authorize this phone"). If Connect never decides, the form says it is still waiting after 45 seconds and offers Connect again.
+Home says the same sentences (one source), and its authorization failure has **Show the command**, which opens Add machine for that machine with the command first ("Authorize this phone"). If Connect never decides, the form says it is still waiting after 45 seconds and offers Connect again. The 45 seconds are not counted while the host-key question is on screen (reading a fingerprint against the desktop's takes as long as it takes), and the form keeps following the connection after a failure or after it said it was waiting: a retry that succeeds, or a key trusted late, still takes you to Home. A failure is recognised by being a phase other than the one on screen when Connect was pressed, so a failure that arrives before the screen is looking, or during a rotation, is still shown; the same refusal twice shows twice. The pinned error is capped in height and scrolls, and is a live region for a screen reader. Back (the arrow or the system gesture) on Add machine with no machine saved returns to Welcome; a pairing link survives a rotation.
+
+For a machine that signs in with an imported key, Home's *Show the command* opens the same screen titled *Authorize the key* and says both ways on: authorize that key, or choose this phone's key and run its command.
 
 **The same machine stays one profile.** Adding a machine whose host, port and user match a saved one (or, when fixing a machine's key, the same host and port) keeps its id, so its pinned host key, history and what was read about waking it carry over; a name from the finder or a link replaces the saved name only when one was given.
 

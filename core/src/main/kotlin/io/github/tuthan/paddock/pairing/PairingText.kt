@@ -33,13 +33,13 @@ object PairingText {
                 active = true, secondsLeft = left(state.pending),
             )
             is PairingState.Approved -> PairingView("Approved.", "The key is authorized on the machine. Paddock connects now.", active = false, approved = true)
-            is PairingState.Rejected -> PairingView("Rejected on the desktop.", "Nothing was written there. Send the key again, or use the command instead.", active = false)
+            is PairingState.Rejected -> PairingView("Rejected on the desktop.", "Nothing was written there. The desktop keeps this answer for the whole popup, so sending again changes nothing: run the pair action again for a new code, or use the command instead.", active = false)
             is PairingState.Expired -> PairingView("The time ran out.", "The desktop did not approve in time. Run the pair action again for a new code.", active = false)
             is PairingState.Refused -> PairingView("The desktop did not recognize this code.", "It belongs to another popup, or the popup was closed. Scan or paste the pairing link again.", active = false)
-            is PairingState.Busy -> PairingView("Another key is being paired at this desktop.", "Wait for it to finish, then send again.", active = false)
+            is PairingState.Busy -> PairingView("Another key is being paired at this desktop.", "Wait for it to finish or for that popup to close, then run the pair action again for a new code.", active = false)
             is PairingState.NotConfirmed -> PairingView(
                 "No answer before the time ran out.",
-                "The desktop may have written the key anyway. Press Connect to find out; if the machine does not accept it, send the key again.",
+                "The desktop may have written the key anyway. Press Connect to find out; if the machine does not accept it, run the pair action again for a new code, or use the command.",
                 active = false, offerConnect = true,
             )
             is PairingState.CannotReach -> PairingView(

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,7 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -140,6 +143,8 @@ fun AddMachine(
     // A pairing link's fingerprints apply to the host and port the link named; once either is changed they are not compared.
     val linked = initial.pairedFingerprints
     val linkApplies = linked != null && host.trim() == initial.host && port.trim() == initial.port
+    // The key is authorized for the user the popup runs as, which the link names: signing in as another user after Send would be refused.
+    val offerApplies = linkApplies && (initial.user.isBlank() || user.trim() == initial.user.trim())
     val input = AddMachineInput(host, port, user, key, if (key == KeyKind.Imported) state.importedKeyId else null, session, if (linkApplies) linked else null, name.takeIf { host.trim() == nameFor })
     val errors = AddMachineForm.errors(input)
     val typed = state.route(host)
@@ -159,6 +164,8 @@ fun AddMachine(
     }
 
     fun connect() {
+        // The Done key on the last field is not the button: it must not start a second attempt over one that is still being made.
+        if (state.connecting) return
         showErrors = true
         if (!errors.any && !(key == KeyKind.Phone && state.publicKeyLine == null) && !(key == KeyKind.Imported && state.importedKeyId == null)) onConnect(input)
     }
@@ -223,7 +230,7 @@ fun AddMachine(
             )
             if (key == KeyKind.Phone) PhoneKeySection(
                 state, showQr, { showQr = it }, onGenerateKey, onCopyPublicKey, onCopyCommand, onShareCommand, if (sentenceInKeySection) AUTHORIZE_FAILED_PHONE_KEY else null, commandAnchor,
-                sendKeyTo = if (linkApplies && onSendKey != null) state.pairOfferHost else null, onSendKey = { if (!errors.any) onSendKey?.invoke(input) else showErrors = true },
+                sendKeyTo = if (offerApplies && onSendKey != null) state.pairOfferHost else null, onSendKey = { if (!errors.any) onSendKey?.invoke(input) else showErrors = true },
             )
             if (key == KeyKind.Imported) ImportedKeySection(state, onImportKey)
             if (key == KeyKind.Imported && state.importedKeyId == null && showErrors) Banner("Import a key before connecting, or use this phone's key.")
@@ -238,15 +245,25 @@ fun AddMachine(
         Column(Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // The authorize failure is shown above the command it points at; every other failure is pinned here, above Connect, where it cannot be below the fold.
             if (state.connectError != null && !showCommandFix) {
-                if (state.connectFix == ConnectFix.OpenSettings) Banner(state.connectError, actionLabel = "Open settings", onAction = onOpenSettings)
-                else Banner(state.connectError)
+                // Bounded and scrollable: at 200% font with the keyboard up a long sentence and its button must not take the whole screen from the form and Connect.
+                // A live region, so a screen reader says what went wrong where it appears, above the button.
+                Column(Modifier.heightIn(max = CONNECT_ERROR_MAX_HEIGHT).verticalScroll(rememberScrollState()).semantics { liveRegion = LiveRegionMode.Polite }) {
+                    val shown = if (state.connectFix == ConnectFix.ReviewKey) "${state.connectError} $REVIEW_KEY_HINT" else state.connectError
+                    if (state.connectFix == ConnectFix.OpenSettings) Banner(shown, actionLabel = "Open settings", onAction = onOpenSettings)
+                    else Banner(shown)
+                }
             }
-            PaddockButton(if (state.connecting) "Connecting…" else "Connect", ::connect, enabled = !state.connecting, icon = PaddockIcons.Key)
+            PaddockButton(if (state.connecting) "Connecting…" else "Connect", ::connect, Modifier.semantics { liveRegion = LiveRegionMode.Polite }, enabled = !state.connecting, icon = PaddockIcons.Key)
         }
     }
 }
 
 private const val ROUTE_SETTLE_MILLIS = 500L
+
+private val CONNECT_ERROR_MAX_HEIGHT = 200.dp
+
+/** The form has no control for a changed host key: the review is on Home, and the sentence says so. */
+const val REVIEW_KEY_HINT = "Go back to Home and choose Review the key."
 
 /** Long enough for the first layout of the form; the scroll to the command is requested after it. */
 private const val ANCHOR_SETTLE_MILLIS = 120L
@@ -257,6 +274,10 @@ const val ADD_MACHINE_INTRO =
 /** Opened from Home's "Show the command": the machine refused this phone's key, so the way to authorize it is the first thing to read. */
 const val AUTHORIZE_INTRO =
     "The machine did not accept this phone's key yet. Run the command below on the machine once, then press Connect."
+
+/** The same screen for a machine that signs in with an imported key: there is no command for a key Paddock only holds privately, so both ways on are named. */
+const val AUTHORIZE_INTRO_IMPORTED =
+    "The machine did not accept the imported key. Authorize that key on the machine, or choose this phone's key below and run its command, then press Connect."
 
 const val AUTHORIZE_FAILED_PHONE_KEY = "The machine did not accept this phone's key. Run this on the machine, then press Connect again."
 const val AUTHORIZE_FAILED_IMPORTED_KEY = "The machine did not accept this key. Authorize it on the machine, or use this phone's key instead, then press Connect again."
@@ -335,6 +356,8 @@ private fun PhoneKeySection(
             // The desktop's camera reads the same QR that Show as QR draws below; this is the same switch, put where the pairing path is.
             PaddockButton(if (showQr) "Hide the QR" else "Show the key to the desktop's camera", { onShowQr(!showQr) }, kind = ButtonKind.Secondary, icon = PaddockIcons.Qr)
         }
+        // No command for a line the parser refused: the refusal still has to be said, here, beside the key line.
+        if (command == null && refusedSentence != null) Banner(refusedSentence)
         if (command == null) Note(withMono("Append it to ~/.ssh/authorized_keys on the machine, from a shell you already trust.", "~/.ssh/authorized_keys"))
         if (showQr) {
             BrightnessBoost()

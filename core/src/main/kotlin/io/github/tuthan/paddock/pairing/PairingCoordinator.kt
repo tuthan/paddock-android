@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 sealed interface PairingState {
     data object Idle : PairingState
@@ -34,6 +36,21 @@ sealed interface PairingState {
         this is NotConfirmed || this is CannotReach || this is Cancelled
 }
 
+/** The request this state is about; null for Idle and Cancelled. */
+val PairingState.pendingOrNull: PendingPairing? get() = when (this) {
+    PairingState.Idle, PairingState.Cancelled -> null
+    is PairingState.Sending -> pending
+    is PairingState.Waiting -> pending
+    is PairingState.Approved -> pending
+    is PairingState.Rejected -> pending
+    is PairingState.Expired -> pending
+    is PairingState.Unreachable -> pending
+    is PairingState.Refused -> pending
+    is PairingState.Busy -> pending
+    is PairingState.NotConfirmed -> pending
+    is PairingState.CannotReach -> pending
+}
+
 /**
  * Sends the phone's public key to the desktop's `pair` popup and follows the owner's decision there. The key is public, so the
  * exchange can be repeated safely: the desktop answers the same state for the same key, and `status` says whether it ever arrived.
@@ -53,20 +70,23 @@ class PairingCoordinator(
     private val lock = Any()
     @Volatile private var generation = 0L
     private var job: Job? = null
+    /** Store writes go one at a time, so a slow write of an older request cannot land after a newer one's or a cancel's. */
+    private val storeLock = Mutex()
 
     /** Starts a request. Any earlier one is cancelled first. The record is on disk before anything is sent. */
     suspend fun start(host: String, port: Int, sid: String, keyLine: String, fingerprint: String) {
         val gen = synchronized(lock) { job?.cancel(); ++generation }
         val now = clock.nowMillis()
         val pending = PendingPairing(sid, host, port, fingerprint, keyLine, now, now + windowMillis, gen)
-        store.save(pending)
+        // Skipped when a cancel or a newer start got in first: that request is not the one on disk any more, and a cancelled one must not be reopened by resume().
+        storeLock.withLock { if (gen == generation) store.save(pending) }
         begin(pending, askStatusFirst = false)
     }
 
     /** After a restart: reopens the request on disk when its window is still open. Asks `status` first, since the first send may not have arrived. */
     suspend fun resume(): Boolean {
         val pending = store.load() ?: return false
-        if (clock.nowMillis() >= pending.deadlineMillis) { store.save(null); return false }
+        if (clock.nowMillis() >= pending.deadlineMillis) { storeLock.withLock { store.save(null) }; return false }
         val gen = synchronized(lock) { job?.cancel(); generation = maxOf(generation, pending.generation); generation }
         begin(pending.copy(generation = gen), askStatusFirst = true)
         return true
@@ -75,13 +95,13 @@ class PairingCoordinator(
     /** Raises the generation first, so a reply that is already on its way changes nothing, then clears the record. */
     suspend fun cancel() {
         synchronized(lock) { generation++; job?.cancel(); _state.value = PairingState.Cancelled }
-        store.save(null)
+        storeLock.withLock { store.save(null) }
     }
 
     /** The first successful connect after pairing: the request is done with. */
     suspend fun clear() {
         synchronized(lock) { generation++; job?.cancel(); _state.value = PairingState.Idle }
-        store.save(null)
+        storeLock.withLock { store.save(null) }
     }
 
     private fun emit(gen: Long, s: PairingState) { synchronized(lock) { if (gen == generation) _state.value = s } }
@@ -100,6 +120,8 @@ class PairingCoordinator(
         while (true) {
             if (p.generation != generation) return
             if (clock.nowMillis() >= p.deadlineMillis) {
+                // Expired only when the last word from the desktop was still "pending" (nobody decided in time). A desktop that answered and then
+                // went quiet may have been approved and closed: that is not knowable from here, so Connect is offered to find out.
                 emit(p.generation, when {
                     acknowledged -> PairingState.Expired(p)
                     everConnected -> PairingState.NotConfirmed(p)
@@ -117,8 +139,8 @@ class PairingCoordinator(
             }
             if (p.generation != generation) return
             when (result) {
-                is ClientResult.Unreachable -> { lastDetail = result.detail; emit(p.generation, PairingState.Unreachable(p, result.detail)) }
-                ClientResult.NoReply -> { everConnected = true; useStatus = true; emit(p.generation, PairingState.Sending(p)) }
+                is ClientResult.Unreachable -> { lastDetail = result.detail; acknowledged = false; emit(p.generation, PairingState.Unreachable(p, result.detail)) }
+                ClientResult.NoReply -> { everConnected = true; acknowledged = false; useStatus = true; emit(p.generation, PairingState.Sending(p)) }
                 is ClientResult.Reply -> {
                     everConnected = true
                     when (result.reply) {

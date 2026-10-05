@@ -77,6 +77,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.tuthan.paddock.pairing.pendingOrNull
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Where the machine list stands at start-up. */
@@ -386,7 +387,14 @@ class AppGraph(private val app: Application) {
         wakeWatcher = scope.launch { next.wake.filterNotNull().collect { saveWake(next.profile, it) } }
         // A live connection ends any pairing request: the key is no longer what stands between this phone and the machine.
         pairingWatcher?.cancel()
-        pairingWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring && pairingCoordinator.state.value != io.github.tuthan.paddock.pairing.PairingState.Idle) pairingCoordinator.clear() } }
+        // Only this machine's: another machine coming up (a reconnect after a Wi-Fi blip) says nothing about a request made for a different desktop.
+        pairingWatcher = scope.launch {
+            next.phase.collectLatest { p ->
+                if (p !is HostPhase.Monitoring) return@collectLatest
+                val pending = pairingCoordinator.state.value.pendingOrNull ?: return@collectLatest
+                if (pending.host.trim().equals(p.host.profile.host.trim(), ignoreCase = true)) pairingCoordinator.clear()
+            }
+        }
     }
 
     /**
@@ -407,7 +415,8 @@ class AppGraph(private val app: Application) {
      * can be any type and its public line is not kept. False when the phone has no key yet.
      */
     suspend fun sendPairingKey(host: String, port: Int, sid: String): Boolean {
-        val line = runCatching { phoneKey.publicLine("paddock@phone") }.getOrNull() ?: return false
+        // Off the main thread (a Keystore read), and never creating a key as a side effect: the Send offer is drawn under this phone's key, so a missing one is the caller's to say.
+        val line = withContext(Dispatchers.Default) { if (phoneKey.exists()) runCatching { phoneKey.publicLine("paddock@phone") }.getOrNull() else null } ?: return false
         val key = io.github.tuthan.paddock.ssh.AuthorizedKey.parse(line) ?: return false
         pairingCoordinator.start(host, port, sid, line, key.fingerprint)
         return true

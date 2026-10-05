@@ -65,4 +65,21 @@ class PairingTextTest {
         assertEquals("0:05", PairingText.clock(5))
         assertEquals("2:00", PairingText.clock(120))
     }
+
+    @Test fun aFinalAnswerThatSendingAgainCannotChangeNeverTellsTheUserToSendAgain() {
+        // The desktop holds the first key for the popup's whole run and answers the same word to it, so "send the key again" is a dead end.
+        for (st in listOf(PairingState.Rejected(pending), PairingState.Busy(pending), PairingState.NotConfirmed(pending))) {
+            val v = assertNotNull(PairingText.view(st, now), "$st")
+            assertFalse("send the key again" in v.detail.lowercase() || "send again" in v.detail.lowercase(), "$st: ${v.detail}")
+            assertTrue("run the pair action again" in v.detail, "$st: ${v.detail}")
+        }
+    }
+
+    @Test fun everyStateThatHasARequestNamesIt() {
+        assertNull(PairingState.Idle.pendingOrNull)
+        assertNull(PairingState.Cancelled.pendingOrNull)
+        for (st in listOf(PairingState.Sending(pending), PairingState.Waiting(pending), PairingState.Approved(pending), PairingState.Rejected(pending), PairingState.Expired(pending),
+            PairingState.Unreachable(pending, null), PairingState.Refused(pending), PairingState.Busy(pending), PairingState.NotConfirmed(pending), PairingState.CannotReach(pending, null)))
+            assertEquals(pending, st.pendingOrNull, "$st")
+    }
 }

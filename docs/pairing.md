@@ -22,12 +22,14 @@ The webcam path is the other half: **Show as QR** on Add machine (and **Show the
 | Waiting | Waiting for approval on the desktop. | Cancel |
 | Cannot reach yet | Cannot reach {host}:{port} yet. Paddock keeps trying until the time runs out… and says to run the pair action with `--host` set to the desktop's LAN address when the host is a name the phone cannot resolve | Cancel |
 | Approved | Approved. The key is authorized on the machine. Paddock connects now. | connects |
-| Rejected | Rejected on the desktop. Nothing was written there. | Back |
-| Time ran out | The desktop did not approve in time. Run the pair action again. | Back |
+| Rejected | Rejected on the desktop. Nothing was written there. The desktop keeps that answer for the whole popup, so sending again changes nothing: run the pair action again for a new code, or use the command | Back |
+| Time ran out | The desktop did not approve in time. Run the pair action again. Said only when the desktop's last word was still "waiting" (or it said `expired` itself) | Back |
 | Code not recognized | The desktop did not recognize this code (another popup, or it was closed). | Back |
-| Busy | Another key is being paired at this desktop. | Back |
-| No answer before the time ran out | The desktop may have written the key anyway. Press Connect to find out; if the machine does not accept it, send the key again. | Connect, Back |
+| Busy | Another key is being paired at this desktop. Wait for it or for that popup to close, then run the pair action again for a new code | Back |
+| No answer before the time ran out | The desktop may have written the key anyway. Press Connect to find out; if the machine does not accept it, run the pair action again for a new code, or use the command. Also what a desktop that answered and then went quiet ends as (the owner may have approved and closed the popup) | Connect, Back |
 | Could not reach | Check the same network and that the pair popup is still open. The command always works instead. | Back |
+
+Two rules of the page: **Send the key** is offered only while the Host, Port and (when the link names one) User are what the link said, because the key is authorized for the user the popup runs as, and what the Send button sends and to whom is read at the tap (an Android local-network dialog that stays up while another link arrives cannot redirect the key). The system Back gesture is the header arrow's twin: it cancels a request that is still going, so a late approval cannot connect a phone that has left the page. Another machine coming up does not end a request made for a different desktop.
 
 A lost reply is settled by asking, never by guessing: the key is public and the popup answers the same state for the same key, so after a restart or a dropped connection the phone asks `status` first. `PairingCoordinator` writes the request to disk before its first byte (`pending-pairing.json`, no secret in it: the key line is public), discards a reply for an older generation, and Cancel raises the generation first so a late `ok` stores nothing. The record is cleared by the first live connection, a Cancel, or the end of its window. `ok` is never trusted as the end of the story: Connect still pins the host key and asks.
 
@@ -38,6 +40,7 @@ A lost reply is settled by asking, never by guessing: the key is public and the 
 - Replies: `pending`, `ok`, `rejected`, `expired`, `refused`, `busy`, `none`. A reply never contains any of the request, and nothing but a result word ever travels from the machine to the phone.
 - One key is held for the popup's whole run. The same key gets its current state (so sending twice is safe); a different one gets `busy`. `ok` and `rejected` stay answerable while the listener is open, so a phone that lost the reply can ask.
 - Rate: 12 counted requests per source address per minute. Counted: every `key`, every wrong `sid`, every malformed or oversize line. A `status` with the right `sid` is neither counted nor throttled, because the phone polls it every 2 seconds. The phone resends `key` only when `status` says `none`.
+- The listener also allows at most 2 simultaneous connections from one source address and drops a connection that sends nothing within 2 seconds, so one silent host cannot take the slots; phones behind one NAT share an address.
 - The listener binds one private, link-local, CGNAT or loopback address (never `0.0.0.0`, multicast or a public address) and is closed with the popup.
 
 Things to know: the popup's 120-second window starts when it builds its link, the phone's countdown at its first send, so the popup can expire first (`expired` is final); the link's host must be an address the phone can use to reach the listener, which is why the popup says what to pass as `--host` when it is a name; closing the popup right after a decision can leave the phone waiting until its own window ends, which it then reports as "No answer before the time ran out" with Connect to find out.

@@ -408,11 +408,15 @@ fun Banner(
             Text(text, style = PaddockTokens.type.secondary, color = tint, modifier = Modifier.weight(1f))
         }
     }
+    // Two actions side by side only while both fit: at a large font each takes most of the row and the second is crushed, so they stack.
+    val actionsStacked = secondaryLabel != null && density.fontScale >= 1.3f
     val action: @Composable () -> Unit = {
-        Row(Modifier.padding(start = if (stacked) 30.dp else 0.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val buttons: @Composable () -> Unit = {
             if (actionLabel != null) PaddockButton(actionLabel, onAction, kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
             if (actionLabel != null && secondaryLabel != null) PaddockButton(secondaryLabel, onSecondary, kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
         }
+        if (actionsStacked) Column(Modifier.padding(start = 30.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { buttons() }
+        else Row(Modifier.padding(start = if (stacked) 30.dp else 0.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { buttons() }
     }
     val frame = modifier.fillMaxWidth().clip(shape).background(c.bannerWash(tint)).border(1.dp, c.bannerBorder(tint), shape)
         .padding(horizontal = 12.dp, vertical = 10.dp)

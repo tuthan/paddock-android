@@ -10,6 +10,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.Density
 import io.github.tuthan.paddock.hostprofile.AddMachineForm
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
@@ -138,8 +140,29 @@ class PairWithDesktopTest {
     }
 
     @Test fun changingTheHostHidesTheOfferBecauseItNamedAnotherMachine() {
-        form("192.168.42.86", initial = AddMachineInput("10.9.9.9", "22", "jdoe"))
+        form("192.168.42.86")
+        rule.onNodeWithText("Send the key to 192.168.42.86").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Host or IP address").performTextReplacement("10.9.9.9")
+        rule.waitForIdle()
         rule.onAllNodesWithText("Send the key to", substring = true).assertCountEquals(0)
+        // Back to the link's host: the offer is the link's again.
+        rule.onNodeWithText("Host or IP address").performTextReplacement("192.168.42.86")
+        rule.waitForIdle()
+        rule.onNodeWithText("Send the key to 192.168.42.86").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun changingTheUserHidesTheOfferBecauseTheKeyWouldBeAuthorizedForTheLinksUser() {
+        form("192.168.42.86")
+        rule.onNodeWithText("User").performTextReplacement("someone-else")
+        rule.waitForIdle()
+        rule.onAllNodesWithText("Send the key to", substring = true).assertCountEquals(0)
+    }
+
+    @Test fun aLinkThatNamesNoUserKeepsTheOfferWhateverIsTyped() {
+        form("192.168.42.86", initial = AddMachineInput("192.168.42.86", "22", "", pairedFingerprints = listOf("SHA256:hostkeyfp")))
+        rule.onNodeWithText("User").performTextInput("jdoe")
+        rule.waitForIdle()
+        rule.onNodeWithText("Send the key to 192.168.42.86").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun sendingGivesTheFormAsTyped() {

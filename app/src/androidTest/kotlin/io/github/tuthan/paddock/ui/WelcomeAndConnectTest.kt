@@ -12,6 +12,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import org.junit.Assert.assertTrue
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.unit.Density
 import io.github.tuthan.paddock.hostprofile.AddMachineForm
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
@@ -23,6 +25,7 @@ import io.github.tuthan.paddock.ssh.OpenSshKeys
 import io.github.tuthan.paddock.ui.screens.AUTHORIZE_FAILED_IMPORTED_KEY
 import io.github.tuthan.paddock.ui.screens.AUTHORIZE_FAILED_PHONE_KEY
 import io.github.tuthan.paddock.ui.screens.AUTHORIZE_INTRO
+import io.github.tuthan.paddock.ui.screens.REVIEW_KEY_HINT
 import io.github.tuthan.paddock.ui.screens.AddMachine
 import io.github.tuthan.paddock.ui.screens.AddMachineState
 import io.github.tuthan.paddock.ui.screens.Welcome
@@ -132,6 +135,40 @@ class WelcomeAndConnectTest {
         val calls = form(error = "Local-network access is off, so Paddock cannot reach this address.", fix = ConnectFix.OpenSettings)
         rule.onNodeWithText("Open settings").performClick()
         assertEquals(1, calls.settings)
+    }
+
+    @Test fun aChangedHostKeyHasNoControlOnTheFormSoTheSentenceSaysWhereToGo() {
+        form(error = "The host's key changed. Nothing was signed in.", fix = ConnectFix.ReviewKey)
+        rule.onNodeWithText("The host's key changed. Nothing was signed in. $REVIEW_KEY_HINT").assertIsDisplayed()
+    }
+
+    @Test fun aRefusalIsStillSaidWhenThePhoneKeyLineHasNoCommandToShow() {
+        // A line the key parser refuses has no authorize command, and the sentence that says the machine refused used to be drawn only beside one.
+        form(error = "refused", fix = ConnectFix.ShowCommand, key = "not a key line")
+        rule.mainClock.advanceTimeBy(1_000)
+        rule.waitForIdle()
+        rule.onNodeWithText(AUTHORIZE_FAILED_PHONE_KEY).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aVeryLongErrorAtTwiceTheFontSizeCannotPushConnectOffTheScreen() {
+        val long = "The host did not answer in time. If it is on your local network, check that Paddock has local-network access. ".repeat(6)
+        content(2f) {
+            AddMachine(
+                AddMachineState({ AddMachineForm.route(it, GateDecision.NotRequired) }, line, KeyBacking.Tee, null, false, false, long, ConnectFix.OpenSettings),
+                onConnect = {}, onGenerateKey = {}, onCopyPublicKey = {}, onOpenSettings = {}, onBack = {}, initial = AddMachineInput("192.168.1.20", "22", "jdoe"),
+            )
+        }
+        rule.onNodeWithText("Connect").assertIsDisplayed()
+    }
+
+    @Test fun aBannerWithTwoActionsStacksThemAtALargeFont() {
+        content(2f) {
+            io.github.tuthan.paddock.ui.components.Banner("The host did not accept this phone's key.", actionLabel = "Show the command", onAction = {}, secondaryLabel = "Try again", onSecondary = {})
+        }
+        val first = rule.onNodeWithText("Show the command").getUnclippedBoundsInRoot()
+        val second = rule.onNodeWithText("Try again").getUnclippedBoundsInRoot()
+        rule.onNodeWithText("Try again").assertIsDisplayed()
+        assertTrue("the second action is under the first, not squeezed beside it ($first, $second)", second.top >= first.bottom)
     }
 
     @Test fun theTraditionalWaysStayWhateverWentWrong() {
