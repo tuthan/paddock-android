@@ -26,10 +26,14 @@ class HomeUiMapperTest {
         assertEquals(40_000L, s.ageMillis)
     }
 
-    @Test fun aFailedAuthWaitsForTheUserWithATryAgainAction() {
+    @Test fun aFailedAuthWaitsForTheUserAndOffersTheCommandFirstWithTryAgainBeside() {
         val r = map(HostView(phase = HostPhase.Failed(DownReason.AuthFailed, null)))
-        assertEquals(Recovery.Retry, r.recovery)
-        assertTrue((r.state as HomeUiState.Degraded).reason.contains("did not accept this phone's key"))
+        assertEquals(Recovery.ShowCommand, r.recovery)
+        assertEquals(Recovery.Retry, r.secondary)
+        val s = r.state as HomeUiState.Degraded
+        assertEquals("Show the command", s.recoveryLabel)
+        assertEquals("Try again", s.secondaryLabel)
+        assertTrue(s.reason.contains("did not accept this phone's key"))
     }
 
     @Test fun aDeniedGrantOffersSettingsAndNamesTheReason() {
@@ -146,7 +150,8 @@ class HomeUiMapperTest {
         for (reason in listOf(DownReason.AuthFailed, DownReason.HostKeyChanged, DownReason.Refused, DownReason.PermissionDenied, DownReason.KeyUnavailable, DownReason.HostKeysUnreadable)) {
             val r = mapWake(reason)
             assertTrue("$reason", r.recovery != Recovery.Wake && r.secondary != Recovery.Wake)
-            assertNull("$reason", (r.state as HomeUiState.Degraded).secondaryLabel)
+            // Only a refused key has a second action here (Try again beside Show the command); nothing else gains one.
+            if (reason != DownReason.AuthFailed) assertNull("$reason", (r.state as HomeUiState.Degraded).secondaryLabel)
         }
     }
 

@@ -166,7 +166,7 @@ fun Settings(
             }
             state.machine?.wake?.let { WakeOnLanSection(it, onCopyWakeCommand, onSaveWakeRelay, onWake) }
             PaddockButton(if (state.machine == null) "Add a machine" else "Add another machine", onAddMachine, kind = ButtonKind.Ghost, icon = PaddockIcons.Plus)
-            if (state.machine != null) Note2("Paddock watches one machine at a time; adding another makes it the watched one.")
+            if (state.machine != null) Note2("Paddock watches one machine at a time; adding another makes it the watched one. Adding a machine you already have (the same address, port and user) updates it instead of adding a second one.")
 
             Section("Connection")
             Fixed("Monitor while the app is open", "On", "Paddock checks your agents while this app is open and stops a few seconds after you leave it.")

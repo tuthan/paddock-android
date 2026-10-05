@@ -30,7 +30,7 @@ data class HostView(
 )
 
 /** What tapping the degraded banner's action does. */
-enum class Recovery { OpenSettings, ReviewKey, Retry, InstallRelay, SetUpKey, Wake }
+enum class Recovery { OpenSettings, ReviewKey, Retry, InstallRelay, SetUpKey, Wake, ShowCommand }
 
 /** [secondary] is the banner's second action, shown beside [recovery] (Try again beside Wake the machine). */
 data class HostScreen(val state: HomeUiState, val recovery: Recovery? = null, val relayPrompt: HostPhase.NeedsRelayInstall? = null, val secondary: Recovery? = null)
@@ -93,7 +93,9 @@ object HomeUiMapper {
             ConnectFix.OpenSettings -> degraded(text, "Open settings", Recovery.OpenSettings, null)
             ConnectFix.ReviewKey -> degraded(text, "Review the key", Recovery.ReviewKey, null)
             ConnectFix.SetUpKey -> degraded(text, "Set up the key", Recovery.SetUpKey, null)
-            ConnectFix.ShowCommand -> degraded(text, "Try again", Recovery.Retry, null)
+            // The machine said no to this phone's key: the way to authorize it comes first, and trying again is the second action.
+            ConnectFix.ShowCommand ->
+                degraded(text, "Show the command", Recovery.ShowCommand, null).let { it.copy(state = (it.state as HomeUiState.Degraded).copy(secondaryLabel = "Try again"), secondary = Recovery.Retry) }
             // While Paddock is about to try by itself the banner has no button, except for a refusal, which says nothing about when.
             ConnectFix.Retry ->
                 if (seconds == null || f.reason == DownReason.Refused) degraded(text, "Try again", Recovery.Retry, null)

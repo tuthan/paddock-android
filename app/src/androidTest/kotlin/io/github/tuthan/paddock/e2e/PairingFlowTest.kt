@@ -79,7 +79,7 @@ class PairingFlowTest {
     private fun link(fp: String, extra: String = "") = "paddock://pair?v=1&host=$host&port=$port&user=$user&fp=$fp&session=$session$extra"
 
     @Test fun t1_createTheKeyAndCopyTheCommand() {
-        waitFor("the Add machine screen") { hasNode(text("Add a machine")) }
+        waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
         if (hasNode(text("Create this phone's key"))) rule.onNodeWithText("Create this phone's key").performScrollTo().performClick()
         waitFor("the command") { hasNode(hasContentDescription("Command to run on the machine: ", substring = true)) }
         val said = rule.onNode(hasContentDescription("Command to run on the machine: ", substring = true)).fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription)!!.single()
@@ -99,7 +99,7 @@ class PairingFlowTest {
     }
 
     @Test fun t2_aPairingLinkFillsInTheMachineAndTheCopiedCommandIsAllTheHostNeeded() {
-        waitFor("the Add machine screen") { hasNode(text("Add a machine")) }
+        waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
         // A decoy first: the link may name several host keys and the machine presents one of them.
         val decoy = "SHA256:" + "A".repeat(43)
         openLink(link("$decoy,$hostFp"))
@@ -123,7 +123,7 @@ class PairingFlowTest {
     }
 
     @Test fun t3_aLinkWhoseFingerprintIsNotTheHostsIsRefusedBeforeAnyQuestion() {
-        waitFor("the Add machine screen") { hasNode(text("Add a machine")) }
+        waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
         val other = "SHA256:" + "B".repeat(43)
         openLink(link(other))
         waitFor("Add machine filled in from the link") { hasNode(text("Filled in from a pairing link", substring = true)) }

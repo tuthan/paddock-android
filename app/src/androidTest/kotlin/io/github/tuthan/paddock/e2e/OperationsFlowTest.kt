@@ -142,7 +142,7 @@ class OperationsFlowTest {
 
     @Test fun t1_keysFocusAndPromptsThenTheLinkDiesAfterTheWriteLeavingAnUnknownOutcome() {
         // --- Add machine through the real UI ---
-        waitFor("the Add machine screen") { hasNode(text("Add a machine")) }
+        waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
         rule.onNodeWithText("Host or IP address").performTextInput(host)
         rule.onNodeWithText("User").performTextInput(user)
         rule.onNode(hasText("Port") and hasSetTextAction()).performTextReplacement(port)

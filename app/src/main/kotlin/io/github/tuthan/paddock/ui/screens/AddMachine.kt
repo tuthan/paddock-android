@@ -54,6 +54,10 @@ import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.QrView
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import kotlinx.coroutines.delay
+import io.github.tuthan.paddock.live.ConnectFix
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.LaunchedEffect
 
 /**
  * What the screen needs from outside: the phone's public key once it exists, where it is held, whether an imported
@@ -68,6 +72,8 @@ data class AddMachineState(
     val permissionDenied: Boolean = false,
     val connecting: Boolean = false,
     val connectError: String? = null,
+    /** What would fix [connectError]: [ConnectFix.ShowCommand] puts the error above the authorize command and scrolls to it. */
+    val connectFix: ConnectFix? = null,
     /** `ssh-ed25519 · SHA256:…` of the stored imported key, shown so the user can tell which key is in use. */
     val importedKeySummary: String? = null,
     /** The route hint from where the host resolves, asked once typing settles; null keeps the text-only hint. */
@@ -164,7 +170,20 @@ fun AddMachine(
                 placeholder = "default", imeAction = ImeAction.Done, onDone = ::connect, mono = true,
             )
 
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val commandAnchor = remember { BringIntoViewRequester() }
+            val showCommandFix = state.connectError != null && state.connectFix == ConnectFix.ShowCommand
+            LaunchedEffect(state.connectError, state.connectFix) {
+                // After the first layout: a request made before the anchor is placed has nowhere to scroll to.
+                if (showCommandFix) { androidx.compose.runtime.withFrameNanos { }; androidx.compose.runtime.withFrameNanos { }; commandAnchor.bringIntoView() }
+            }
+            // With this phone's key the sentence sits inside the key section, directly above the command it points at, and the screen scrolls
+            // to that group; otherwise (an imported key, no key yet) it leads the sign-in block.
+            val sentenceInKeySection = showCommandFix && key == KeyKind.Phone && state.publicKeyLine != null
+            Column(
+                if (showCommandFix && !sentenceInKeySection) Modifier.bringIntoViewRequester(commandAnchor) else Modifier,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+            if (showCommandFix && !sentenceInKeySection) Banner(if (key == KeyKind.Phone) AUTHORIZE_FAILED_PHONE_KEY else AUTHORIZE_FAILED_IMPORTED_KEY)
             Kicker("Sign in with")
             ChoiceCard("This phone's key", "A key made on this phone that never leaves it. You authorize it on the machine once.", key == KeyKind.Phone, { key = KeyKind.Phone })
             ChoiceCard(
@@ -172,7 +191,7 @@ fun AddMachine(
                 if (state.importedKeyId != null) "Your own key, stored encrypted on this phone." else "Your own private key, stored encrypted on this phone. None imported yet.",
                 key == KeyKind.Imported, { key = KeyKind.Imported },
             )
-            if (key == KeyKind.Phone) PhoneKeySection(state, showQr, { showQr = it }, onGenerateKey, onCopyPublicKey, onCopyCommand, onShareCommand)
+            if (key == KeyKind.Phone) PhoneKeySection(state, showQr, { showQr = it }, onGenerateKey, onCopyPublicKey, onCopyCommand, onShareCommand, if (sentenceInKeySection) AUTHORIZE_FAILED_PHONE_KEY else null, commandAnchor)
             if (key == KeyKind.Imported) ImportedKeySection(state, onImportKey)
             if (key == KeyKind.Imported && state.importedKeyId == null && showErrors) Banner("Import a key before connecting, or use this phone's key.")
             if (key == KeyKind.Phone && state.publicKeyLine == null && showErrors) Banner("Create this phone's key first, then authorize it on the machine and press Connect.")
@@ -182,7 +201,11 @@ fun AddMachine(
                 "The first connection shows the machine's fingerprint before anything is trusted. Nothing signs in until you accept it.",
                 icon = PaddockIcons.Warning,
             )
-            if (state.connectError != null) Banner(state.connectError)
+            // The authorize failure is shown above the command it points at; every other failure sits here, with its fix when it has one.
+            if (state.connectError != null && !showCommandFix) {
+                if (state.connectFix == ConnectFix.OpenSettings) Banner(state.connectError, actionLabel = "Open settings", onAction = onOpenSettings)
+                else Banner(state.connectError)
+            }
         }
         Column(Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 10.dp)) {
             PaddockButton(if (state.connecting) "Connecting…" else "Connect", ::connect, enabled = !state.connecting, icon = PaddockIcons.Key)
@@ -194,6 +217,13 @@ private const val ROUTE_SETTLE_MILLIS = 500L
 
 const val ADD_MACHINE_INTRO =
     "Paddock reaches the machine that runs herdr over SSH. Over a VPN such as Tailscale it works from anywhere; on the same Wi-Fi a LAN address is enough."
+
+/** Opened from Home's "Show the command": the machine refused this phone's key, so the way to authorize it is the first thing to read. */
+const val AUTHORIZE_INTRO =
+    "The machine did not accept this phone's key yet. Run the command below on the machine once, then press Connect."
+
+const val AUTHORIZE_FAILED_PHONE_KEY = "The machine did not accept this phone's key. Run this on the machine, then press Connect again."
+const val AUTHORIZE_FAILED_IMPORTED_KEY = "The machine did not accept this key. Authorize it on the machine, or use this phone's key instead, then press Connect again."
 
 const val SET_UP_KEY_INTRO =
     "The key this machine signs in with can't be read on this phone. Create a new phone key or import yours again, authorize it on the machine, then press Connect."
@@ -228,6 +258,8 @@ private fun ImportedKeySection(state: AddMachineState, onImport: () -> Unit) {
 private fun PhoneKeySection(
     state: AddMachineState, showQr: Boolean, onShowQr: (Boolean) -> Unit, onGenerate: () -> Unit, onCopy: (String) -> Unit,
     onCopyCommand: (String) -> Unit, onShareCommand: (String) -> Unit,
+    /** The sentence that says the machine refused this key, drawn directly above the command, and the anchor the screen scrolls to. */
+    refusedSentence: String? = null, anchor: BringIntoViewRequester? = null,
 ) {
     val c = PaddockTokens.colors
     val line = state.publicKeyLine
@@ -242,11 +274,14 @@ private fun PhoneKeySection(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (state.keyBacking != null) Text(backingText(state.keyBacking), style = PaddockTokens.type.secondary, color = c.dim)
         if (command != null) {
+            Column(if (anchor != null) Modifier.bringIntoViewRequester(anchor) else Modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (refusedSentence != null) Banner(refusedSentence)
             Fact("Command to run on the machine", command)
             ButtonPair(
                 { m -> PaddockButton(if (copied) "Copied" else "Copy", { onCopyCommand(command); copied = true }, m, kind = ButtonKind.Secondary, small = true, icon = PaddockIcons.Copy) },
                 { m -> PaddockButton("Share", { onShareCommand(command) }, m, kind = ButtonKind.Secondary, small = true, icon = PaddockIcons.Send) },
             )
+            }
             Note(withMono("Run it once, in a shell you already trust on the machine. It creates ~/.ssh if needed and adds this key to ~/.ssh/authorized_keys unless it is already there.", "~/.ssh/authorized_keys", "~/.ssh"))
             if (key != null) Fact("Key fingerprint", key.fingerprint)
         }

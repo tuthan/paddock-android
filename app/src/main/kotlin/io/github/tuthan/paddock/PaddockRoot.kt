@@ -122,6 +122,16 @@ import io.github.tuthan.paddock.ui.components.LocalAgentGlyphs
 import io.github.tuthan.paddock.ui.components.SecureWindow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import io.github.tuthan.paddock.host.ConnectAttempt
+import io.github.tuthan.paddock.host.ConnectOutcome
+import io.github.tuthan.paddock.host.ConnectOutcomes
+import io.github.tuthan.paddock.live.ConnectFix
+import io.github.tuthan.paddock.live.DownReasonText
+import io.github.tuthan.paddock.ui.screens.AUTHORIZE_INTRO
+import io.github.tuthan.paddock.ui.screens.Welcome
 import io.github.tuthan.paddock.live.SpacesState
 import io.github.tuthan.paddock.ops.CardAction
 import io.github.tuthan.paddock.ops.SagaCard
@@ -178,7 +188,7 @@ import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class Route { Home, Output, Compose, Snippets, Activity, Spaces, Settings, AddMachine, AlertRelay, Decision, GuardedAnswers }
+private enum class Route { Welcome, Home, Output, Compose, Snippets, Activity, Spaces, Settings, AddMachine, AlertRelay, Decision, GuardedAnswers }
 
 private val NAV = listOf(NavItem("Herd", PaddockIcons.Herd), NavItem("Spaces", PaddockIcons.Spaces), NavItem("Activity", PaddockIcons.Activity))
 
@@ -209,6 +219,12 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     var draft by rememberSaveable(stateSaver = PromptDraftSaver) { mutableStateOf(PromptDraft()) }
     // Add machine opened to set up the watched machine's key (its key could not be read), not to add another.
     var editing by rememberSaveable { mutableStateOf(false) }
+    // Opened from Home's "Show the command": the intro leads with how to authorize this phone.
+    var authorizeIntro by rememberSaveable { mutableStateOf(false) }
+    // The first screen of a phone with no machine is Welcome; any way in sets this and moves on to Add machine.
+    var welcomeChoice by rememberSaveable { mutableStateOf(false) }
+    // A Connect that has not finished. Above the screens: saving the first machine ends "no machines" and must not take the form away mid-attempt.
+    var attempt by rememberSaveable(stateSaver = ConnectAttempt.Saver) { mutableStateOf<ConnectAttempt?>(null) }
 
     // What the last alert tap found ("State changed since the alert", "No longer observed"). It stays until the user dismisses it.
     var alertNotice by rememberSaveable { mutableStateOf<String?>(null) }
@@ -274,13 +290,37 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
         graph.pairing.consume(e)
     }
 
-    val effective = if (boot == Boot.NoMachines) Route.AddMachine else route
+    val effective = when {
+        attempt != null -> Route.AddMachine
+        boot == Boot.NoMachines && pairing == null && !welcomeChoice -> Route.Welcome
+        boot == Boot.NoMachines -> Route.AddMachine
+        else -> route
+    }
+    // Follows the phase the connection reaches after Connect: a live or set-up-needing host ends the attempt; a refusal stays on the form with its fix.
+    val waitingFor = attempt?.takeIf { it.connecting }?.profileId
+    LaunchedEffect(waitingFor) {
+        if (waitingFor == null) return@LaunchedEffect
+        var sawConnecting = false
+        val outcome = withTimeoutOrNull(CONNECT_WAIT_MILLIS) {
+            graph.hostUi.view.map { it.phase }.distinctUntilChanged().map { p ->
+                if (ConnectOutcomes.waiting(p)) sawConnecting = true
+                ConnectOutcomes.outcome(p, sawConnecting)
+            }.filterNotNull().first()
+        }
+        when (outcome) {
+            ConnectOutcome.Connected -> { attempt = null; editing = false; authorizeIntro = false; pairing = null; route = Route.Home; relayDismissed = false }
+            is ConnectOutcome.Failed -> attempt = ConnectAttempt(waitingFor, DownReasonText.sentence(outcome.reason), DownReasonText.fix(outcome.reason))
+            null -> attempt = ConnectAttempt(waitingFor, ConnectOutcomes.STILL_WAITING, ConnectFix.Retry)
+        }
+    }
     // Manual input belongs to the agent screen and the composer opened from it; leaving them, or opening another agent, ends it.
     val onAgent = (effective == Route.Output && outputTab == AgentTab.Output) || effective == Route.Compose || (effective == Route.Snippets && snippetsFrom == Route.Compose)
     LaunchedEffect(onAgent, terminalId) { if (onAgent) graph.manualInput.leaveUnless(terminalId) else graph.manualInput.leave() }
     val backTo = when (effective) { Route.AddMachine -> addFrom; Route.Compose -> Route.Output; Route.Snippets -> snippetsFrom; Route.AlertRelay -> Route.Settings; Route.Decision -> Route.Output; Route.GuardedAnswers -> guardedFrom; else -> Route.Home }
     // Registered before the screens', so a screen's own back handling (the import screen's) is asked first.
-    BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { route = backTo }
+    BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { attempt = null; authorizeIntro = false; route = backTo }
+    // With no machine yet, Back from the form returns to Welcome instead of leaving the app.
+    BackHandler(enabled = boot == Boot.NoMachines && attempt == null && welcomeChoice && pairing == null) { welcomeChoice = false }
     ProGateHost(graph, pendingAnswerOnScreen = effective == Route.Decision || effective == Route.GuardedAnswers)
     Column(modifier.fillMaxSize().safeDrawingPadding()) {
     alertNotice?.let { NoticeBar(it, onDismiss = { alertNotice = null }, modifier = Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 8.dp)) }
@@ -291,6 +331,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
         when (boot) {
             Boot.Loading -> Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title, modifier = Modifier.padding(PaddockTokens.spacing.gutter))
             else -> when (effective) {
+                Route.Welcome -> WelcomeRoute(onEnterAddress = { welcomeChoice = true }, onPairing = { pairing = it; welcomeChoice = true })
                 Route.Home, Route.Spaces, Route.Activity -> Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f)) {
                         if (effective == Route.Spaces) SpacesRoute(
@@ -302,7 +343,8 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                             // Review prompt goes to the agent's Terminal tab, observing: answering is a deliberate Request control from there.
                             onReviewPrompt = { terminalId = it; outputTab = AgentTab.Terminal; route = Route.Output },
                             onSettings = { route = Route.Settings },
-                            onSetUpKey = { editing = true; pairing = null; addFrom = Route.Home; route = Route.AddMachine },
+                            onSetUpKey = { editing = true; authorizeIntro = false; pairing = null; addFrom = Route.Home; route = Route.AddMachine },
+                            onShowCommand = { editing = true; authorizeIntro = true; pairing = null; addFrom = Route.Home; route = Route.AddMachine },
                             onNotice = { alertNotice = it },
                         ) else ActivityRoute(graph, onOpenAgent = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output })
                     }
@@ -332,7 +374,8 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                 Route.GuardedAnswers -> GuardedAnswersRoute(graph, onBack = { route = guardedFrom })
                 Route.AddMachine -> AddMachineRoute(
                     graph, canGoBack = boot == Boot.Ready, editing = editing && boot == Boot.Ready, pairing = pairing,
-                    onBack = { editing = false; pairing = null; route = backTo }, onAdded = { editing = false; pairing = null; route = Route.Home; relayDismissed = false },
+                    onBack = { attempt = null; editing = false; authorizeIntro = false; pairing = null; route = backTo },
+                    attempt = attempt, onAttempt = { attempt = it }, authorizeIntro = authorizeIntro,
                     onPairing = { pairing = it }, onNotice = { alertNotice = it },
                 )
             }
@@ -366,7 +409,7 @@ private fun rememberResumes(): Int {
 private fun HomeRoute(
     graph: AppGraph, relayDismissed: Boolean, setRelayDismissed: (Boolean) -> Unit, onReviewKey: () -> Unit,
     onOpen: (terminalId: String) -> Unit, onReviewPrompt: (terminalId: String) -> Unit, onSettings: () -> Unit, onSetUpKey: () -> Unit,
-    onNotice: (String) -> Unit = {},
+    onShowCommand: () -> Unit, onNotice: (String) -> Unit = {},
 ) {
     val profile by graph.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
@@ -433,6 +476,7 @@ private fun HomeRoute(
             Recovery.Retry -> graph.retry()
             Recovery.SetUpKey -> onSetUpKey()
             Recovery.Wake -> graph.wake()
+            Recovery.ShowCommand -> onShowCommand()
             null -> Unit
         }
     }
@@ -1275,7 +1319,8 @@ private fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
 
 @Composable
 private fun AddMachineRoute(
-    graph: AppGraph, canGoBack: Boolean, editing: Boolean, pairing: PairingLink?, onBack: () -> Unit, onAdded: () -> Unit,
+    graph: AppGraph, canGoBack: Boolean, editing: Boolean, pairing: PairingLink?, onBack: () -> Unit,
+    attempt: ConnectAttempt?, onAttempt: (ConnectAttempt?) -> Unit, authorizeIntro: Boolean,
     onPairing: (PairingLink) -> Unit, onNotice: (String) -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -1294,14 +1339,16 @@ private fun AddMachineRoute(
     fun finish(input: AddMachineInput) {
         scope.launch {
             // The same machine (host, port and user, or the one being fixed) stays one profile: its id, name and wake facts carry over.
-            val profile = AddMachineForm.resolve(input, graph.profiles.list(), fixing) ?: return@launch
-            val same = fixing != null && profile.id == fixing.id
+            val known = graph.profiles.list()
+            val profile = AddMachineForm.resolve(input, known, fixing) ?: return@launch
+            val already = known.any { it.id == profile.id }
             // Set or cleared on every Connect: a link's fingerprints are compared with the key this machine presents, and never outlive the form that carried them.
             graph.broker.expectPairing(profile.id, input.pairedFingerprints)
             graph.addMachine(profile)
             // The same profile is resumed, not rebuilt: ask for the reconnect that picks up the new key.
-            if (same) graph.retry()
-            onAdded()
+            if (already) graph.retry()
+            // Stay on the form: the root follows the connection and either leaves for Home or shows what went wrong here.
+            onAttempt(ConnectAttempt(profile.id))
         }
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -1341,6 +1388,9 @@ private fun AddMachineRoute(
         importedKeyId = imported?.id,
         importedKeySummary = imported?.let { "${it.keyType} · ${it.fingerprint}" },
         permissionDenied = denied,
+        connecting = attempt?.connecting == true,
+        connectError = attempt?.error,
+        connectFix = attempt?.fix,
     )
     // Its own saved form: setting up a key starts from the watched machine's values, not from a half-typed new one.
     holder.SaveableStateProvider(fixing?.let { "key-${it.id}" } ?: pairing?.let { "pair-${it.hashCode()}" } ?: "add-machine") {
@@ -1355,9 +1405,7 @@ private fun AddMachineRoute(
             onCopyCommand = { command -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock authorize command", command)) },
             onShareCommand = { command -> ctx.startActivity(Intent.createChooser(commandShareIntent(command), "Share the command")) },
             onPastePairingLink = {
-                // The user asked for this read. Only a token that starts with the pairing scheme is looked at, and the text is never echoed.
-                val text = runCatching { (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString() }.getOrNull()
-                when (val r = PairingLinks.parse(PairingLinks.find(text) ?: text?.trim()?.take(PairingLinks.MAX_LENGTH + 1))) {
+                when (val r = readPairingLink(ctx)) {
                     is PairingResult.Valid -> onPairing(r.link)
                     is PairingResult.Rejected -> onNotice(PairingCopy.invalid(r.reason))
                 }
@@ -1366,13 +1414,38 @@ private fun AddMachineRoute(
             onBack = { if (canGoBack) onBack() },
             onImportKey = { importing = true },
             initial = fixing?.let { AddMachineInput(it.host, it.port.toString(), it.user, it.key, it.importedKeyId, it.session ?: "") } ?: pairing?.toInput() ?: AddMachineInput(),
-            title = if (fixing != null) "Set up the key" else "Add a machine",
-            intro = if (fixing != null) SET_UP_KEY_INTRO else ADD_MACHINE_INTRO,
+            title = when { fixing != null && authorizeIntro -> "Authorize this phone"; fixing != null -> "Set up the key"; else -> "Add a machine" },
+            intro = when { fixing != null && authorizeIntro -> AUTHORIZE_INTRO; fixing != null -> SET_UP_KEY_INTRO; else -> ADD_MACHINE_INTRO },
         )
     }
 }
 
 private const val MAX_KEY_FILE_BYTES = 64 * 1024
+
+/** How long Add machine waits for the connection to decide before saying it is still waiting. The connect has its own, shorter deadline. */
+private const val CONNECT_WAIT_MILLIS = 45_000L
+
+/** The user asked for this read. Only a token that starts with the pairing scheme is looked at, and the text is never echoed. */
+private fun readPairingLink(ctx: Context): PairingResult {
+    val text = runCatching { (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString() }.getOrNull()
+    return PairingLinks.parse(PairingLinks.find(text) ?: text?.trim()?.take(PairingLinks.MAX_LENGTH + 1))
+}
+
+@Composable
+private fun WelcomeRoute(onEnterAddress: () -> Unit, onPairing: (PairingLink) -> Unit) {
+    val ctx = LocalContext.current
+    var notice by remember { mutableStateOf<String?>(null) }
+    Welcome(
+        onEnterAddress = onEnterAddress,
+        onPasteLink = {
+            when (val r = readPairingLink(ctx)) {
+                is PairingResult.Valid -> { notice = null; onPairing(r.link) }
+                is PairingResult.Rejected -> notice = PairingCopy.invalid(r.reason)
+            }
+        },
+        notice = notice,
+    )
+}
 
 @Composable
 private fun ImportKeyRoute(graph: AppGraph, onDone: () -> Unit, onBack: () -> Unit) {

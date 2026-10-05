@@ -71,7 +71,7 @@ class LiveFlowTest {
         val started = System.currentTimeMillis()
 
         // --- Add machine (first run: no machines, so the app opens it itself) ---
-        waitFor("the Add machine screen") { hasNode(text("Add a machine")) }
+        waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
         rule.onNodeWithText("Host or IP address").performTextInput(host)
         rule.onNodeWithText("User").performTextInput(user)
         rule.onNode(hasText("Port") and hasSetTextAction()).performTextReplacement(port)
@@ -153,7 +153,7 @@ class LiveFlowTest {
         val keyFile = File(ctx.getExternalFilesDir(null), "e2e-import-key")
         val pem = keyFile.readText()
         try {
-            waitFor("the Add machine screen") { hasNode(text("Add a machine")) }
+            waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
             rule.onNodeWithText("Host or IP address").performTextInput(host)
             rule.onNodeWithText("User").performTextInput(user)
             rule.onNode(hasText("Port") and hasSetTextAction()).performTextReplacement(port)

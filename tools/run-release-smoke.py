@@ -179,7 +179,10 @@ def main():
     threading.Thread(target=sample_sockets, daemon=True).start()
 
     adb("shell", "am", "start", "-n", f"{PKG}/.MainActivity"); time.sleep(2.5)
-    check("launch shows Add machine", wait("Add a machine", 15) is not None)
+    check("launch shows Welcome", wait("Enter the address", 15) is not None)
+    shot("00-welcome")
+    tap("Enter the address")
+    check("Enter the address leads to Add machine", wait("Add a machine", 15) is not None)
     shot("01-add-machine")
     type_into("Host or IP address", "10.0.2.2"); type_into("User", os.environ.get("USER", "jdoe"))
     tap("22", exact=True); adb("shell", "input", "keyevent", "KEYCODE_MOVE_END")
