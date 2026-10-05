@@ -19,10 +19,13 @@ class FinderTextTest {
         }
     }
 
-    @Test fun theEndedScanSaysWhatWasFoundAndThatNothingWasConnectedTo() {
+    @Test fun theEndedScanSaysWhatWasFoundAndWhatWasAndWasNotDoneToTheServers() {
+        // The probe does open a TCP connection to every answering address, so the sentence must not say nothing was connected to.
         val host = FoundHost("10.0.0.5", 22, null, "OpenSSH 9.9")
-        assertEquals("Found 1 machine. Tap one to fill in its address and port. Nothing has been connected to.", FinderText.result(FinderState(FinderPhase.Done, rows = listOf(host))))
-        assertEquals("Found 2 machines. Tap one to fill in its address and port. Nothing has been connected to.", FinderText.result(FinderState(FinderPhase.Done, rows = listOf(host, host.copy(address = "10.0.0.6")))))
+        val tail = "Nothing was signed in to, trusted or saved; Paddock only read the first line each server sent."
+        assertEquals("Found 1 machine. Tap one to fill in its address and port. $tail", FinderText.result(FinderState(FinderPhase.Done, rows = listOf(host))))
+        assertEquals("Found 2 machines. Tap one to fill in its address and port. $tail", FinderText.result(FinderState(FinderPhase.Done, rows = listOf(host, host.copy(address = "10.0.0.6")))))
+        assertEquals(false, "connected" in FinderText.result(FinderState(FinderPhase.Done, rows = listOf(host)))!!)
     }
 
     @Test fun anEmptyResultSaysSoAndOffersTheTypedAddress() {

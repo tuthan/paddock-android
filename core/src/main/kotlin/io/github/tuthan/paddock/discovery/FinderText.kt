@@ -21,7 +21,8 @@ object FinderText {
         return when (state.phase) {
             FinderPhase.Done ->
                 if (n == 0) "No SSH server answered. Check that sshd is running on the machine and that it is on this network, or type its address instead."
-                else "Found $found. Tap one to fill in its address and port. Nothing has been connected to."
+                // The probe opens a TCP connection to each address that answers, so "nothing was connected to" would be untrue.
+                else "Found $found. Tap one to fill in its address and port. Nothing was signed in to, trusted or saved; Paddock only read the first line each server sent."
             FinderPhase.Cancelled -> "Stopped. Found so far: $found."
             else -> null
         }

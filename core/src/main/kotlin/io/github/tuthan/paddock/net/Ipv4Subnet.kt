@@ -47,7 +47,8 @@ class Ipv4Subnet(val address: Inet4Address, val prefix: Int) {
         /** An IPv4 literal such as `192.168.1.20`; never a name, so parsing does no DNS. Null for anything else. */
         fun literal(text: String): Inet4Address? {
             val parts = text.split('.')
-            if (parts.size != 4 || parts.any { it.isEmpty() || it.length > 3 || !it.all(Char::isDigit) }) return null
+            // ASCII digits only: Char.isDigit (and String.toInt) accept the digits of other scripts, which are not an address anyone typed.
+            if (parts.size != 4 || parts.any { it.isEmpty() || it.length > 3 || !it.all { c -> c in '0'..'9' } }) return null
             val octets = parts.map { it.toInt() }
             if (octets.any { it > 255 }) return null
             return InetAddress.getByAddress(ByteArray(4) { octets[it].toByte() }) as Inet4Address

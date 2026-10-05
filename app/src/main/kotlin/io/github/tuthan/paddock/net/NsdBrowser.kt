@@ -19,7 +19,8 @@ import kotlin.coroutines.resume
 /**
  * Looks for machines that announce an SSH-like service on the LAN (mDNS through `NsdManager`), for as long as the flow is collected.
  * It runs only when the finder is opened and started, never in the background, and sends nothing to a machine: it listens for what they
- * announce and resolves the name to an address. Resolving is one at a time (the platform refuses a second while one is active).
+ * announce and resolves the name to an address. Resolving is one at a time (the platform refuses a second while one is active), and at most
+ * [MAX_PENDING] announcements wait their turn: a network can announce faster than they resolve, and the rest are dropped.
  *
  * [log] receives one short line per platform callback worth knowing (started, failed with a code), so a device run can say what the
  * platform did; it is never shown to the user. A [SecurityException] from the platform ends the flow with that exception.
@@ -29,18 +30,21 @@ class NsdBrowser(context: Context, private val log: (String) -> Unit = {}) {
 
     @Suppress("DEPRECATION")
     fun browse(types: List<String> = TYPES): Flow<NsdService> = callbackFlow {
-        val pending = Channel<NsdServiceInfo>(Channel.UNLIMITED)
+        // Each announcement waits with whether its type only names an address: `_workstation._tcp.` says what a machine is called, not where SSH is.
+        val pending = Channel<Pair<NsdServiceInfo, Boolean>>(MAX_PENDING)
         val listeners = ArrayList<NsdManager.DiscoveryListener>()
         launch {
-            for (info in pending) {
-                val resolved = withTimeoutOrNull(RESOLVE_MILLIS) { resolve(info) } ?: continue
+            for ((info, nameOnly) in pending) {
+                val resolved = withTimeoutOrNull(RESOLVE_MILLIS) { resolve(info, nameOnly) } ?: continue
                 trySend(resolved)
             }
         }
         for (type in types) {
+            val nameOnly = type.startsWith(WORKSTATION_TYPE)
             val l = object : NsdManager.DiscoveryListener {
                 override fun onDiscoveryStarted(serviceType: String) { log("started $serviceType") }
-                override fun onServiceFound(info: NsdServiceInfo) { pending.trySend(info) }
+                // A full queue refuses the announcement (trySend fails and nothing is thrown): that is the cap.
+                override fun onServiceFound(info: NsdServiceInfo) { pending.trySend(info to nameOnly) }
                 override fun onServiceLost(info: NsdServiceInfo) {}
                 override fun onDiscoveryStopped(serviceType: String) { log("stopped $serviceType") }
                 override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { log("start failed $serviceType code $errorCode") }
@@ -63,30 +67,41 @@ class NsdBrowser(context: Context, private val log: (String) -> Unit = {}) {
         }
     }
 
-    /** The first IPv4 address and the port of [info], or null when it cannot be resolved. */
+    /** The first IPv4 address and the port of [info], or null when it cannot be resolved. Nothing stays registered with the platform afterwards. */
     @Suppress("DEPRECATION")
-    private suspend fun resolve(info: NsdServiceInfo): NsdService? = suspendCancellableCoroutine { cont ->
-        fun done(host: Inet4Address?, port: Int, name: String) { if (cont.isActive) cont.resume(if (host != null && port in 1..65535) NsdService(name, host, port) else null) }
+    private suspend fun resolve(info: NsdServiceInfo, nameOnly: Boolean): NsdService? {
+        fun service(host: Inet4Address?, port: Int, name: String): NsdService? =
+            if (host != null && port in 1..65535) NsdService(name, host, port, nameOnly) else null
         if (Build.VERSION.SDK_INT >= 34) {
-            val callback = object : NsdManager.ServiceInfoCallback {
-                override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) { log("resolve failed code $errorCode"); done(null, 0, "") }
-                override fun onServiceUpdated(updated: NsdServiceInfo) { done(updated.hostAddresses.filterIsInstance<Inet4Address>().firstOrNull(), updated.port, updated.serviceName) }
-                override fun onServiceLost() { done(null, 0, "") }
-                override fun onServiceInfoCallbackUnregistered() {}
-            }
-            val executor = Executor { it.run() }
-            try { nsd.registerServiceInfoCallback(info, executor, callback) } catch (e: IllegalArgumentException) { done(null, 0, ""); return@suspendCancellableCoroutine }
-            cont.invokeOnCancellation { try { nsd.unregisterServiceInfoCallback(callback) } catch (_: IllegalArgumentException) { } }
-        } else {
+            return awaitServiceInfo<NsdServiceInfo, NsdService>(
+                register = { reports ->
+                    val callback = object : NsdManager.ServiceInfoCallback {
+                        override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) { log("resolve failed code $errorCode"); reports.onFailed(errorCode) }
+                        override fun onServiceUpdated(updated: NsdServiceInfo) = reports.onUpdated(updated)
+                        override fun onServiceLost() = reports.onLost()
+                        override fun onServiceInfoCallbackUnregistered() {}
+                    }
+                    nsd.registerServiceInfoCallback(info, Executor { it.run() }, callback)
+                    val unregister: () -> Unit = { try { nsd.unregisterServiceInfoCallback(callback) } catch (_: IllegalArgumentException) { } }
+                    unregister
+                },
+                // An update with no IPv4 address is not the answer yet (a host's AAAA can arrive before its A): the timeout decides.
+                pick = { updated -> service(updated.hostAddresses.filterIsInstance<Inet4Address>().firstOrNull(), updated.port, updated.serviceName) },
+            )
+        }
+        return suspendCancellableCoroutine { cont ->
+            fun done(result: NsdService?) { if (cont.isActive) cont.resume(result) }
             nsd.resolveService(info, object : NsdManager.ResolveListener {
-                override fun onResolveFailed(failed: NsdServiceInfo, errorCode: Int) { log("resolve failed code $errorCode"); done(null, 0, "") }
-                override fun onServiceResolved(resolved: NsdServiceInfo) { done(resolved.host as? Inet4Address, resolved.port, resolved.serviceName) }
+                override fun onResolveFailed(failed: NsdServiceInfo, errorCode: Int) { log("resolve failed code $errorCode"); done(null) }
+                override fun onServiceResolved(resolved: NsdServiceInfo) { done(service(resolved.host as? Inet4Address, resolved.port, resolved.serviceName)) }
             })
         }
     }
 
     companion object {
-        val TYPES = listOf("_ssh._tcp.", "_sftp-ssh._tcp.", "_workstation._tcp.")
+        const val WORKSTATION_TYPE = "_workstation._tcp"
+        val TYPES = listOf("_ssh._tcp.", "_sftp-ssh._tcp.", "$WORKSTATION_TYPE.")
         private const val RESOLVE_MILLIS = 4_000L
+        private const val MAX_PENDING = 64
     }
 }

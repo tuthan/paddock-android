@@ -8,6 +8,8 @@ sealed interface FinderDecision {
     /** Not on Wi-Fi or Ethernet (cellular, a VPN alone, or offline). */
     data object NoLan : FinderDecision
     data class TooWide(val prefix: Int) : FinderDecision
+    /** A /31 or /32: no address other than the phone's own to ask. */
+    data class TooSmall(val prefix: Int) : FinderDecision
     /** A LAN with no IPv4 address: names can still be found, addresses cannot be enumerated. */
     data object Ipv6Only : FinderDecision
     /** Android 17 and later: the local-network access has to be granted first. */
@@ -25,9 +27,18 @@ object FinderRules {
         val lan = lans.firstOrNull { it.hasIpv4 } ?: return FinderDecision.Ipv6Only
         val subnet = lan.subnets.first()
         if (subnet.prefix < Ipv4Subnet.MIN_PROBE_PREFIX) return FinderDecision.TooWide(subnet.prefix)
+        if (!subnet.probeable) return FinderDecision.TooSmall(subnet.prefix)
         if (grantMissing) return FinderDecision.NeedsGrant
         return FinderDecision.Ready(subnet, lan)
     }
+
+    /**
+     * Whether an address in an mDNS announcement may be a row: on the subnet that is scanned, and not the phone's own address or the network's
+     * or broadcast address. A machine on the network can announce any address (a loopback, a link-local, a public one), and tapping its row
+     * would put that address in the Host field; the probe never looks beyond the subnet either.
+     */
+    fun announcedOnNetwork(subnet: Ipv4Subnet, address: java.net.Inet4Address): Boolean =
+        subnet.contains(address) && address != subnet.address && address != subnet.network && address != subnet.directedBroadcast
 
     /** Said before anything runs: what the probe does, to which addresses, and what it never does. */
     fun beforeScan(subnet: Ipv4Subnet, ports: List<Int>): String {
@@ -40,6 +51,7 @@ object FinderRules {
     fun sentence(decision: FinderDecision): String = when (decision) {
         FinderDecision.NoLan -> "Find works on Wi-Fi or Ethernet, on the machine's own network. This phone is not on one."
         is FinderDecision.TooWide -> "This network is larger than Paddock will probe (a /${decision.prefix}). Type the machine's address instead."
+        is FinderDecision.TooSmall -> "This network has no other address to look at (a /${decision.prefix}). Type the machine's address instead."
         FinderDecision.Ipv6Only -> "This network has no IPv4 address, so Paddock cannot list its addresses. Type the machine's address instead."
         FinderDecision.NeedsGrant -> "Android has to let Paddock reach devices on your network first. It is used only to look for machines."
         is FinderDecision.Ready -> beforeScan(decision.subnet, listOf(22))

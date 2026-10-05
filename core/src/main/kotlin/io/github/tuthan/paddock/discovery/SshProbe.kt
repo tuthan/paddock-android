@@ -1,7 +1,8 @@
 package io.github.tuthan.paddock.discovery
 
 import io.github.tuthan.paddock.ports.Sockets
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.launch
@@ -9,6 +10,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.net.Inet4Address
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 /** An address that answered with an SSH identification line. Nothing about it is trusted or stored. */
@@ -60,19 +62,32 @@ class SshProbe(
         const val DEFAULT_PARALLELISM = 64
     }
 
+    /**
+     * The blocking connects and reads run on a pool made for this scan and closed when it ends, however it ends: [parallelism] blocked
+     * threads on `Dispatchers.IO` would take all of its 64 from the watched machine's SSH, ledger and profile work for the length of a scan.
+     */
     fun scan(addresses: List<Inet4Address>, ports: List<Int>): Flow<ProbeEvent> = channelFlow {
         val targets = addresses.flatMap { a -> ports.distinct().map { p -> a to p } }
         val done = AtomicInteger(0)
         val gate = Semaphore(parallelism)
         send(ProbeEvent.Progress(0, targets.size))
-        for ((address, port) in targets) {
-            launch {
-                gate.withPermit {
-                    val hit = withContext(Dispatchers.IO) { probeOne(address, port) }
-                    if (hit != null) send(ProbeEvent.Hit(hit))
-                    send(ProbeEvent.Progress(done.incrementAndGet(), targets.size))
+        val pool = Executors.newFixedThreadPool(parallelism) { r -> Thread(r, "paddock-probe").apply { isDaemon = true } }
+        val dispatcher = pool.asCoroutineDispatcher()
+        try {
+            // Returns when every probe has ended: a cancelled scan still waits for the ones in flight (each is bounded by connect + banner).
+            coroutineScope {
+                for ((address, port) in targets) {
+                    launch {
+                        gate.withPermit {
+                            val hit = withContext(dispatcher) { probeOne(address, port) }
+                            if (hit != null) send(ProbeEvent.Hit(hit))
+                            send(ProbeEvent.Progress(done.incrementAndGet(), targets.size))
+                        }
+                    }
                 }
             }
+        } finally {
+            dispatcher.close()
         }
     }
 

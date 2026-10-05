@@ -58,6 +58,14 @@ class Ipv4SubnetTest {
         }
     }
 
+    @Test fun literalIsAsciiDigitsOnlyNotAnyScriptsDigits() {
+        // Arabic-Indic, Devanagari and fullwidth digits are digits to Char.isDigit and to String.toInt, and were once a valid address.
+        for (bad in listOf("١٩٢.١٦٨.١.١", "१९२.168.1.1", "１９２.168.1.1", "192.168.1.١")) {
+            assertNull(Ipv4Subnet.literal(bad), bad)
+        }
+        assertEquals("192.168.1.1", Ipv4Subnet.literal("192.168.1.1")!!.hostAddress)
+    }
+
     @Test fun anInvalidPrefixDoesNotConstruct() {
         assertFailsWith<IllegalArgumentException> { subnet("1.2.3.4", 33) }
         assertFailsWith<IllegalArgumentException> { subnet("1.2.3.4", -1) }

@@ -35,6 +35,17 @@ interface Sockets {
 }
 
 /**
+ * Pinning a socket to the network it was asked for. A pin that cannot be honoured fails: a socket that followed the default route instead
+ * could leave through a VPN, which is what the pin is there to prevent.
+ */
+object NetworkPin {
+    /** Nothing when [id] is null (no pin was asked for). Otherwise [bind] gets the network [lookup] has for [id], and with none this throws [IOException]. */
+    fun <N : Any> apply(id: String?, lookup: (String) -> N?, bind: (N) -> Unit) {
+        if (id != null) bind(lookup(id) ?: throw IOException("The network this was pinned to is gone"))
+    }
+}
+
+/**
  * [Sockets] over `java.net`. The app passes binders that pin a socket to one Android network; with none, the platform's own
  * routing is used. Nothing here knows Android, so the probe, the pairing client and the wake sender are tested against
  * loopback sockets.
@@ -43,7 +54,12 @@ class JavaSockets(
     private val bindTcp: (Socket) -> Unit = {},
     private val bindUdp: (DatagramSocket, LanPath?) -> Unit = { _, _ -> },
 ) : Sockets {
-    override fun tcp(): TcpConnection = JavaTcp(Socket().also(bindTcp))
+    override fun tcp(): TcpConnection {
+        val socket = Socket()
+        // A bind that fails (the pinned network went away) must not leave the descriptor open: a scan makes hundreds of these.
+        try { bindTcp(socket) } catch (e: Throwable) { socket.close(); throw e }
+        return JavaTcp(socket)
+    }
 
     override fun udp(path: LanPath?): UdpSender {
         val socket = DatagramSocket(null)

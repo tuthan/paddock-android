@@ -28,6 +28,16 @@ class FinderRulesTest {
         assertEquals(FinderDecision.TooWide(16), FinderRules.decide(listOf(path("wifi", prefix = 16)), false))
     }
 
+    @Test fun aNetworkWithNothingToProbeSaysSoInsteadOfStartingAnEmptyScan() {
+        assertEquals(FinderDecision.TooSmall(31), FinderRules.decide(listOf(path("wifi", prefix = 31)), false))
+        assertEquals(FinderDecision.TooSmall(32), FinderRules.decide(listOf(path("wifi", prefix = 32)), false))
+        // Before the grant too: asking for access that would then find nothing to probe is no help.
+        assertEquals(FinderDecision.TooSmall(32), FinderRules.decide(listOf(path("wifi", prefix = 32)), grantMissing = true))
+        assertTrue(FinderRules.decide(listOf(path("wifi", prefix = 30)), false) is FinderDecision.Ready, "a /30 holds one other address")
+        val sentence = FinderRules.sentence(FinderDecision.TooSmall(32))
+        assertTrue("no other address" in sentence && "/32" in sentence, sentence)
+    }
+
     @Test fun aMissingGrantAsksBeforeAnythingRuns() {
         assertEquals(FinderDecision.NeedsGrant, FinderRules.decide(listOf(path("wifi")), grantMissing = true))
     }

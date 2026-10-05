@@ -112,7 +112,7 @@ class FindOnNetworkTest {
 
     @Test fun aRowIsTheNameTheAddressAndTheSoftwareAndATapPicksIt() {
         val taps = page(FinderState(FinderPhase.Done, sentence, canStart = true, done = 508, total = 508, rows = listOf(laptop, other)))
-        rule.onNodeWithText("Found 2 machines. Tap one to fill in its address and port. Nothing has been connected to.").assertIsDisplayed()
+        rule.onNodeWithText("Found 2 machines. Tap one to fill in its address and port. Nothing was signed in to, trusted or saved; Paddock only read the first line each server sent.").assertIsDisplayed()
         rule.onNodeWithText("192.168.42.86 · devbox · OpenSSH 9.9").performClick()
         rule.onNodeWithText("192.168.42.40 · OpenSSH 10.5 · port 2233").performClick()
         assertEquals(listOf(laptop, other), taps.picked)

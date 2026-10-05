@@ -2,6 +2,7 @@ package io.github.tuthan.paddock.discovery
 
 import io.github.tuthan.paddock.ports.LanPaths
 import io.github.tuthan.paddock.ports.Sockets
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -59,6 +61,9 @@ class FinderController(
     val state: StateFlow<FinderState> = _state.asStateFlow()
     private var job: Job? = null
 
+    /** The rows of the scan that is running, or null: a result that arrives after its scan was closed or replaced is dropped. */
+    @Volatile private var active: FoundHosts? = null
+
     /** Reads the networks again and says what a scan would do. Does nothing while one runs. */
     fun refresh(typedPort: Int?) {
         if (_state.value.phase == FinderPhase.Scanning) return
@@ -74,33 +79,49 @@ class FinderController(
         if (_state.value.phase == FinderPhase.Scanning) return
         val decision = FinderRules.decide(paths.paths(), grantMissing())
         if (decision !is FinderDecision.Ready) { refresh(typedPort); return }
+        val subnet = decision.subnet
         val ports = portsFor(typedPort)
-        val sentence = FinderRules.beforeScan(decision.subnet, ports)
-        val addresses = decision.subnet.hosts(setOf(decision.subnet.address))
+        val sentence = FinderRules.beforeScan(subnet, ports)
+        val addresses = subnet.hosts(setOf(subnet.address))
         val found = FoundHosts()
+        active = found
         _state.value = FinderState(FinderPhase.Scanning, sentence, canStart = false, total = addresses.size * ports.size)
         bindProbeTo(decision.path.id)
         job = scope.launch {
-            var note: String? = null
             var released = false
-            fun release() { if (!released) { released = true; bindProbeTo(null) } }
+            // Only the scan that is still the shown one clears the pin: one cut off by close() has been released there already, and a new scan
+            // may have pinned the network again since (this job unwinds only once the probes in flight have ended).
+            fun release() { if (!released) { released = true; if (active === found) bindProbeTo(null) } }
             val listening = mdns?.let { browse ->
                 launch {
-                    try { browse().catch { note = MDNS_UNAVAILABLE }.collect { if (found.add(it)) publish(found) } }
-                    catch (e: SecurityException) { note = MDNS_UNAVAILABLE }
+                    try {
+                        browse().catch { change(found) { s -> s.copy(note = MDNS_UNAVAILABLE) } }.collect { service ->
+                            // Anyone on the network can announce anything: only a machine on the scanned subnet, other than the phone, is a row.
+                            if (FinderRules.announcedOnNetwork(subnet, service.address)) merge(found) { found.add(service) }
+                        }
+                    } catch (e: CancellationException) { throw e }
+                    // Not only a missing permission: whatever the listener does wrong must end the listening, not the scan or the app.
+                    catch (e: Exception) { change(found) { s -> s.copy(note = MDNS_UNAVAILABLE) } }
                 }
             }
             try {
-                probe.scan(addresses, ports).collect { e ->
-                    when (e) {
-                        is ProbeEvent.Progress -> _state.value = _state.value.copy(done = e.done, total = e.total, rows = found.list)
-                        is ProbeEvent.Hit -> if (found.add(e.hit)) publish(found)
+                var failed = false
+                try {
+                    probe.scan(addresses, ports).collect { e ->
+                        when (e) {
+                            is ProbeEvent.Progress -> change(found) { s -> s.copy(done = e.done, total = e.total) }
+                            is ProbeEvent.Hit -> merge(found) { found.add(e.hit) }
+                        }
                     }
+                    release()
+                    // A scan of a quiet network ends in well under a second, before an announcement could arrive: listening goes on a little longer.
+                    if (listening != null) delay(mdnsGraceMillis)
+                } catch (e: CancellationException) { throw e }
+                // This job runs on the app's scope, which has no handler: a bug here must end the scan, not the process.
+                catch (e: Exception) { failed = true }
+                change(found) { s ->
+                    s.copy(phase = FinderPhase.Done, rows = found.list, done = if (failed) s.done else s.total, note = if (failed) SCAN_FAILED else s.note, canStart = true)
                 }
-                release()
-                // A scan of a quiet network ends in well under a second, before an announcement could arrive: listening goes on a little longer.
-                if (listening != null) delay(mdnsGraceMillis)
-                _state.value = _state.value.copy(phase = FinderPhase.Done, rows = found.list, done = _state.value.total, note = note, canStart = true)
             } finally {
                 // Cancelled coroutines cannot suspend, so without NonCancellable the join would throw and the network pin would never be released.
                 withContext(NonCancellable) { listening?.cancelAndJoin(); release() }
@@ -108,9 +129,18 @@ class FinderController(
         }
     }
 
-    private fun publish(found: FoundHosts) { _state.value = _state.value.copy(rows = found.list) }
+    /** One change to the state, made only while [found] is still the scan that is shown; several threads call this at once. */
+    private fun change(found: FoundHosts, to: (FinderState) -> FinderState) { _state.update { if (active === found) to(it) else it } }
 
-    /** Stops the scan and the listening at once; what was found so far stays. */
+    /** Adds to [found] and publishes the list as that add left it, under one lock, so two sources cannot publish each other's rows away. */
+    private fun merge(found: FoundHosts, add: () -> Boolean) {
+        synchronized(found) { if (add()) change(found) { s -> s.copy(rows = found.list) } }
+    }
+
+    /**
+     * Stops the scan and the listening, and returns once they have: a probe already connecting or reading is not interruptible, so this
+     * waits for it, at most the connect and banner timeouts. What was found so far stays.
+     */
     suspend fun cancel() {
         val j = job ?: return
         job = null
@@ -121,9 +151,13 @@ class FinderController(
 
     /** For when the screen goes away: stops without waiting. A scan cut off this way is not shown as running the next time the screen opens. */
     fun close() {
+        active = null
         job?.cancel(); job = null; bindProbeTo(null)
         if (_state.value.phase == FinderPhase.Scanning) _state.value = FinderState()
     }
 
-    companion object { const val MDNS_UNAVAILABLE = "Names announced on the network could not be listened for, so only addresses that answered are shown." }
+    companion object {
+        const val SCAN_FAILED = "The scan stopped on an unexpected error, so the list may be incomplete."
+        const val MDNS_UNAVAILABLE = "Names announced on the network could not be listened for, so only addresses that answered are shown."
+    }
 }

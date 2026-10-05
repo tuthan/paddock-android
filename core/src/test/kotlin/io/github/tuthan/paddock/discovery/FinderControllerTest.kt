@@ -69,7 +69,7 @@ class FinderControllerTest {
             portsFor = { typed -> listOfNotNull(typed ?: 22) }, mdnsGraceMillis = 300)
     }
 
-    private suspend fun FinderController.finished(): FinderState = withTimeout(30_000) { state.first { it.phase == FinderPhase.Done || it.phase == FinderPhase.Cancelled } }
+    private suspend fun FinderController.finished(timeoutMillis: Long = 30_000): FinderState = withTimeout(timeoutMillis) { state.first { it.phase == FinderPhase.Done || it.phase == FinderPhase.Cancelled } }
 
     @Test fun beforeAnythingRunsItSaysWhatItWouldDoAndRunsNothing() {
         val c = controller(listOf(lan()))
@@ -112,7 +112,75 @@ class FinderControllerTest {
         assertEquals(FinderController.MDNS_UNAVAILABLE, end.note)
     }
 
-    @Test fun cancellingStopsAtOnceKeepsWhatWasFoundAndReleasesTheNetwork() = runBlocking {
+    /** A port nothing listens on, so a scan of loopback finds only what a test announces. */
+    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
+
+    @Test fun anAnnouncementFromOutsideTheScannedNetworkOrOfThePhoneItselfMakesNoRow() = runBlocking {
+        // A guest on the Wi-Fi can announce _ssh._tcp for any address: only a machine on this subnet, other than the phone, is a row.
+        val c = controller(listOf(lan()), mdns = {
+            flow {
+                emit(NsdService("guest-desktop", ip("203.0.113.9"), 22))
+                emit(NsdService("elsewhere", ip("127.0.1.9"), 22))
+                emit(NsdService("the-phone", ip("127.0.0.1"), 22))
+                emit(NsdService("the-network", ip("127.0.0.0"), 22))
+                emit(NsdService("the-broadcast", ip("127.0.0.255"), 22))
+                emit(NsdService("nas", ip("127.0.0.9"), 22))
+                awaitCancellation()
+            }
+        })
+        c.start(freePort())
+        assertEquals(listOf(FoundHost("127.0.0.9", 22, "nas", null)), c.finished().rows)
+    }
+
+    @Test fun theListIsCappedAtTwoHundredRowsWhateverIsAnnounced() = runBlocking {
+        val c = controller(listOf(lan()), mdns = { flow { for (i in 2..254) emit(NsdService("n$i", ip("127.0.0.$i"), 22)); awaitCancellation() } })
+        c.start(freePort())
+        assertEquals(FoundHosts.MAX_ROWS, c.finished().rows.size)
+    }
+
+    @Test fun aWorkstationNameAtPortNineJoinsTheProbedRowAtTheTypedPort() = runBlocking {
+        val port = sshServer("127.0.0.7")
+        val c = controller(listOf(lan()), mdns = { flow { emit(NsdService("devbox", ip("127.0.0.7"), 9, nameOnly = true)); emit(NsdService("lonely", ip("127.0.0.8"), 9, nameOnly = true)); awaitCancellation() } })
+        c.start(port)
+        assertEquals(listOf(FoundHost("127.0.0.7", port, "devbox", "OpenSSH 9.9")), c.finished().rows)
+    }
+
+    private class BrokenSockets : io.github.tuthan.paddock.ports.Sockets {
+        override fun udp(path: LanPath?) = throw UnsupportedOperationException()
+        override fun tcp(): io.github.tuthan.paddock.ports.TcpConnection = throw IllegalStateException("a bug in the probe")
+    }
+
+    @Test fun aProbeThatFailsUnexpectedlyEndsTheScanSaysSoAndReleasesTheNetworkInsteadOfTakingTheProcessDown() = runBlocking {
+        val c = controller(listOf(lan()), sockets = BrokenSockets())
+        c.start(freePort())
+        val end = c.finished(5_000)
+        assertEquals(FinderPhase.Done, end.phase)
+        assertEquals(FinderController.SCAN_FAILED, end.note)
+        assertTrue(end.canStart, "it can be run again")
+        assertEquals(listOf("wifi", null), bound.toList())
+    }
+
+    @Test fun mdnsThatThrowsWhenAskedToStartIsSaidAndTheProbeStillAnswers() = runBlocking {
+        val port = sshServer("127.0.0.7")
+        val c = controller(listOf(lan()), mdns = { throw IllegalStateException("no NsdManager") })
+        c.start(port)
+        val end = c.finished(5_000)
+        assertEquals(FinderPhase.Done, end.phase)
+        assertEquals(1, end.rows.size)
+        assertEquals(FinderController.MDNS_UNAVAILABLE, end.note)
+        assertEquals(listOf("wifi", null), bound.toList())
+    }
+
+    @Test fun aSubnetWithNothingToProbeStartsNothingAndSaysSo() {
+        val c = controller(listOf(lan(prefix = 32)))
+        c.start(null)
+        assertEquals(FinderPhase.Idle, c.state.value.phase)
+        assertTrue(!c.state.value.canStart)
+        assertTrue("no other address" in c.state.value.sentence, c.state.value.sentence)
+        assertTrue(bound.isEmpty())
+    }
+
+    @Test fun cancellingStopsTheScanKeepsWhatWasFoundAndReleasesTheNetwork() = runBlocking {
         val port = sshServer("127.0.0.7")
         val c = controller(listOf(lan()), mdns = { flow { awaitCancellation() } }, sockets = SlowSockets(250))
         c.start(port)
@@ -137,6 +205,19 @@ class FinderControllerTest {
         c.refresh(port)
         assertEquals(FinderPhase.Idle, c.state.value.phase)
         assertTrue(c.state.value.canStart)
+    }
+
+    @Test fun aScanClosedAndStartedAgainAtOnceKeepsItsNetworkPinWhenTheOldOneUnwinds() = runBlocking {
+        // close() releases the pin at once, but the cut-off scan unwinds only after its probes in flight end: it must not clear the new scan's pin.
+        val port = sshServer("127.0.0.7")
+        val c = controller(listOf(lan()), sockets = SlowSockets(250))
+        c.start(port)
+        withTimeout(10_000) { while (bound.size < 1) kotlinx.coroutines.delay(10) }
+        c.close()
+        c.start(port)
+        assertEquals(FinderPhase.Done, c.finished().phase)
+        kotlinx.coroutines.delay(800)
+        assertEquals(listOf("wifi", null, "wifi", null), bound.toList(), "the pin is cleared once by each scan, and the second scan kept it while it ran")
     }
 
     @Test fun noWifiMeansNoScan() {
