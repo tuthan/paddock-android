@@ -119,13 +119,14 @@ class WelcomeAndConnectTest {
 
     @Test fun anyOtherFailureIsSaidAtTheBottomWithoutTheCommandBanner() {
         form(error = "The host did not answer in time.", fix = ConnectFix.Retry)
-        rule.onNodeWithText("The host did not answer in time.").performScrollTo().assertIsDisplayed()
+        // Pinned above Connect, not in the scrolling body: it is on screen without scrolling.
+        rule.onNodeWithText("The host did not answer in time.").assertIsDisplayed()
         rule.onAllNodesWithText(AUTHORIZE_FAILED_PHONE_KEY).assertCountEquals0()
     }
 
     @Test fun aSettingsFixOffersOpenSettingsAndItWorks() {
         val calls = form(error = "Local-network access is off, so Paddock cannot reach this address.", fix = ConnectFix.OpenSettings)
-        rule.onNodeWithText("Open settings").performScrollTo().performClick()
+        rule.onNodeWithText("Open settings").performClick()
         assertEquals(1, calls.settings)
     }
 

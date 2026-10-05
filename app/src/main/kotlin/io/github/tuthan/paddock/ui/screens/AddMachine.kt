@@ -143,6 +143,13 @@ fun AddMachine(
         if (!errors.any && !(key == KeyKind.Phone && state.publicKeyLine == null) && !(key == KeyKind.Imported && state.importedKeyId == null)) onConnect(input)
     }
 
+    val commandAnchor = remember { BringIntoViewRequester() }
+    val showCommandFix = state.connectError != null && state.connectFix == ConnectFix.ShowCommand
+    LaunchedEffect(state.connectError, state.connectFix) {
+        // After the first layout: a request made before the anchor is placed has nowhere to scroll to.
+        if (showCommandFix) { delay(ANCHOR_SETTLE_MILLIS); commandAnchor.bringIntoView() }
+    }
+
     Column(modifier.fillMaxSize().imePadding()) {
         ScreenHeader(title, onBack = onBack)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = PaddockTokens.spacing.gutter).padding(top = 8.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -170,12 +177,6 @@ fun AddMachine(
                 placeholder = "default", imeAction = ImeAction.Done, onDone = ::connect, mono = true,
             )
 
-            val commandAnchor = remember { BringIntoViewRequester() }
-            val showCommandFix = state.connectError != null && state.connectFix == ConnectFix.ShowCommand
-            LaunchedEffect(state.connectError, state.connectFix) {
-                // After the first layout: a request made before the anchor is placed has nowhere to scroll to.
-                if (showCommandFix) { delay(ANCHOR_SETTLE_MILLIS); commandAnchor.bringIntoView() }
-            }
             // With this phone's key the sentence sits inside the key section, directly above the command it points at, and the screen scrolls
             // to that group; otherwise (an imported key, no key yet) it leads the sign-in block.
             val sentenceInKeySection = showCommandFix && key == KeyKind.Phone && state.publicKeyLine != null
@@ -201,13 +202,13 @@ fun AddMachine(
                 "The first connection shows the machine's fingerprint before anything is trusted. Nothing signs in until you accept it.",
                 icon = PaddockIcons.Warning,
             )
-            // The authorize failure is shown above the command it points at; every other failure sits here, with its fix when it has one.
+        }
+        Column(Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // The authorize failure is shown above the command it points at; every other failure is pinned here, above Connect, where it cannot be below the fold.
             if (state.connectError != null && !showCommandFix) {
                 if (state.connectFix == ConnectFix.OpenSettings) Banner(state.connectError, actionLabel = "Open settings", onAction = onOpenSettings)
                 else Banner(state.connectError)
             }
-        }
-        Column(Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 10.dp)) {
             PaddockButton(if (state.connecting) "Connecting…" else "Connect", ::connect, enabled = !state.connecting, icon = PaddockIcons.Key)
         }
     }
