@@ -10,13 +10,21 @@ import android.content.ComponentName
 import android.content.Context
 import android.os.Bundle
 import io.github.tuthan.paddock.PaddockApp
+import io.github.tuthan.paddock.billing.Distribution
+import io.github.tuthan.paddock.billing.EntitlementState
+import io.github.tuthan.paddock.billing.Entitlements
+import io.github.tuthan.paddock.billing.FileEntitlementStore
+import io.github.tuthan.paddock.billing.ProCapabilities
+import io.github.tuthan.paddock.billing.ProGate
 import io.github.tuthan.paddock.widget.WidgetRenderer.Kind
 import io.github.tuthan.paddock.widget.WidgetRenderer.render
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
-/** The one place a widget's data comes from: the cache file the app writes. Rendering reads nothing else. */
+/** The one place a widget's data comes from: the cache file the app writes. Rendering reads that and, to know whether to draw it at all, `entitlement.json` ([PaddockWidgets.locked]). */
 object WidgetCaches {
     const val FILE = "widget-cache.json"
     fun store(context: Context): FileWidgetCacheStore = FileWidgetCacheStore(File(context.filesDir, FILE))
@@ -31,14 +39,29 @@ object PaddockWidgets {
         else -> Kind.Strip
     }
 
-    /** Redraws every placed widget from the cache. Cheap and local: safe to call after any cache write and from any process state. */
+    /**
+     * Widgets are a Pro capability (vault M8). A widget callback can run in a process that built nothing else, so this reads the saved
+     * entitlement file itself (the same one the app writes) and never the graph; an unreadable file is "unknown", which does not hold Pro. The one
+     * place that decides is [lockedBy], and the app's background refresh asks this too, so no second derivation can disagree with what is drawn.
+     */
+    internal fun locked(context: Context): Boolean =
+        lockedBy(runBlocking(Dispatchers.IO) { FileEntitlementStore(File(context.filesDir, FileEntitlementStore.FILE_NAME)).load() })
+
+    /** Whether [saved] leaves the widgets locked in this build: [Entitlements.hasPro] with the flavor's constants, so a foss build never honours a leftover PRO file. */
+    internal fun lockedBy(saved: EntitlementState, unlockedBuild: Boolean = Distribution.UNLOCKED, sellsPro: Boolean = Distribution.SELLS_PRO): Boolean =
+        ProGate.locked(ProCapabilities.WIDGETS.id, Entitlements.hasPro(saved, unlockedBuild, sellsPro))
+
+    /**
+     * Redraws every placed widget from the cache, or as locked. Cheap and local: safe to call after any cache write and from any process state.
+     * With no widget on any home screen it returns before reading a file: the 15-minute job's cold process and every Pro change would otherwise
+     * read the cache and the entitlement for nobody.
+     */
     fun updateAll(context: Context) {
         val manager = AppWidgetManager.getInstance(context)
-        val content = WidgetPresenter().present(WidgetCaches.store(context).load(), System.currentTimeMillis())
-        for (p in providers) {
-            val ids = manager.getAppWidgetIds(ComponentName(context, p))
-            for (id in ids) manager.updateAppWidget(id, render(context, kindOf(p), content, heightDp(manager.getAppWidgetOptions(id))))
-        }
+        val placed = providers.associateWith { manager.getAppWidgetIds(ComponentName(context, it)) }.filterValues { it.isNotEmpty() }
+        if (placed.isEmpty()) return
+        val content = WidgetPresenter().present(WidgetCaches.store(context).load(), System.currentTimeMillis(), locked(context))
+        for ((p, ids) in placed) for (id in ids) manager.updateAppWidget(id, render(context, kindOf(p), content, heightDp(manager.getAppWidgetOptions(id))))
     }
 
     /** True while any Paddock widget is on a home screen. */

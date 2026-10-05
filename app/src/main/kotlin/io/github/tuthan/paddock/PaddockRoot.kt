@@ -48,12 +48,18 @@ import io.github.tuthan.paddock.answers.DecisionModel
 import io.github.tuthan.paddock.answers.DecisionPresenter
 import io.github.tuthan.paddock.ui.screens.DecisionActions
 import io.github.tuthan.paddock.ui.screens.DecisionSheet
+import io.github.tuthan.paddock.ui.screens.GateNoticeBar
 import io.github.tuthan.paddock.ui.screens.GuardedAnswers
 import io.github.tuthan.paddock.ui.screens.GuardedAnswersUi
 import io.github.tuthan.paddock.ui.screens.GuardedCopied
 import io.github.tuthan.paddock.ui.screens.GuardedHostState
+import io.github.tuthan.paddock.ui.screens.ProCardState
+import io.github.tuthan.paddock.ui.screens.ProGateSheet
+import io.github.tuthan.paddock.ui.screens.TipOption
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
+import io.github.tuthan.paddock.billing.ProCapabilities
+import io.github.tuthan.paddock.billing.ProView
 import io.github.tuthan.paddock.ops.ComposerRules
 import io.github.tuthan.paddock.ops.FocusRules
 import io.github.tuthan.paddock.ops.OperationGate
@@ -274,8 +280,12 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     val backTo = when (effective) { Route.AddMachine -> addFrom; Route.Compose -> Route.Output; Route.Snippets -> snippetsFrom; Route.AlertRelay -> Route.Settings; Route.Decision -> Route.Output; Route.GuardedAnswers -> guardedFrom; else -> Route.Home }
     // Registered before the screens', so a screen's own back handling (the import screen's) is asked first.
     BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { route = backTo }
+    ProGateHost(graph, pendingAnswerOnScreen = effective == Route.Decision || effective == Route.GuardedAnswers)
     Column(modifier.fillMaxSize().safeDrawingPadding()) {
     alertNotice?.let { NoticeBar(it, onDismiss = { alertNotice = null }, modifier = Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 8.dp)) }
+    // Why a tap on a Pro control did nothing (the gate never opens over a busy screen); the graph clears it after a few seconds.
+    val gateNotice by graph.gateNotice.collectAsState()
+    gateNotice?.let { GateNoticeBar(it, onDismiss = graph::dismissGateNotice, modifier = Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 8.dp)) }
     Box(Modifier.weight(1f).fillMaxWidth()) {
         when (boot) {
             Boot.Loading -> Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title, modifier = Modifier.padding(PaddockTokens.spacing.gutter))
@@ -301,7 +311,9 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                 Route.Decision -> DecisionRoute(
                     graph, terminalId, onBack = { route = Route.Output },
                     onOpenTerminal = { outputTab = AgentTab.Terminal; route = Route.Output },
-                    onSetUp = { guardedFrom = Route.Decision; route = Route.GuardedAnswers },
+                    // Locked, the sheet does not offer Set up at all (decisionSetUp): the gate may not open over a request, so a button here would be a dead one.
+                    // The check stays for the moment Pro goes away between the frame and the tap; the next frame already shows the locked sheet.
+                    onSetUp = { if (graph.requestCapability(ProCapabilities.GUARDED_ANSWERS.id, pendingAnswerOnScreen = true)) { guardedFrom = Route.Decision; route = Route.GuardedAnswers } },
                 )
                 Route.Compose -> ComposeRoute(
                     graph, terminalId, draft, { change -> draft = change(draft) }, onBack = { route = Route.Output },
@@ -313,7 +325,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                     graph, onBack = { route = Route.Home }, onAddMachine = { editing = false; pairing = null; addFrom = Route.Settings; route = Route.AddMachine },
                     onEditSnippets = { snippetsFrom = Route.Settings; route = Route.Snippets },
                     onAlertRelay = { route = Route.AlertRelay },
-                    onGuardedAnswers = { guardedFrom = Route.Settings; route = Route.GuardedAnswers },
+                    onGuardedAnswers = { if (graph.requestCapability(ProCapabilities.GUARDED_ANSWERS.id, pendingAnswerOnScreen = false)) { guardedFrom = Route.Settings; route = Route.GuardedAnswers } },
                 )
                 Route.AlertRelay -> AlertRelayRoute(graph, onBack = { route = Route.Settings })
                 Route.GuardedAnswers -> GuardedAnswersRoute(graph, onBack = { route = guardedFrom })
@@ -475,7 +487,11 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onT
     val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
     val focus = focusView(host, terminalId)
     // A permission request the hook published for this agent: the entry above the output opens the sheet. Nothing here can answer it.
-    val decision = rememberDecision(host, terminalId, now)
+    // The entry is the only reader of the request, and it is not offered without Pro (below), so without Pro the host's request files are not polled over SSH
+    // and there is no decision here at all. `locked` is read from state: when Pro appears the watch starts without the screen restarting.
+    val pro by graph.pro.collectAsState()
+    val answersLocked = graph.locked(ProCapabilities.GUARDED_ANSWERS, pro)
+    val decision = rememberDecision(host, terminalId, now, watch = !answersLocked)?.takeIf { !answersLocked }
     // The tap checks the gate again, as for the keys; the first time ever it asks what focus does.
     FocusGuard(settings.desktopFocusConfirmed, onConfirmed = graph::setDesktopFocusConfirmed, focus = { focus.key?.takeIf { focus.gate is OperationGate.Open }?.let { host.sends?.focus(it) } }) { requestFocus ->
         val manual = rememberManualInput(
@@ -488,6 +504,7 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onT
             onCompose = if (host.sends != null) onCompose else null,
             manualInput = manual?.first, manualActions = manual?.second,
             // Tapping the entry is the user choosing to look at the newest request: it becomes the one on the sheet before the sheet is up.
+            // Without Pro the entry is not offered at all (`decision` is null): a pending request is never answered by a purchase screen, and typing into the terminal stays free.
             decision = decision?.entry, onOpenDecision = { decision?.answers?.review(terminalId); onDecision() },
         )
     }
@@ -772,6 +789,7 @@ private fun ActivityRoute(graph: AppGraph, onOpenAgent: (terminalId: String) -> 
 private fun SpacesRoute(graph: AppGraph, onNotice: (String) -> Unit, onOpenAgent: (terminalId: String) -> Unit) {
     val profile by graph.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
+    val pro by graph.pro.collectAsState()
     val spaces = view.spaces
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val saga = host?.saga
@@ -813,8 +831,10 @@ private fun SpacesRoute(graph: AppGraph, onNotice: (String) -> Unit, onOpenAgent
             hostName = name, hostStatus = when (health) { HostHealth.Live -> "live"; HostHealth.Connecting -> "connecting"; else -> "not live" }, health = health,
             list = if (spaces == null) SpacesState.Failed("No connection to $name yet, so its sessions cannot be read.") else listState,
             notice = notice, watchedSession = host?.sessionName, cards = cards, progress = progress, start = start, refreshing = refreshing,
+            locked = listOf(ProCapabilities.START_AGENT, ProCapabilities.MANAGE_SESSIONS).filter { graph.locked(it, pro) }.map { it.id }.toSet(),
         ),
         SpacesActions(
+            onChoose = { id -> graph.requestCapability(id, pendingAnswerOnScreen = false) },
             onRefresh = { refreshing = true; scope.launch { try { spaces?.refresh() } finally { refreshing = false } } },
             onStop = { e -> scope.launch { spaces?.stop(e) } },
             onDelete = { e -> scope.launch { spaces?.delete(e) } },
@@ -850,12 +870,52 @@ private object SagaCopyLine {
     }
 }
 
+/** Settings' Pro card from the graph's view of Pro. The foss build says everything is unlocked; the play build shows the store's last answer and its age. */
+private fun proCard(pro: ProView, nowMillis: Long): ProCardState {
+    val summary = io.github.tuthan.paddock.billing.EntitlementPresenter.summary(pro.state, nowMillis, pro.unlocked, pro.reachable, pro.sellsPro)
+    return ProCardState(
+        headline = summary.headline, detail = summary.detail, stale = summary.stale, sellsPro = pro.sellsPro, busy = pro.busy, message = pro.message,
+        coverage = if (pro.unlocked) "" else io.github.tuthan.paddock.billing.ProCopy.coverage(io.github.tuthan.paddock.billing.ProGate.GATED),
+        refunds = if (pro.sellsPro) io.github.tuthan.paddock.billing.ProCopy.REFUNDS else null,
+        tips = if (pro.sellsPro) io.github.tuthan.paddock.billing.Products.TIPS.mapNotNull { id -> pro.prices[id]?.let { TipOption(id, it) } } else emptyList(),
+    )
+}
+
+/**
+ * Shows the Pro gate when, and only when, the user chose a Pro capability without Pro and is idle. If the user has since become busy
+ * (a pending answer on screen, Manual input, an operation in flight) or bought Pro, the request is dropped without a word.
+ */
+@Composable
+private fun ProGateHost(graph: AppGraph, pendingAnswerOnScreen: Boolean) {
+    val request by graph.gateRequest.collectAsState()
+    val pro by graph.pro.collectAsState()
+    // Read so the sheet reacts the moment either changes; the decision itself reads them again through gateContext.
+    val manual by graph.manualInput.current.collectAsState()
+    val records by graph.journal.records.collectAsState()
+    val capability = request ?: return
+    val context = graph.gateContext(pendingAnswerOnScreen)
+    val decision = io.github.tuthan.paddock.billing.ProGate.decide(capability, graph.entitlements.hasPro(pro.state), context)
+    if (decision != io.github.tuthan.paddock.billing.GateDecision.SHOW_GATE) {
+        androidx.compose.runtime.LaunchedEffect(capability, context, pro.state, manual, records) { graph.dismissGate() }
+        return
+    }
+    ProGateSheet(
+        title = io.github.tuthan.paddock.billing.ProCopy.gateTitle(capability),
+        coverage = io.github.tuthan.paddock.billing.ProCopy.coverage(io.github.tuthan.paddock.billing.ProGate.GATED),
+        price = pro.prices[io.github.tuthan.paddock.billing.Products.PRO], busy = pro.busy, message = pro.gateMessage, canBuy = pro.sellsPro,
+        onBuy = { graph.buyPro() }, onNotNow = { graph.dismissGate() },
+    )
+}
+
 @Composable
 private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () -> Unit, onEditSnippets: () -> Unit, onAlertRelay: () -> Unit, onGuardedAnswers: () -> Unit) {
     val snippets by graph.snippets.collectAsState()
     val settings by graph.settings.collectAsState()
     val profile by graph.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
+    val pro by graph.pro.collectAsState()
+    // The store's prices (the tip buttons) are asked for when the Pro card is first shown, not at start; a no-op after they are known.
+    androidx.compose.runtime.LaunchedEffect(Unit) { graph.loadPrices() }
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     // The grant can change in system settings while Paddock is in the background: read it again on every return.
@@ -884,7 +944,11 @@ private fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onAddMachine: () 
         SettingsState(
             settings.protectSensitiveScreens, access, version, machine = machine, herdrVersion = view.herdrVersion, keepPromptText = settings.keepPromptText, snippetCount = snippets.size, journalUnreadable = journalUnreadable,
             alerts = AlertsState(settings.localAlerts, settings.hidePromptOnLockScreen, recovery), agentGlyphs = settings.agentGlyphs,
+            pro = proCard(pro, graph.clock.nowMillis()),
+            guardedAnswersLocked = graph.locked(ProCapabilities.GUARDED_ANSWERS, pro),
         ),
+        onRestorePurchase = { graph.restorePurchases() },
+        onBuyTip = { graph.buyTip(it) },
         onProtectSensitive = { scope.launch { graph.setProtectSensitive(it) } },
         onAgentGlyphs = { graph.setAgentGlyphs(it) },
         onOpenSystemSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
@@ -916,10 +980,11 @@ private class DecisionState(val key: TerminalKey?, val model: DecisionModel, val
 /**
  * Watches the host's request files for [terminalId] while the screen is up (a read only while the agent is blocked) and turns them into
  * words. Null when this machine has no answers (no operation journal, so no operations at all). A reconnect changes the key, which
- * restarts the watch under the new epoch.
+ * restarts the watch under the new epoch. [watch] false reads nothing from the host (the Output tab without Pro, where nothing would show the
+ * request); the decision sheet always watches, because a request already on screen stays answerable whatever Pro says.
  */
 @Composable
-private fun rememberDecision(host: MonitoredHost, terminalId: String, nowMillis: Long): DecisionState? {
+private fun rememberDecision(host: MonitoredHost, terminalId: String, nowMillis: Long, watch: Boolean = true): DecisionState? {
     val answers = host.answers ?: return null
     val installed by host.reconciler.installed.collectAsState()
     val freshness by host.freshness.collectAsState()
@@ -930,10 +995,7 @@ private fun rememberDecision(host: MonitoredHost, terminalId: String, nowMillis:
     val presenter = remember { OperationPresenter() }
     val epoch = installed?.epoch
     val key = epoch?.let { TerminalKey(TargetRef(host.profile.hostId, host.sessionName, terminalId), it) }
-    DisposableEffect(answers, key) {
-        if (key != null) answers.watch(key)
-        onDispose { if (key != null) answers.unwatch(terminalId) }
-    }
+    RequestWatch(answers, key, watch)
     val agent = installed?.snapshot?.agents?.firstOrNull { it.terminalId == terminalId }
     val gate = if (key == null) OperationGate.Closed(SendBlock.Reading, "Reading the agent's state…")
     else AnswerGate.gate(agent, installed?.readAtMillis, freshness == Freshness.Live, records, key, currentEpoch = epoch, journalUnreadable = journalUnreadable != null)
@@ -941,6 +1003,34 @@ private fun rememberDecision(host: MonitoredHost, terminalId: String, nowMillis:
     val awaitsSettle = key != null && records.any { it.sameTerminal(key) && it.awaitsReread && (it.kind == OperationKind.Allow || it.kind == OperationKind.Deny) }
     return DecisionState(key, model, DecisionPresenter.entry(views[terminalId], nowMillis), awaitsSettle, answers)
 }
+
+/**
+ * Keeps [answers] watching [key]'s request files while this is composed and [enabled]. A watch is a poll of the host over SSH, so [enabled] is how a
+ * screen that has nothing to show for the answer (guarded answers locked) stays off the wire. [enabled] is read from state: when it turns true (Pro
+ * appears) the watch starts without the screen restarting, and when it turns false it ends. A reconnect changes [key], which restarts it under the new epoch.
+ */
+@Composable
+internal fun RequestWatch(answers: AnswerController, key: TerminalKey?, enabled: Boolean) {
+    DisposableEffect(answers, key, enabled) {
+        val watched = key?.takeIf { enabled }
+        if (watched != null) answers.watch(watched)
+        onDispose { if (watched != null) answers.unwatch(watched.target.terminalId) }
+    }
+}
+
+/** Why the decision sheet has no Set up when guarded answers are locked: it is Pro, it is asked for in Settings, and the terminal answers meanwhile. */
+internal const val GUARDED_SETUP_IS_PRO = "Guarded answers are Pro. They are set up from Settings, never over a request. Until then, answer in the terminal."
+
+/**
+ * The decision sheet's "Set up" (the read of the request failed, usually because the hook is not installed): on offer only while guarded answers are
+ * not locked. Locked, it is not offered, because the gate sheet may not open over a request (AC-13.5) and a Set up that did nothing would be a dead
+ * button; the sheet's own fallback, "Try again", re-reads, and [decisionNotice] says why there is no Set up.
+ */
+internal fun decisionSetUp(readError: String?, locked: Boolean, setUp: () -> Unit): (() -> Unit)? = if (readError != null && !locked) setUp else null
+
+/** The note above the decision sheet: what the last re-read of the host's files found, then [GUARDED_SETUP_IS_PRO] when Set up was withheld for the lock. Null when there is neither. */
+internal fun decisionNotice(settled: String?, readError: String?, locked: Boolean): String? =
+    listOfNotNull(settled, GUARDED_SETUP_IS_PRO.takeIf { readError != null && locked }).joinToString("\n").ifEmpty { null }
 
 /**
  * The decision sheet: the request the hook published for this agent, shown whole, with Yes and No for exactly that request. Every
@@ -952,6 +1042,9 @@ private fun DecisionRoute(graph: AppGraph, terminalId: String?, onBack: () -> Un
     val settings by graph.settings.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val profile by graph.profile.collectAsState()
+    // Pro gates setting guarded answers up, never the request already on screen: Yes and No work as they did.
+    val pro by graph.pro.collectAsState()
+    val setUpLocked = graph.locked(ProCapabilities.GUARDED_ANSWERS, pro)
     val unavailable: @Composable (String) -> Unit = { what ->
         Column(Modifier.fillMaxSize()) {
             ScreenHeader("Permission request", onBack = onBack, compact = true)
@@ -991,9 +1084,9 @@ private fun DecisionRoute(graph: AppGraph, terminalId: String?, onBack: () -> Un
                     }
                 }
             },
-            onSetUp = if (state.model.readError != null) onSetUp else null,
+            onSetUp = decisionSetUp(state.model.readError, setUpLocked, onSetUp),
         ),
-        onBack, notice = notice,
+        onBack, notice = decisionNotice(notice, state.model.readError, setUpLocked),
     )
 }
 

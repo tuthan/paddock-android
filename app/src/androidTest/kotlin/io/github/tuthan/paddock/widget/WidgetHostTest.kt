@@ -32,6 +32,8 @@ class WidgetHostTest {
     @Test fun eachProviderBoundToAHostIsDrawnFromTheCacheByTheSystemsOwnUpdate() {
         // Before API 29 a test has no way to hold the bind permission (no shell identity to adopt, no `cmd appwidget`): API 26 is covered by WidgetRenderTest alone.
         assumeTrue("needs UiAutomation.adoptShellPermissionIdentity(String...), API 29+", android.os.Build.VERSION.SDK_INT >= 29)
+        // A build that cannot hold Pro (the locked foss build, which never honours a saved PRO) draws no widget content at all; WidgetLockTest holds that path.
+        assumeTrue("a build whose widgets can be unlocked: the unlocked foss build, or a build that sells Pro", io.github.tuthan.paddock.billing.Distribution.UNLOCKED || io.github.tuthan.paddock.billing.Distribution.SELLS_PRO)
         val inst = InstrumentationRegistry.getInstrumentation()
         val ui = inst.uiAutomation
         ui.adoptShellPermissionIdentity("android.permission.BIND_APPWIDGET")
@@ -39,6 +41,14 @@ class WidgetHostTest {
         val host = AppWidgetHost(target, HOST_ID)
         val cacheFile = File(target.filesDir, WidgetCaches.FILE)
         val before = cacheFile.takeIf { it.exists() }?.readBytes()
+        // Widgets are a Pro capability: on a build that sells Pro this test holds Pro for its duration (WidgetLockTest covers the locked path).
+        val entitlementFile = File(target.filesDir, io.github.tuthan.paddock.billing.FileEntitlementStore.FILE_NAME)
+        val entitlementBefore = entitlementFile.takeIf { it.exists() }?.readBytes()
+        kotlinx.coroutines.runBlocking {
+            io.github.tuthan.paddock.billing.FileEntitlementStore(entitlementFile).save(
+                io.github.tuthan.paddock.billing.EntitlementState(status = io.github.tuthan.paddock.billing.ProStatus.PRO, verifiedAtMillis = 1L, acknowledged = true),
+            )
+        }
         val ids = mutableListOf<Int>()
         try {
             val readAt = System.currentTimeMillis() - 2 * 60_000L
@@ -75,6 +85,7 @@ class WidgetHostTest {
             ids.forEach { host.deleteAppWidgetId(it) }
             host.stopListening()
             if (before != null) cacheFile.writeBytes(before) else cacheFile.delete()
+            if (entitlementBefore != null) entitlementFile.writeBytes(entitlementBefore) else entitlementFile.delete()
             ui.dropShellPermissionIdentity()
         }
     }

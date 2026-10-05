@@ -23,6 +23,16 @@ import io.github.tuthan.paddock.notify.UnifiedPushConnector
 import io.github.tuthan.paddock.attention.AgentRowModel
 import io.github.tuthan.paddock.host.HostUiModel
 import io.github.tuthan.paddock.hostkey.ChangedKey
+import io.github.tuthan.paddock.billing.Distribution
+import io.github.tuthan.paddock.billing.GateContext
+import io.github.tuthan.paddock.billing.GateNotice
+import io.github.tuthan.paddock.billing.GateDecision
+import io.github.tuthan.paddock.billing.ProCapability
+import io.github.tuthan.paddock.billing.ProGate
+import io.github.tuthan.paddock.billing.ProSession
+import io.github.tuthan.paddock.billing.ProView
+import io.github.tuthan.paddock.billing.Entitlements
+import io.github.tuthan.paddock.billing.FileEntitlementStore
 import io.github.tuthan.paddock.hostkey.FileHostKeyStore
 import io.github.tuthan.paddock.hostkey.HostKeyBroker
 import io.github.tuthan.paddock.hostkey.HostKeyPolicy
@@ -60,6 +70,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -88,6 +99,8 @@ class AppGraph(private val app: Application) {
     val gate = LocalNetworkGate(app)
     val ledger = Ledger(FileLedgerStore(File(files, "ledger.json"))) { System.currentTimeMillis() }
     private val settingsStore = FileAppSettingsStore(File(files, "settings.json"))
+    /** Pro: the last verified answer from the store account, kept in a plain file; the foss build has no store and every capability unlocked (Phase 13). */
+    val entitlements = Entitlements(Distribution.billing(app), FileEntitlementStore(File(files, FileEntitlementStore.FILE_NAME)), clock, Distribution.UNLOCKED)
     /** What the phone asked of each terminal, written before it asks. Never deleted for an unknown outcome. */
     val journal = OperationJournal(FileJournalStore(File(files, "operations.json")), clock)
     /** Start-agent sagas with every id herdr returned (Phase 09); no prompt text is ever written here. */
@@ -166,6 +179,19 @@ class AppGraph(private val app: Application) {
     private val _settings = MutableStateFlow(AppSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
+    /** Everything Pro does between the screens and the store (Phase 13): one store action at a time, nothing a store call throws reaches the process, prices only when shown. */
+    private val proSession = ProSession(entitlements, scope, clock, Distribution.UNLOCKED)
+    /** What Settings and the Pro gate show about Pro: the saved state first, then whatever the store said. */
+    val pro: StateFlow<ProView> = proSession.view
+
+    private val _gateRequest = MutableStateFlow<String?>(null)
+    /** The Pro capability the user just chose without having Pro; the gate sheet shows while it is set and the user is idle. */
+    val gateRequest: StateFlow<String?> = _gateRequest.asStateFlow()
+
+    private val gateNoticeHolder = GateNotice(scope)
+    /** Why the last tap on a Pro control did nothing (a deferral, see [ProGate.deferNotice]); `PaddockRoot` shows it as a notice, and it goes by itself after [GateNotice.SHOW_MILLIS]. */
+    val gateNotice: StateFlow<String?> = gateNoticeHolder.text
+
     private val _snippets = MutableStateFlow<List<String>>(emptyList())
     /** The user's own prompt snippets: on this phone only, never synced. */
     val snippets: StateFlow<List<String>> = _snippets.asStateFlow()
@@ -174,6 +200,12 @@ class AppGraph(private val app: Application) {
         triggers.install()
         // The herd in front of the user is the alert: notifications raised while it was away are cleared when it returns.
         scope.launch { triggers.interactive.collect { if (it) runCatching { notifier.cancelAll() } } }
+        proSession.start(triggers.foreground)
+        // Whatever an earlier purchase said is not about this opening of the gate sheet; the store's prices are asked for the first time it is shown.
+        scope.launch { _gateRequest.collect { request -> proSession.gateChanged(opened = request != null) } }
+        // Widgets are a Pro capability: when the answer to "does this phone hold Pro" changes they are redrawn. This is only the trigger, by the same rule
+        // (Entitlements.hasPro): what is drawn is decided by PaddockWidgets.locked from the saved file, which is written before this state moves. With no widget placed the redraw does nothing.
+        scope.launch { pro.map { entitlements.hasPro(it.state) }.distinctUntilChanged().collect { runCatching { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) } } }
         scope.launch {
             _settings.value = settingsStore.load()
             _snippets.value = runCatching { snippetStore.load() }.getOrDefault(emptyList())
@@ -187,6 +219,42 @@ class AppGraph(private val app: Application) {
             triggers.foreground.collectLatest { visible -> if (visible) _profile.value?.let { watch(it) } else controller?.pause() }
         }
     }
+
+    /** Asks the store what the account owns (app start, a store change, a return to the foreground); waits behind a store action in flight. */
+    suspend fun verifyPro() = proSession.verify()
+
+    fun restorePurchases() = proSession.restore()
+
+    /** The store's prices, asked for the first time Settings' Pro card or the gate sheet is shown (a no-op after that and in a build without a store). */
+    fun loadPrices() = proSession.loadPrices()
+
+    fun buyTip(productId: String) = proSession.buyTip(productId)
+
+    fun buyPro() = proSession.buyPro { _gateRequest.value = null }
+
+    /**
+     * The user chose a capability. Returns whether it may run now; when it is a Pro one without Pro and the user is idle, the gate
+     * sheet is asked for instead. [pendingAnswerOnScreen] is the one fact only the screen knows: the decision sheet or guarded answers is up.
+     */
+    fun requestCapability(capabilityId: String, pendingAnswerOnScreen: Boolean): Boolean {
+        val context = gateContext(pendingAnswerOnScreen)
+        val decision = ProGate.decide(capabilityId, entitlements.hasPro(pro.value.state), context)
+        // A deferral shows no sheet, but a tap that does nothing and says nothing reads as a broken app: the notice says why, in one sentence.
+        gateNoticeHolder.decided(decision, context)
+        if (decision == GateDecision.SHOW_GATE) _gateRequest.value = capabilityId
+        return decision == GateDecision.PROCEED
+    }
+
+    fun dismissGate() { _gateRequest.value = null }
+
+    fun dismissGateNotice() = gateNoticeHolder.dismiss()
+
+    /** Whether a control for [capability] carries its Pro label and does not run: gated, and neither held nor unlocked by the build. A screen passes the [pro] value it collected, so it follows a purchase. */
+    fun locked(capability: ProCapability, view: ProView = pro.value): Boolean = ProGate.locked(capability.id, entitlements.hasPro(view.state))
+
+    /** What the user is in the middle of; the rule, including which journal rows still count as running, is [ProGate.context]. */
+    fun gateContext(pendingAnswerOnScreen: Boolean): GateContext =
+        ProGate.context(pendingAnswerOnScreen, manualInput.current.value != null, journal.records.value, clock.nowMillis())
 
     /** The one imported-key slot: importing again replaces the key, and profiles that use it keep working. */
     suspend fun importedKey(): io.github.tuthan.paddock.ssh.ImportedKeyInfo? = withContext(Dispatchers.IO) { importedKeys.info(IMPORTED_KEY_ID) }
@@ -327,6 +395,9 @@ class AppGraph(private val app: Application) {
      * read fails: the old cache stays and its time says so. Returns a line for the log.
      */
     suspend fun refreshWidgetCache(): String {
+        // A locked widget draws nothing from the cache (vault M8), so a background SSH read for it would cost battery and network for no one.
+        // The widgets' own answer (the saved file, by Entitlements.hasPro with the flavor's constants), not the view: a job that starts a cold process runs before start() has loaded the view, and a Pro holder's widget must not go stale for that.
+        if (io.github.tuthan.paddock.widget.PaddockWidgets.locked(app)) return "skipped: widgets are Pro and this phone does not hold it"
         if (triggers.foreground.value) return "skipped: the app is in front and keeps the cache itself"
         val all = runCatching { profiles.list() }.getOrDefault(emptyList())
         val watched = runCatching { settingsStore.load().watchedProfileId }.getOrNull()

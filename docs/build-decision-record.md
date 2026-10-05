@@ -33,6 +33,17 @@ Target 37 also means edge-to-edge is enforced: the first screen draws under the 
 
 `dependenciesInfo { includeInApk = false; includeInBundle = false }`: AGP otherwise writes a dependency block, encrypted to a Google Play key, into the APK signing block and the bundle. Its bytes can be neither reviewed nor reproduced, and it discloses the dependency list; with it off, `:app:sdkReleaseDependencyData` is not in the release graph.
 
+## Distribution flavors (Phase 13, 2026-10-04)
+
+One flavor dimension, `distribution`, with two flavors and one application id, `io.github.tuthan.paddock`, so every route is the same app signed with the one release key and installs update over each other.
+
+| Flavor | Carries | Used by |
+| --- | --- | --- |
+| `foss` | no billing library; `Distribution.UNLOCKED` is `false` in every published build, so the free version: Pro capabilities locked, nothing to buy (vault decision M4, taken 2026-10-04). A source build with `-PpaddockUnlocked=true` turns it on; the release cut passes `-PpaddockUnlocked=false` | GitHub releases, F-Droid, IzzyOnDroid, the device harness and `tools/check.sh` |
+| `play` | Play Billing 9.1.0 and the libraries it brings, through `playImplementation` only; `Distribution.UNLOCKED = false`; Pro and tips are bought through Google Play | the Google Play listing |
+
+`:app` generates `BuildConfig` (`buildFeatures.buildConfig`) only to carry that one constant. The flavor renames every variant: the tasks are `assemble<Flavor>Debug`, `assemble<Flavor>Release`, `bundlePlayRelease`, `test<Flavor>DebugUnitTest`, `lint<Flavor>Debug` and `assemble<Flavor>DebugAndroidTest`; the outputs are `app/build/outputs/apk/<flavor>/<type>/app-<flavor>-<type>[-unsigned].apk` and `.../androidTest/<flavor>/debug/app-<flavor>-debug-androidTest.apk`. Every caller was changed in the same commit: `tools/check.sh` (both flavors, since CI runs it), `tools/release-build.sh` (`--flavor`), the README, this record, and the nine device flows in `paddock-harness`, which build and install the `foss` variants. The strict lockfiles gained the per-flavor configurations and, for `play`, 18 coordinates (`docs/dependency-reviews.md`); the `foss` configurations resolve the same coordinates as before.
+
 ## Repositories, locks, verification
 
 Google Maven is restricted to groups `com.android.*`, `com.google.*` and `androidx.*`, then Maven Central; no Gradle Plugin Portal; `FAIL_ON_PROJECT_REPOS`.
@@ -46,11 +57,11 @@ Google Maven is restricted to groups `com.android.*`, `com.google.*` and `androi
 Regenerate locks and checksums only as a reviewed change. Run the full task set twice, from an empty Gradle home (the cold path CI takes, which reads redirect POMs and their parents) and then on the normal one, so the file covers both:
 
 ```sh
-TASKS="help buildEnvironment check :core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest"
+TASKS="help buildEnvironment check :core:check :app:testFossDebugUnitTest :app:testPlayDebugUnitTest :app:lintFossDebug :app:lintPlayDebug :app:assembleFossDebug :app:assemblePlayDebug :app:assembleFossRelease :app:assemblePlayRelease :app:bundlePlayRelease :app:assembleFossDebugAndroidTest :app:assemblePlayDebugAndroidTest"
 ./gradlew -g "$(mktemp -d)" --rerun-tasks $TASKS --write-verification-metadata sha256
-./gradlew -g "$(mktemp -d)" --rerun-tasks -PminifiedTest=true :app:assembleDebug :app:assembleDebugAndroidTest --write-verification-metadata sha256
+./gradlew -g "$(mktemp -d)" --rerun-tasks -PminifiedTest=true :app:assembleFossDebug :app:assembleFossDebugAndroidTest :app:assemblePlayDebug :app:assemblePlayDebugAndroidTest --write-verification-metadata sha256
 ./gradlew --rerun-tasks $TASKS --write-locks --write-verification-metadata sha256
-./gradlew --rerun-tasks -PminifiedTest=true :app:assembleDebug :app:assembleDebugAndroidTest --write-locks --write-verification-metadata sha256
+./gradlew --rerun-tasks -PminifiedTest=true :app:assembleFossDebug :app:assembleFossDebugAndroidTest :app:assemblePlayDebug :app:assemblePlayDebugAndroidTest --write-locks --write-verification-metadata sha256
 ```
 
 Gradle only adds entries; to prune, delete the file first and run all four. The 2026-10-01 regeneration ran offline, with the empty-home runs pointed (by an init script) at a local Maven mirror of the cache, and every task set then passed on both homes. `--write-locks` over the same task sets changed no lockfile.
@@ -63,7 +74,7 @@ The build reads nothing outside the repository. The only herdr input is `protoco
 
 | Tier | Where | Run |
 | --- | --- | --- |
-| Gate | any machine with JDK 17 and the SDK packages above; CI | `tools/check.sh` (CI) or `tools/check.sh --offline`: wrapper, SDK revisions, pins, script self-tests, `:core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:compileDebugAndroidTestKotlin` (the instrumentation sources compile; running them needs an emulator), with `PADDOCK_TEST_SOCKET` removed |
+| Gate | any machine with JDK 17 and the SDK packages above; CI | `tools/check.sh` (CI) or `tools/check.sh --offline`: wrapper, SDK revisions, pins, script self-tests, `:core:check` and, for each flavor, `:app:test<Flavor>DebugUnitTest :app:lint<Flavor>Debug :app:assemble<Flavor>Debug :app:compile<Flavor>DebugAndroidTestKotlin` (the instrumentation sources compile; running them needs an emulator), with `PADDOCK_TEST_SOCKET` removed |
 | JVM | any machine with JDK 17, CI | `./gradlew :core:test` |
-| Emulator smoke | AVDs `sc-api26` (API 26 google_apis) and `sc-api36`, started `-read-only` | `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`, then `adb install` both APKs and `adb shell am instrument -w io.github.tuthan.paddock.test/androidx.test.runner.AndroidJUnitRunner` |
+| Emulator smoke | AVDs `sc-api26` (API 26 google_apis) and `sc-api36`, started `-read-only` | `./gradlew :app:assembleFossDebug :app:assembleFossDebugAndroidTest`, then `adb install` both APKs and `adb shell am instrument -w io.github.tuthan.paddock.test/androidx.test.runner.AndroidJUnitRunner` |
 | Physical | one current phone | from Phase 02 |

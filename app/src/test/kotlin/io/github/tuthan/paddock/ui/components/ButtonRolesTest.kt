@@ -49,9 +49,10 @@ class ButtonRolesTest {
     private val secondary = listOf(
         "Cancel", "Back", "Back to the herd", "Close", "Not now", "Done", "Dismiss", "Keyboard", "Hide keyboard", "Release", "Resize to fit",
         "Request control", "Edit", "Move up", "Copy key only", "Show as QR", "Check again", "Keep the old key", "Copy", "Share", "Restart", "Leave it",
+        "Restore purchase", "Tip \${tip.price}",
     )
     private val danger = listOf("Esc", "Ctrl+C", "Esc · Interrupt", "Remove", "Reset the record…", "Unregister", "Replace with the new key", "Stop…", "Delete…")
-    private val primary = listOf("Connect", "Send prompt", "Import key", "Yes", "Review prompt", "Install the relay", "Start an agent…", "Start agent", "Start with this name", "Rename")
+    private val primary = listOf("Connect", "Send prompt", "Import key", "Yes", "Review prompt", "Install the relay", "Start an agent…", "Start agent", "Start with this name", "Rename", "Buy Pro")
     private val ghost = listOf("Re-read", "Try again", "Check the setup", "Open terminal", "Manual input", "Focus on desktop", "Trust and connect", "Answer in the terminal instead", "Rename agent…", "Show its workspace on the desktop",
         "Show its tab on the desktop", "Open the pane", "Choose another name", "Trust this repository…", "Start anyway", "Open it", "Clear the name")
 

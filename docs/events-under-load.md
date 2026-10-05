@@ -48,7 +48,7 @@ stalls for less than a few seconds. The 10 per second, 256 and 512 figures descr
 ## Reproduce
 
 ```sh
-paddock-harness/probe-event-loss/reproduce.sh     # about 5 minutes; captures and logs under build/event-loss-<time>/
+paddock-harness/probe-event-loss/reproduce.sh     # about 5 minutes; captures and logs under the harness's out/event-loss-<time>/
 ```
 
 It creates, uses and stops only `paddock-test-evlost` (`tools/setup-session.sh` refuses any other name pattern), so the default

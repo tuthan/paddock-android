@@ -1,0 +1,20 @@
+Paddock is a phone companion for herdr, the terminal workspace manager for coding agents. It shows which of your agents is working, blocked or done, lets you read what they printed, and lets you answer when one needs you, without opening a laptop.
+
+<b>Free</b>
+• Shows every agent on the machine you connect to, with its state and how long it has been in it
+• Reads agent output on the phone, and opens the live terminal when you need to type
+• Sends a prompt from a composer, with a record that tells you if an earlier send may already have arrived
+• Raises a notification while the app is open when an agent becomes blocked or done; a small relay script on your machine can reach a locked phone through ntfy or UnifiedPush
+
+<b>Pro</b>
+Four things are Pro, a one-time purchase in the Google Play build. The free build (GitHub, F-Droid, IzzyOnDroid) has them locked and nothing to buy; everything else is free.
+• Answers a Claude Code permission request with Yes or No through a guarded hook, only when you have installed it. Without Pro, type the answer in the Terminal tab or Manual input; every alert still arrives
+• Starts agents, with an outcome you can see. Without Pro, start them in herdr on the host; the app still shows them
+• Stops or deletes sessions, with an outcome you can see. Without Pro, use herdr on the host
+• Home-screen widgets for the herd. Without Pro, the app itself shows the herd
+
+<b>How it connects</b>
+Paddock talks to your machine over SSH only, with a key made on the phone that never leaves it. There is no Paddock server, no account, no analytics and no crash upload. Agent output is shown and not kept.
+
+<b>You need</b>
+herdr 0.9.1 on a machine you can reach over SSH. Paddock is an independent project and is not affiliated with herdr.

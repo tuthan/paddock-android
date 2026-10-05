@@ -109,7 +109,7 @@ object WidgetRenderer {
         }
         rv.setViewVisibility(R.id.label, if (compact) View.GONE else View.VISIBLE)
         // Two by two is too small for the whole sentence; the description (what TalkBack reads) keeps it.
-        rv.setTextViewText(R.id.label, if (content.hasData) content.countLabel else context.getString(R.string.widget_unread_short))
+        rv.setTextViewText(R.id.label, if (content.hasData || content.countLabel.isNotEmpty()) content.countLabel else context.getString(R.string.widget_unread_short))
         size(rv, R.id.label, 14f, fs); size(rv, R.id.asof, 12f, fs)
         rv.setViewVisibility(R.id.asof, if (content.asOfLabel != null) View.VISIBLE else View.GONE)
         content.asOfLabel?.let { rv.setTextViewText(R.id.asof, it) }

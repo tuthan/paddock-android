@@ -4,6 +4,10 @@ A phone companion for [herdr](https://herdr.dev): answer the herd, do not operat
 
 Status: Phases 00 to 12 are implemented (Phase 09's multi-host slices are held; Phase 08 and the optional Phases 11 and 12 are built). The Phase 10 release cut has been rehearsed with a throwaway key and nothing is published (`docs/release.md`). `:core` is JVM only (enforced); `:app` is the Android shell. Acceptance that needs a physical phone or other people is open: TalkBack, the real-radio link cuts, widgets on a real launcher, the usability test and a second person following `docs/host-setup.md`; the vault's evidence reports list each item. The notes for what each part does are in `docs/` (`widgets.md`, `accessibility.md`, `contrast.md`, `release.md`, `host-setup.md`, `operations.md`, `spaces.md`, `alerts.md`, `terminal-control.md`).
 
+## Licence, and the free and full versions
+
+Paddock is open source under the Apache License 2.0 (`LICENSE`). The published `foss` builds (GitHub, F-Droid, IzzyOnDroid) are the **free version**: Pro capabilities are locked there and there is nothing to buy. Pro is bought in the Google Play build (`play` flavor, Play Billing). Anyone who wants every capability builds from source: `./gradlew :app:assembleFossRelease -PpaddockUnlocked=true` (needs your own signing key, see `docs/release.md`). Four things are Pro (decision M8): guarded Yes/No answers, starting agents, stopping or deleting sessions, and home-screen widgets. The free version has them locked, and each has a free path (the Terminal tab or Manual input, herdr on the host, the app itself). Nothing is sold yet. See `docs/billing.md`.
+
 ## Requirements
 
 - Temurin JDK 17 (`mise install` reads `mise.toml`; point `JAVA_HOME` at it, since `gradle/gradle-daemon-jvm.properties` requires an Adoptium 17 daemon) and the Android SDK packages `platforms;android-37.0` (revision 2) and `build-tools;36.0.0`, installed with `sdkmanager`: the build never downloads them (`android.builder.sdkDownload=false`). Set `sdk.dir` in `local.properties` or `ANDROID_HOME`.
@@ -12,12 +16,12 @@ Status: Phases 00 to 12 are implemented (Phase 09's multi-host slices are held; 
 ## Build and test
 
 ```sh
-tools/check.sh --offline                     # the CI gate: wrapper, SDK revisions, pins, script self-tests, check, unit tests, lint, debug APK
-./gradlew :core:test :app:assembleDebug      # JVM tests and the debug APK
+tools/check.sh --offline                     # the CI gate: wrapper, SDK revisions, pins, script self-tests, check, unit tests, lint, debug APK, for both flavors
+./gradlew :core:test :app:assembleFossDebug  # JVM tests and the foss debug APK (the play flavor: :app:assemblePlayDebug)
 ./tools/check-pins.sh                        # installed herdr and the pinned schema and fixtures still agree
 ./tools/check-pins.sh --pins-only            # the same hash and coverage rule without herdr (part of tools/check.sh)
 ./tools/test-scripts.sh                      # self-tests of the fixture and pin scripts against a fake herdr
-tools/release-build.sh --offline             # two clean release builds compared byte for byte (docs/release.md); then release-sign.sh, check-release-apk.py, run-release-smoke.py
+tools/release-build.sh --offline             # two clean foss release builds compared byte for byte (docs/release.md; --flavor play for the billing build); then release-sign.sh, check-release-apk.py, run-release-smoke.py
 ```
 
 `FixturePinTest` and `tools/check-pins.sh` fail if a file pinned in `protocol/SOURCE.json` is missing or differs, or if any file under `protocol/` (except `SOURCE.json` itself) or `fixtures/` is not pinned there. A fixture change is a deliberate pin update: recapture, `git rm` the previous version's corpus and schema if herdr moved, run `tools/pin-source.sh <date> <host>` (it reads the herdr version and protocol from the corpus and refuses stale files), review the diff, commit schema, fixtures and manifest together.

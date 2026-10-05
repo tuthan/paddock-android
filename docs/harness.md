@@ -32,7 +32,7 @@ The harness reaches `tools/test-sshd.sh`, `tools/fake-agent.py`, `tools/desktop-
 
 - A harness-only change never changes an app verdict. It is rerun evidence: a line in the harness's `docs/runs.md` and a mention in the next app report.
 - A slice that changes a device flow lands as a harness commit whose message names the app commit it was run against; the app commit's message names the harness commit. The Kotlin tests keep landing with the code they cover.
-- The evidence template's `Harness commit` row is filled for every run that used a device flow, a device check or a measurement.
+- The evidence template's `Harness commit` row is filled for every run that used a device flow, a device check or a measurement. It is copied from the run's `provenance.txt`, which names this checkout's commit, the harness commit (each marked when the tree had uncommitted changes) and the sha256 of the APKs on the device.
 - A shared stand-in that changes here is an app commit. A harness run that notices it records the app commit.
 
 ## Visibility

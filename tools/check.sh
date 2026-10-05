@@ -2,9 +2,9 @@
 # The CI gate, runnable locally: .github/workflows/build.yml installs the JDK and the SDK packages, then runs exactly this.
 #   tools/check.sh [extra gradle args, e.g. --offline]
 # Stages: wrapper jar hash, SDK packages at the recorded revisions, protocol and fixture pins, bundled font hashes, self-tests of the fixture
-# and pin scripts, the host control helper self-test, the alert relay tests, the guarded-answers hook and writer tests, then :core:check
-# :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:compileDebugAndroidTestKotlin. Needs no herdr, adb or
-# emulator. PADDOCK_TEST_SOCKET is removed from the environment so the integration tests skip here as they do in CI.
+# and pin scripts, the host control helper self-test, the alert relay tests, the guarded-answers hook and writer tests, then :core:check and
+# both flavors (foss: GitHub and F-Droid; play: the billing build): :app:test<Flavor>DebugUnitTest :app:lint<Flavor>Debug :app:assemble<Flavor>Debug,
+# :app:compile<Flavor>DebugAndroidTestKotlin. Needs no herdr, adb or emulator. PADDOCK_TEST_SOCKET is removed from the environment so the integration tests skip here as they do in CI.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -48,5 +48,8 @@ stage "Guarded answers: pinned host scripts and the hook and writer tests (fake 
 python3 tools/pin-host.py --check
 python3 tools/test-permission-hook.py
 
-stage "Gradle: :core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:compileDebugAndroidTestKotlin"
-env -u PADDOCK_TEST_SOCKET ./gradlew --no-daemon --stacktrace "$@" :core:check :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:compileDebugAndroidTestKotlin
+GRADLE_TASKS=(:core:check
+  :app:testFossDebugUnitTest :app:lintFossDebug :app:assembleFossDebug :app:compileFossDebugAndroidTestKotlin
+  :app:testPlayDebugUnitTest :app:lintPlayDebug :app:assemblePlayDebug :app:compilePlayDebugAndroidTestKotlin)
+stage "Gradle: ${GRADLE_TASKS[*]}"
+env -u PADDOCK_TEST_SOCKET ./gradlew --no-daemon --stacktrace "$@" "${GRADLE_TASKS[@]}"

@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "io.github.tuthan.paddock"
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     compileSdk = 37
 
     defaultConfig {
@@ -20,6 +20,25 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // One code base, one application id and one release key on every route; the flavors differ only in what is added to it. The foss
+    // build (GitHub, F-Droid, IzzyOnDroid) is the free version: no billing library and Pro capabilities locked, with no way to buy them
+    // there (vault decision M4, 2026-10-04). Whoever wants every capability builds from source: -PpaddockUnlocked=true turns the foss
+    // build's own switch on, and the release cut always passes -PpaddockUnlocked=false. The foss *debug* variant (the device harness, the
+    // flows and instrumentation, none of it published) defaults to unlocked, so a flow written before Pro existed still reaches every
+    // screen; -PpaddockUnlocked=false builds it locked to rehearse the gate (androidComponents below). The play build adds the Play
+    // Billing library and is the only place Pro is sold (Phase 13).
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("foss") {
+            dimension = "distribution"
+            val unlocked = providers.gradleProperty("paddockUnlocked").map { it.toBooleanStrict() }.orElse(false).get()
+            buildConfigField("boolean", "UNLOCKED", unlocked.toString())
+        }
+        create("play") {
+            dimension = "distribution"
+            buildConfigField("boolean", "UNLOCKED", "false")
+        }
+    }
     buildTypes {
         // -PminifiedTest=true runs the debug variant through R8 so instrumentation exercises the shrunk graph.
         if (providers.gradleProperty("minifiedTest").isPresent) {
@@ -81,6 +100,11 @@ abstract class GenerateRelayAssets : DefaultTask() {
 
 androidComponents {
     onVariants { variant ->
+        // The property wins in every foss variant; without it only a foss release is locked (see the flavor comment above).
+        if (variant.flavorName == "foss") {
+            val unlocked = providers.gradleProperty("paddockUnlocked").map { it.toBooleanStrict() }.orElse(variant.buildType == "debug").get()
+            variant.buildConfigFields?.put("UNLOCKED", com.android.build.api.variant.BuildConfigField("boolean", unlocked.toString(), "foss: -PpaddockUnlocked, else unlocked only in debug"))
+        }
         val task = tasks.register<GenerateRelayAssets>("generate${variant.name.replaceFirstChar { it.uppercase() }}RelayAssets") {
             scripts.from(
                 listOf("paddock-relay.py", "paddock-control.py", "paddock-alert-relay.py", "paddock-alert-relay.service", "alert-relay.example.toml", "paddock-decide.py", "paddock-claude-permission-hook.py")
@@ -100,6 +124,9 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     implementation(libs.activity.compose)
+
+    // Play Billing and what it brings: the play flavor only. The foss flavor never sees them (tools/check-release-apk.py --flavor foss denies them).
+    "playImplementation"(libs.play.billing)
 
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)

@@ -50,7 +50,9 @@ class WidgetPresenter(private val zone: ZoneId = ZoneId.systemDefault(), locale:
     private val clock = DateTimeFormatter.ofPattern("HH:mm", locale)
     private val dayAndClock = DateTimeFormatter.ofPattern("EEE HH:mm", locale)
 
-    fun present(cache: WidgetCache?, nowMillis: Long): WidgetContent {
+    /** [locked]: widgets are a Pro capability (vault M8) and Pro is not held, so whatever the cache holds, the widget draws no count and says why. */
+    fun present(cache: WidgetCache?, nowMillis: Long, locked: Boolean = false): WidgetContent {
+        if (locked) return LOCKED
         if (cache == null) return NO_DATA
         val c = cache.counts
         val needs = c.needsYou
@@ -93,6 +95,12 @@ class WidgetPresenter(private val zone: ZoneId = ZoneId.systemDefault(), locale:
         /** Two missed 15-minute refreshes. */
         const val STALE_AFTER_MILLIS = 30 * 60_000L
         private const val FUTURE_SLACK_MILLIS = 5 * 60_000L
+
+        /** A locked widget: no count, no machine, no rows, and nothing read from the cache. It is not a stale read, so it never shows a time. */
+        val LOCKED = WidgetContent(
+            hasData = false, asOf = null, asOfLabel = null, stale = false, tone = WidgetTone.Quiet, machine = "", count = null, countLabel = "Pro", headline = "Widgets are Pro",
+            detail = "", rows = emptyList(), description = "Paddock widgets are a Pro capability. Open Paddock, then Settings, to see where Pro comes from. No count is shown.",
+        )
 
         /** No cache yet, or none readable: no number at all. */
         val NO_DATA = WidgetContent(

@@ -40,6 +40,7 @@ import io.github.tuthan.paddock.ops.CloseTarget
 import io.github.tuthan.paddock.ops.SagaCardModel
 import io.github.tuthan.paddock.ops.SagaCopy
 import io.github.tuthan.paddock.ops.SagaRules
+import io.github.tuthan.paddock.billing.ProCapabilities
 import io.github.tuthan.paddock.ops.SavedLayoutParser
 import io.github.tuthan.paddock.ops.SavedLayoutResult
 import io.github.tuthan.paddock.ops.SessionCopy
@@ -87,9 +88,16 @@ data class SpacesScreenState(
     val progress: SagaProgress?,
     val start: StartAvailability,
     val refreshing: Boolean = false,
+    /** Ids of the Pro capabilities this screen offers that are locked right now (no Pro, not an unlocked build): their buttons say "Pro" and ask [SpacesActions.onChoose] first. */
+    val locked: Set<String> = emptySet(),
 )
 
+/** A control for a locked Pro capability says so in its own label, so the lock is read by TalkBack and seen without a colour. */
+internal fun proLabel(text: String, locked: Boolean) = if (locked) "$text · Pro" else text
+
 class SpacesActions(
+    /** The user chose a Pro capability: true when it may run now. False means the gate has been asked for (or deferred), and nothing runs. Free capabilities never reach it. */
+    val onChoose: (capabilityId: String) -> Boolean = { true },
     val onRefresh: () -> Unit = {},
     val onStop: (SessionEntry) -> Unit = {},
     val onDelete: (SessionEntry) -> Unit = {},
@@ -172,7 +180,10 @@ fun SpacesScreen(state: SpacesScreenState, actions: SpacesActions, modifier: Mod
                 state.progress?.let { Progress(it, onOpen = { id -> actions.onOpenAgent(id) }, onDismiss = actions.onDismissProgress) }
 
                 when (val s = state.start) {
-                    is StartAvailability.Available -> PaddockButton("Start an agent…", { form = true }, icon = io.github.tuthan.paddock.ui.theme.PaddockIcons.Plus)
+                    is StartAvailability.Available -> PaddockButton(
+                        proLabel("Start an agent…", ProCapabilities.START_AGENT.id in state.locked), { if (actions.onChoose(ProCapabilities.START_AGENT.id)) form = true },
+                        icon = io.github.tuthan.paddock.ui.theme.PaddockIcons.Plus,
+                    )
                     is StartAvailability.Unavailable -> Note(s.reason)
                 }
 
@@ -182,7 +193,12 @@ fun SpacesScreen(state: SpacesScreenState, actions: SpacesActions, modifier: Mod
                     is SpacesState.Failed -> Banner(l.message, actionLabel = "Try again", onAction = actions.onRefresh)
                     is SpacesState.Ready -> {
                         if (l.rows.isEmpty()) Note("herdr lists no sessions on this machine.")
-                        l.rows.forEach { row -> SessionCard(row, watched = row.entry.name == state.watchedSession, clock = clock, ask = { ask = it }, onReread = actions.onReread) }
+                        l.rows.forEach { row ->
+                            SessionCard(
+                                row, watched = row.entry.name == state.watchedSession, clock = clock, locked = ProCapabilities.MANAGE_SESSIONS.id in state.locked,
+                                ask = { if (actions.onChoose(ProCapabilities.MANAGE_SESSIONS.id)) ask = it }, onReread = actions.onReread,
+                            )
+                        }
                         Note("List read at ${clock(l.readAtMillis)}. It is that moment's view, not a live one: pull down to read it again.")
                     }
                 }
@@ -193,7 +209,7 @@ fun SpacesScreen(state: SpacesScreenState, actions: SpacesActions, modifier: Mod
 }
 
 @Composable
-private fun SessionCard(row: SessionRow, watched: Boolean, clock: (Long) -> String, ask: (SpacesAsk) -> Unit, onReread: (String) -> Unit) {
+private fun SessionCard(row: SessionRow, watched: Boolean, clock: (Long) -> String, locked: Boolean, ask: (SpacesAsk) -> Unit, onReread: (String) -> Unit) {
     val c = PaddockTokens.colors
     val e = row.entry
     val shape = RoundedCornerShape(PaddockTokens.radii.row)
@@ -222,12 +238,12 @@ private fun SessionCard(row: SessionRow, watched: Boolean, clock: (Long) -> Stri
             Text("The last operation on this session has an unknown outcome. Read the list again before doing anything else with it.", style = PaddockTokens.type.secondary, color = c.needsYou)
             PaddockButton("Re-read", { onReread(e.name) }, kind = ButtonKind.Ghost, small = true)
         } else if (e.running) {
-            PaddockButton("Stop…", { ask(SpacesAsk.Stop(e)) }, kind = ButtonKind.Danger, small = true, enabled = !row.busy)
+            PaddockButton(proLabel("Stop…", locked), { ask(SpacesAsk.Stop(e)) }, kind = ButtonKind.Danger, small = true, enabled = !row.busy)
         } else {
             val refusal = SessionRules.deleteRefusal(e)
             ButtonPair(
                 { m -> PaddockButton("Restart", {}, m, kind = ButtonKind.Secondary, small = true, enabled = false) },
-                { m -> PaddockButton("Delete…", { ask(SpacesAsk.Delete(e)) }, m, kind = ButtonKind.Danger, small = true, enabled = refusal == null && !row.busy) },
+                { m -> PaddockButton(proLabel("Delete…", locked), { ask(SpacesAsk.Delete(e)) }, m, kind = ButtonKind.Danger, small = true, enabled = refusal == null && !row.busy) },
             )
             if (refusal != null) Text(refusal, style = PaddockTokens.type.secondary, color = c.dim)
         }

@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Static privacy and manifest inspection of a built APK (the Phase 10 checklist's "manifest inspection", AC-10.4).
 
-  tools/check-release-apk.py <apk> [report-file]
+  tools/check-release-apk.py <apk> [report-file] [--flavor foss|play]
+
+--flavor foss (the default, and the strict one: GitHub, F-Droid, IzzyOnDroid) keeps the whole deny list below, Play Billing, Play services and
+Google's datatransport included. --flavor play checks the Play build against the named additions in PLAY_* below, written from a built play APK
+(Phase 13, 2026-10-04) and never allowed by a broad prefix: the one extra permission, the two extra <queries> intents, the six extra components
+(all not exported) and the dex packages under the billing, Play-services and datatransport prefixes. Anything else that appears fails, and the list
+is extended by a person reading the diff, not by the script.
 
 Checks, each printed as PASS or FAIL with what was found; the exit status is 1 if any FAIL:
-  - the permission set is exactly the four the design names (nothing else, no READ_LOGS, no storage, no contacts, no location);
+  - the permission set is exactly the four the design names (nothing else, no READ_LOGS, no storage, no contacts, no location); play adds com.android.vending.BILLING and nothing else;
   - not debuggable; allowBackup false; usesCleartextTraffic false; a network security config and both backup rule files are present;
   - the exported components are exactly the launcher activity, the UnifiedPush receiver and the three widget providers, plus the profile installer's
     receiver only while it requires the DUMP permission;
@@ -16,8 +22,36 @@ Not checked here (they need a running app): the sockets the app opens, FLAG_SECU
 """
 import hashlib, json, os, re, subprocess, sys, zipfile
 
-APK = sys.argv[1]
-REPORT = sys.argv[2] if len(sys.argv) > 2 else None
+args = sys.argv[1:]
+FLAVOR = "foss"
+if "--flavor" in args:
+    i = args.index("--flavor")
+    FLAVOR = args[i + 1] if i + 1 < len(args) else ""
+    del args[i:i + 2]
+if FLAVOR not in ("foss", "play") or not args:
+    sys.exit("usage: check-release-apk.py <apk> [report-file] [--flavor foss|play]")
+APK = args[0]
+REPORT = args[1] if len(args) > 1 else None
+PLAY = FLAVOR == "play"
+
+# What the play flavor adds over foss, written from a built play APK (Phase 13) and named in full; see docs/billing.md.
+PLAY_PERMISSIONS = ["com.android.vending.BILLING"]
+PLAY_QUERY_ACTIONS = ["com.android.vending.billing.InAppBillingService.BIND", "com.google.android.apps.play.billingtestcompanion.BillingOverrideService.BIND"]
+PLAY_COMPONENTS = sorted([
+    "com.android.billingclient.api.ProxyBillingActivity", "com.android.billingclient.api.ProxyBillingActivityV2",
+    "com.google.android.gms.common.api.GoogleApiActivity",
+    "com.google.android.datatransport.runtime.backends.TransportBackendDiscovery",
+    "com.google.android.datatransport.runtime.scheduling.jobscheduling.JobInfoSchedulerService",
+    "com.google.android.datatransport.runtime.scheduling.jobscheduling.AlarmManagerSchedulerBroadcastReceiver",
+])
+PLAY_DEX_PACKAGES = {
+    "com/android/billingclient/api", "com/google/android/datatransport/cct", "com/google/android/datatransport/runtime/backends",
+    "com/google/android/datatransport/runtime/scheduling/jobscheduling", "com/google/android/gms/auth/api/signin", "com/google/android/gms/common",
+    "com/google/android/gms/common/annotation", "com/google/android/gms/common/api", "com/google/android/gms/common/internal",
+    "com/google/android/gms/common/util", "com/google/android/gms/dynamite",
+}
+# The prefixes the play flavor may carry, each only as the packages named above.
+PLAY_PREFIXES = (b"com/android/billingclient", b"com/google/android/gms", b"com/google/android/datatransport")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AAPT2 = os.path.join(os.environ.get("ANDROID_HOME", os.path.expanduser("~/Android/Sdk")), "build-tools/36.0.0/aapt2")
 
@@ -36,10 +70,10 @@ names = z.namelist()
 # ---- manifest ----
 tree = aapt("dump", "xmltree", "--file", "AndroidManifest.xml", APK)
 perms = sorted(set(re.findall(r'uses-permission[^\n]*\n\s+A: http://schemas.android.com/apk/res/android:name\(0x01010003\)="([^"]+)"', tree)))
-EXPECTED = sorted(["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_LOCAL_NETWORK"])
+EXPECTED = sorted(["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_LOCAL_NETWORK"] + (PLAY_PERMISSIONS if PLAY else []))
 # AGP adds a signature-level DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION for the app's own receivers; it is the app's, not a grant.
 perms = [p for p in perms if not p.endswith(".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")]
-say(perms == EXPECTED, "permission set is exactly the four named", ", ".join(p.rsplit(".", 1)[1] for p in perms))
+say(perms == EXPECTED, "permission set is exactly the four named" if not PLAY else "permission set is exactly the four named plus BILLING", ", ".join(p.rsplit(".", 1)[1] for p in perms))
 
 def attr(name):
     m = re.search(r'A: http://schemas.android.com/apk/res/android:%s\([^)]*\)=(?:"([^"]*)"|\(type 0x\w+\)(0x\w+))' % name, tree)
@@ -79,6 +113,19 @@ PROFILE = "androidx.profileinstaller.ProfileInstallReceiver"
 got = sorted(c["name"].replace("io.github.tuthan.paddock", "") for c in exported if c["exported"] and not (c["name"] == PROFILE and c["permission"] == "android.permission.DUMP"))
 WANT = sorted([".MainActivity", ".notify.UnifiedPushReceiver", ".widget.SummaryWidgetProvider", ".widget.CountWidgetProvider", ".widget.StripWidgetProvider"])
 say(got == WANT, "exported components are the five named (and the profile installer's DUMP-guarded receiver)", ", ".join(got))
+# Components from the billing, Play-services and datatransport libraries: none in foss; in play exactly the named six, all not exported.
+LIB = ("com.android.billingclient.", "com.google.android.gms.", "com.google.android.datatransport.")
+lib_components = sorted(c["name"] for c in exported if c["name"].startswith(LIB))
+if PLAY:
+    say(lib_components == PLAY_COMPONENTS and not any(c["exported"] for c in exported if c["name"].startswith(LIB)),
+        "library components are exactly the six named, none exported", ", ".join(n.rsplit(".", 1)[1] for n in lib_components))
+else:
+    say(not lib_components, "no billing, Play-services or datatransport component", ", ".join(lib_components))
+# <queries>: UnifiedPush's distributor lookup; play adds the two billing intents.
+qm = re.search(r"\n(\s*)E: queries[^\n]*\n(.*?)(?=\n\1E: |\n\1?\s*E: application)", tree, re.S)
+qactions = sorted(set(re.findall(r'android:name\(0x01010003\)="([^"]+)"', qm.group(2)))) if qm else []
+WANT_Q = sorted(["org.unifiedpush.android.distributor.REGISTER"] + (PLAY_QUERY_ACTIONS if PLAY else []))
+say(qactions == WANT_Q, "<queries> intents are exactly the named ones", ", ".join(qactions))
 implicit = sorted(c["name"] for c in exported if c["exported"] is None)
 say(not implicit, "every component says explicitly whether it is exported", ", ".join(implicit) or f"{len(exported)} components")
 
@@ -87,9 +134,20 @@ dex_names = [n for n in names if re.fullmatch(r"classes\d*\.dex", n)]
 blob = b"".join(z.read(n) for n in dex_names)
 DENY = [b"com/google/firebase", b"com/google/android/gms", b"io/sentry", b"com/crashlytics", b"io/fabric", b"com/bugsnag", b"com/facebook", b"com/adjust",
         b"com/amplitude", b"com/mixpanel", b"io/appcenter", b"com/microsoft/appcenter", b"com/segment", b"com/appsflyer", b"com/flurry", b"com/onesignal",
-        b"com/google/android/play/core", b"com/android/billingclient", b"androidx/work/", b"androidx/glance/", b"androidx/compose/ui/tooling", b"androidx/compose/ui/test"]
-hits = [d.decode() for d in DENY if d in blob]
-say(not hits, "no analytics, crash, ad, billing or tooling SDK in the dex", ", ".join(hits) or f"{len(dex_names)} dex file(s) scanned")
+        b"com/google/android/play/core", b"com/android/billingclient", b"com/google/android/datatransport", b"androidx/work/", b"androidx/glance/",
+        b"androidx/compose/ui/tooling", b"androidx/compose/ui/test"]
+if PLAY:
+    # Types the dex names under the three play prefixes, as packages; each must be on the named list. R8 renames library internals, so the list is the
+    # packages that keep their names: the billing API classes, Play-services common and the datatransport entry points.
+    descriptors = {m.decode() for m in re.findall(rb"L((?:com/android/billingclient|com/google/android/gms|com/google/android/datatransport)[A-Za-z0-9_/$]*);", blob)}
+    packages = {d.rsplit("/", 1)[0] for d in descriptors}
+    unlisted = sorted(packages - PLAY_DEX_PACKAGES)
+    say(not unlisted and "com/android/billingclient/api" in packages, "dex packages under the billing, Play-services and datatransport prefixes are the named ones, billing is present",
+        ", ".join(unlisted) or f"{len(packages)} packages")
+    hits = [d.decode() for d in DENY if d in blob and not d.startswith(PLAY_PREFIXES)]
+else:
+    hits = [d.decode() for d in DENY if d in blob]
+say(not hits, "no analytics, crash, ad, billing or tooling SDK in the dex" if not PLAY else "no analytics, crash, ad or tooling SDK in the dex, and no firebase package", ", ".join(hits) or f"{len(dex_names)} dex file(s) scanned")
 
 # ---- host scripts ----
 src = json.load(open(os.path.join(ROOT, "host/SOURCE.json")))["files"]

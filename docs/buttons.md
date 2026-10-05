@@ -29,8 +29,8 @@ By what the button means, never by where it sits or how many share a row (design
 
 | Kind | Means | Examples |
 | --- | --- | --- |
-| Primary | the one thing this screen is for | Connect, Send prompt, Import key, Install the relay, Yes, Review prompt, Start an agent…, Start agent, Start with this name, Rename |
-| Secondary | a neutral action, and the safe choice in a dialog | Cancel, Back, Back to the herd, Close, Not now, Done, Dismiss, Copy, Share, Copy key only, Show as QR, Keyboard, Hide keyboard, Release, Resize to fit, Request control, Edit, Move up, Check again, Keep the old key, Restart (disabled, Spaces), Leave it |
+| Primary | the one thing this screen is for | Connect, Send prompt, Import key, Install the relay, Yes, Review prompt, Start an agent…, Start agent, Start with this name, Rename, Buy Pro (the Pro gate's one purpose) |
+| Secondary | a neutral action, and the safe choice in a dialog | Restore purchase, Tip <price> (Settings), Cancel, Back, Back to the herd, Close, Not now, Done, Dismiss, Copy, Share, Copy key only, Show as QR, Keyboard, Hide keyboard, Release, Resize to fit, Request control, Edit, Move up, Check again, Keep the old key, Restart (disabled, Spaces), Leave it |
 | Ghost | open, inspect, retry, or take another way | Open terminal, Re-read, Try again, Check the setup, Manual input, Focus on desktop, Trust and connect, Answer in the terminal instead, Rename agent…, Show its workspace/tab on the desktop, Open the pane, Choose another name, Trust this repository…, Start anyway, Open it, Clear the name |
 | Danger | interrupt, stop, forget or replace | Esc, Ctrl+C, Esc · Interrupt, Remove, Reset the record, Unregister, Replace with the new key, Stop…, Delete…, and a recovery card's "Close the new …" |
 
@@ -46,6 +46,10 @@ The component already matched the design's `.btn` (radius, heights, type, border
 - Unregister (alert relay): Ghost to Danger, because it forgets a registration.
 
 Left as they are: Ghost for "Trust and connect", "Check the setup", "Add a machine", "Paste a pairing link" and a banner's action (tinted by the banner); "No" on the decision sheet stays Secondary (the design draws a longer "No, and tell Claude what to do differently" as Ghost; that sheet was reviewed as built).
+
+## A locked Pro control (vault M8)
+
+A control for a Pro capability the phone does not hold keeps its kind and gains " · Pro" in its label (`proLabel`: "Start an agent… · Pro", "Stop… · Pro", "Delete… · Pro", "Guarded answers · Pro"), so TalkBack reads the lock and nothing depends on a colour. It stays tappable: the tap asks the gate, which opens the sheet from an idle app and, from a busy one, opens nothing and shows one sentence in the notice bar saying when Pro is offered (`ProGate.deferNotice`; docs/billing.md, "What the gate does"). The one exception is "Set up" on the decision sheet: the gate may not open over a pending request, so without Pro it is withheld, not labelled " · Pro", and the sheet's notice says guarded answers are Pro and set up from Settings (`decisionSetUp`, `decisionNotice`). `ButtonRolesTest` still finds these buttons by their plain label literal.
 
 ## Kept honest
 

@@ -42,6 +42,26 @@ class WidgetTest {
     private fun cache(vararg a: Agent, readAt: Long = ms(3, 14, 2), seen: SeenLookup = SeenLookup { null }) =
         WidgetCacheBuilder.from(home(*a, seen = seen), "laptop", "Laptop", "main", readAt)
 
+    // ---- a locked widget (vault M8: widgets are Pro) ----------------------------------------------------------------------------
+
+    @Test fun aLockedWidgetDrawsNoCountNoMachineNoRowsAndNoTimeWhateverTheCacheHolds() {
+        val c = cache(agent("w1:p1", AgentStatus.Blocked, seq = 5, title = "approve edit"), agent("w1:p2", AgentStatus.Done, seq = 2))
+        val locked = presenter.present(c, ms(3, 14, 3), locked = true)
+        assertEquals(WidgetPresenter.LOCKED, locked)
+        assertFalse(locked.hasData)
+        assertNull(locked.count); assertNull(locked.asOf); assertNull(locked.asOfLabel)
+        assertTrue(locked.rows.isEmpty() && locked.machine.isEmpty() && locked.detail.isEmpty())
+        assertTrue("Pro" in locked.headline && "Pro" in locked.description && "No count" in locked.description, locked.description)
+        // Not locked: the same cache is read as before.
+        assertTrue(presenter.present(c, ms(3, 14, 3)).hasData)
+        assertTrue(presenter.present(c, ms(3, 14, 3), locked = false).hasData)
+    }
+
+    @Test fun aLockedWidgetIsLockedEvenWithNoCache() {
+        assertEquals(WidgetPresenter.LOCKED, presenter.present(null, ms(3, 14, 3), locked = true))
+        assertEquals(WidgetPresenter.NO_DATA, presenter.present(null, ms(3, 14, 3)))
+    }
+
     // ---- the cache --------------------------------------------------------------------------------------------------------
 
     @Test fun theCacheCountsEachStateAsTheHerdDoesAndKeepsTheTwoMostUrgentBlockedRowsInHerdOrder() {

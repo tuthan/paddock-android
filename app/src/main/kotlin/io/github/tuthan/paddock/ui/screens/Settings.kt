@@ -70,7 +70,27 @@ data class SettingsState(
     val alerts: AlertsState = AlertsState(),
     /** Agent icons: a glyph on the row's tile for the common agents, letters for the rest. */
     val agentGlyphs: Boolean = true,
+    /** The Pro card; a blank headline hides it. */
+    val pro: ProCardState = ProCardState(),
+    /** Setting up guarded answers is a Pro capability and is locked on this phone: the row says Pro, and a tap asks the gate before it opens the setup. */
+    val guardedAnswersLocked: Boolean = false,
 )
+
+/** What Settings says about Pro (Phase 13). [tips] is empty unless this build sells and the store listed prices. */
+data class ProCardState(
+    val headline: String = "",
+    val detail: String = "",
+    val stale: Boolean = false,
+    val sellsPro: Boolean = false,
+    val busy: Boolean = false,
+    /** What the last action on this card (Restore, a tip, a verification) said; never what a purchase from the gate sheet said. */
+    val message: String? = null,
+    val coverage: String = "",
+    val refunds: String? = null,
+    val tips: List<TipOption> = emptyList(),
+)
+
+data class TipOption(val productId: String, val price: String)
 
 /**
  * The Alerts section. [localAlerts] is the switch for notifications raised while Paddock is open but not in front; the
@@ -107,6 +127,8 @@ fun Settings(
     onAlertRelay: () -> Unit = {},
     onGuardedAnswers: () -> Unit = {},
     onAgentGlyphs: (Boolean) -> Unit = {},
+    onRestorePurchase: () -> Unit = {},
+    onBuyTip: (String) -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     var reconnectOpen by rememberSaveable { mutableStateOf(false) }
@@ -205,11 +227,11 @@ fun Settings(
                 Modifier.card(c, padded = false)
                     .clickable(role = Role.Button, onClickLabel = "Set up guarded answers", onClick = onGuardedAnswers)
                     .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
-                    .semantics(mergeDescendants = true) { contentDescription = "Guarded answers. $GUARDED_ROW" },
+                    .semantics(mergeDescendants = true) { contentDescription = "Guarded answers${if (state.guardedAnswersLocked) ", Pro" else ""}. $GUARDED_ROW" },
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("Guarded answers", style = PaddockTokens.type.rowTitle, color = c.title)
+                    Text(proLabel("Guarded answers", state.guardedAnswersLocked), style = PaddockTokens.type.rowTitle, color = c.title)
                     Text(GUARDED_ROW, style = PaddockTokens.type.secondary, color = c.dim)
                 }
                 Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
@@ -250,6 +272,23 @@ fun Settings(
                 detail = "Off: the record of what you sent keeps only a fingerprint of each prompt. On: it keeps the text too, on this phone only.",
             )
 
+            if (state.pro.headline.isNotBlank()) {
+                Section("Pro")
+                Fixed(
+                    state.pro.headline, null,
+                    state.pro.detail + if (state.pro.stale) " That answer is more than a week old." else "",
+                )
+                if (state.pro.coverage.isNotBlank()) Note2(state.pro.coverage)
+                if (state.pro.sellsPro) PaddockButton("Restore purchase", onRestorePurchase, kind = ButtonKind.Secondary, enabled = !state.pro.busy)
+                state.pro.message?.let { Note2(it) }
+                state.pro.refunds?.let { Note2(it) }
+                if (state.pro.tips.isNotEmpty()) {
+                    Section("Support development")
+                    Note2(io.github.tuthan.paddock.billing.ProCopy.TIPS)
+                    for (tip in state.pro.tips) PaddockButton("Tip ${tip.price}", { onBuyTip(tip.productId) }, kind = ButtonKind.Secondary, enabled = !state.pro.busy)
+                }
+            }
+
             Section("About")
             Fixed(
                 "Paddock ${state.versionName}", null,
@@ -271,7 +310,7 @@ fun Settings(
             }
             Note2(
                 "Paddock connects to your machine over SSH only. Agent output is shown and not kept: the Activity log holds only state changes the phone saw and what you did here. " +
-                    "An independent project, not affiliated with herdr.",
+                    "An independent project, not affiliated with herdr. Open source under the Apache License 2.0.",
             )
         }
     }
