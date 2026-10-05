@@ -104,6 +104,11 @@ class AppGraph(private val app: Application) {
     val gate = LocalNetworkGate(app)
     val lanPaths = io.github.tuthan.paddock.net.AndroidLanPaths(app)
     val sockets = io.github.tuthan.paddock.net.AndroidSockets(lanPaths)
+    /** Find on this network (Phase 14): nothing runs until the page's Start. The probe is pinned to the network it scans, and mDNS is browsed beside it. */
+    val finder = io.github.tuthan.paddock.discovery.FinderController(
+        scope, lanPaths, sockets, grantMissing = { gate.lanAccessMissing() }, bindProbeTo = { sockets.tcpPathId = it },
+        mdns = { io.github.tuthan.paddock.net.NsdBrowser(app).browse() },
+    )
     /** Sending this phone's public key to a desktop's `pair` popup (Phase 14). The request is on disk before its first byte, so a restart reopens it within its window. */
     val pairingCoordinator = io.github.tuthan.paddock.pairing.PairingCoordinator(
         io.github.tuthan.paddock.pairing.FilePendingPairingStore(File(app.filesDir, "pending-pairing.json")),

@@ -104,6 +104,10 @@ class WelcomeAndConnectTest {
 
     @Test fun aRefusedPhoneKeyShowsTheCommandRightBelowTheSentenceThatPointsAtIt() {
         form(error = "The host did not accept this phone's key.", fix = ConnectFix.ShowCommand)
+        // The scroll waits a short delay for the first layout. A delay is virtual time here, which waitForIdle does not advance by itself:
+        // without this the assertion raced the scroll and passed or failed with the speed of the emulator.
+        rule.mainClock.advanceTimeBy(1_000)
+        rule.waitForIdle()
         rule.onNodeWithText(AUTHORIZE_FAILED_PHONE_KEY).assertIsDisplayed()
         // Scrolled to without a tap: the screen brought the sentence and its command into view by itself.
         rule.onNode(hasContentDescription("Command to run on the machine", substring = true)).assertIsDisplayed()

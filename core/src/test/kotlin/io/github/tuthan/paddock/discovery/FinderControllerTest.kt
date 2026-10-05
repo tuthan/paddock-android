@@ -88,6 +88,7 @@ class FinderControllerTest {
         c.start(port)
         val end = c.finished()
         assertEquals(FinderPhase.Done, end.phase)
+        assertTrue(end.canStart, "a finished scan can be run again")
         assertEquals(listOf(FoundHost("127.0.0.7", port, null, "OpenSSH 9.9")), end.rows)
         assertEquals(end.total, end.done)
         assertEquals(listOf("wifi", null), bound.toList(), "pinned to the scanned network while it runs and released after")
@@ -119,8 +120,23 @@ class FinderControllerTest {
         assertEquals(FinderPhase.Scanning, c.state.value.phase, "before cancel: ${c.state.value}")
         c.cancel()
         assertEquals(FinderPhase.Cancelled, c.state.value.phase, "after cancel: ${c.state.value}")
+        assertTrue(c.state.value.canStart, "a stopped scan can be run again")
         assertEquals(1, c.state.value.rows.size, "rows: ${c.state.value}")
         assertEquals(null, bound.last(), "bound: $bound")
+    }
+
+    @Test fun closingTheScreenMidScanReleasesTheNetworkAndTheNextOpeningStartsIdle() = runBlocking {
+        val port = sshServer("127.0.0.7")
+        val c = controller(listOf(lan()), sockets = SlowSockets(250))
+        c.start(port)
+        withTimeout(10_000) { c.state.first { it.rows.isNotEmpty() } }
+        c.close()
+        assertEquals(FinderPhase.Idle, c.state.value.phase)
+        assertTrue(c.state.value.rows.isEmpty())
+        withTimeout(10_000) { while (bound.last() != null) kotlinx.coroutines.delay(20) }
+        c.refresh(port)
+        assertEquals(FinderPhase.Idle, c.state.value.phase)
+        assertTrue(c.state.value.canStart)
     }
 
     @Test fun noWifiMeansNoScan() {

@@ -100,7 +100,7 @@ class FinderController(
                 release()
                 // A scan of a quiet network ends in well under a second, before an announcement could arrive: listening goes on a little longer.
                 if (listening != null) delay(mdnsGraceMillis)
-                _state.value = _state.value.copy(phase = FinderPhase.Done, rows = found.list, done = _state.value.total, note = note)
+                _state.value = _state.value.copy(phase = FinderPhase.Done, rows = found.list, done = _state.value.total, note = note, canStart = true)
             } finally {
                 // Cancelled coroutines cannot suspend, so without NonCancellable the join would throw and the network pin would never be released.
                 withContext(NonCancellable) { listening?.cancelAndJoin(); release() }
@@ -116,11 +116,14 @@ class FinderController(
         job = null
         j.cancelAndJoin()
         val s = _state.value
-        if (s.phase == FinderPhase.Scanning) _state.value = s.copy(phase = FinderPhase.Cancelled)
+        if (s.phase == FinderPhase.Scanning) _state.value = s.copy(phase = FinderPhase.Cancelled, canStart = true)
     }
 
-    /** For when the screen goes away: stops without waiting. */
-    fun close() { job?.cancel(); job = null; bindProbeTo(null) }
+    /** For when the screen goes away: stops without waiting. A scan cut off this way is not shown as running the next time the screen opens. */
+    fun close() {
+        job?.cancel(); job = null; bindProbeTo(null)
+        if (_state.value.phase == FinderPhase.Scanning) _state.value = FinderState()
+    }
 
     companion object { const val MDNS_UNAVAILABLE = "Names announced on the network could not be listened for, so only addresses that answered are shown." }
 }

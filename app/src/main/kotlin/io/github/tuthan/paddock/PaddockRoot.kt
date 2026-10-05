@@ -103,6 +103,9 @@ import io.github.tuthan.paddock.hostkey.HostKeyPrompts
 import io.github.tuthan.paddock.hostkey.HostKeyState
 import io.github.tuthan.paddock.hostprofile.AddMachineForm
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
+import io.github.tuthan.paddock.discovery.FinderPhase
+import io.github.tuthan.paddock.discovery.FinderText
+import io.github.tuthan.paddock.ui.screens.FindOnNetwork
 import io.github.tuthan.paddock.hostprofile.PairingCopy
 import io.github.tuthan.paddock.hostprofile.PairingEvent
 import io.github.tuthan.paddock.hostprofile.PairingLink
@@ -227,6 +230,10 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     var authorizeIntro by rememberSaveable { mutableStateOf(false) }
     // The first screen of a phone with no machine is Welcome; any way in sets this and moves on to Add machine.
     var welcomeChoice by rememberSaveable { mutableStateOf(false) }
+    // Find on this network opened from Welcome (from Add machine it is opened inside the form's own route, which keeps what was typed).
+    var welcomeFinder by rememberSaveable { mutableStateOf(false) }
+    // A machine the finder found, waiting for the form to take it. Taken once, then cleared.
+    var found by remember { mutableStateOf<AddMachineInput?>(null) }
     // A Connect that has not finished. Above the screens: saving the first machine ends "no machines" and must not take the form away mid-attempt.
     var attempt by rememberSaveable(stateSaver = ConnectAttempt.Saver) { mutableStateOf<ConnectAttempt?>(null) }
 
@@ -325,6 +332,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     BackHandler(enabled = effective != Route.Home && boot == Boot.Ready) { attempt = null; authorizeIntro = false; route = backTo }
     // With no machine yet, Back from the form returns to Welcome instead of leaving the app.
     BackHandler(enabled = boot == Boot.NoMachines && attempt == null && welcomeChoice && pairing == null) { welcomeChoice = false }
+    BackHandler(enabled = welcomeFinder && effective == Route.Welcome) { welcomeFinder = false }
     ProGateHost(graph, pendingAnswerOnScreen = effective == Route.Decision || effective == Route.GuardedAnswers)
     Column(modifier.fillMaxSize().safeDrawingPadding()) {
     alertNotice?.let { NoticeBar(it, onDismiss = { alertNotice = null }, modifier = Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 8.dp)) }
@@ -335,7 +343,9 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
         when (boot) {
             Boot.Loading -> Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title, modifier = Modifier.padding(PaddockTokens.spacing.gutter))
             else -> when (effective) {
-                Route.Welcome -> WelcomeRoute(onEnterAddress = { welcomeChoice = true }, onPairing = { pairing = it; welcomeChoice = true })
+                Route.Welcome -> if (welcomeFinder) FindRoute(
+                    graph, onPick = { found = it; welcomeFinder = false; welcomeChoice = true }, onBack = { welcomeFinder = false },
+                ) else WelcomeRoute(onEnterAddress = { welcomeChoice = true }, onFind = { welcomeFinder = true }, onPairing = { pairing = it; welcomeChoice = true })
                 Route.Home, Route.Spaces, Route.Activity -> Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f)) {
                         if (effective == Route.Spaces) SpacesRoute(
@@ -381,6 +391,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                     onBack = { attempt = null; editing = false; authorizeIntro = false; pairing = null; route = backTo },
                     attempt = attempt, onAttempt = { attempt = it }, authorizeIntro = authorizeIntro,
                     onPairing = { pairing = it }, onNotice = { alertNotice = it },
+                    picked = found, onPicked = { found = it },
                 )
             }
         }
@@ -1326,6 +1337,7 @@ private fun AddMachineRoute(
     graph: AppGraph, canGoBack: Boolean, editing: Boolean, pairing: PairingLink?, onBack: () -> Unit,
     attempt: ConnectAttempt?, onAttempt: (ConnectAttempt?) -> Unit, authorizeIntro: Boolean,
     onPairing: (PairingLink) -> Unit, onNotice: (String) -> Unit,
+    picked: AddMachineInput?, onPicked: (AddMachineInput?) -> Unit,
 ) {
     val ctx = LocalContext.current
     val watched by graph.profile.collectAsState()
@@ -1390,6 +1402,13 @@ private fun AddMachineRoute(
         // Back from the import screen returns to the form, not past it.
         BackHandler { importing = false }
         ImportKeyRoute(graph, onDone = { importedTick++; importing = false }, onBack = { importing = false })
+        return
+    }
+    // The same for Find on this network: the form (and what was typed in it) waits under the holder while the finder is up.
+    var finding by rememberSaveable { mutableStateOf(false) }
+    if (finding) {
+        BackHandler { finding = false }
+        FindRoute(graph, onPick = { onPicked(it); finding = false }, onBack = { finding = false })
         return
     }
     val state = AddMachineState(
@@ -1457,6 +1476,9 @@ private fun AddMachineRoute(
             onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
             onBack = { if (canGoBack) onBack() },
             onImportKey = { importing = true },
+            // Not while a key is being set up for the watched machine, or under a pairing link: the host there is already decided.
+            onFind = if (fixing == null && pairing == null) ({ finding = true }) else null,
+            picked = picked, onPickedApplied = { onPicked(null) },
             initial = fixing?.let { AddMachineInput(it.host, it.port.toString(), it.user, it.key, it.importedKeyId, it.session ?: "") } ?: pairing?.toInput() ?: AddMachineInput(),
             title = when { fixing != null && authorizeIntro -> "Authorize this phone"; fixing != null -> "Set up the key"; else -> "Add a machine" },
             intro = when { fixing != null && authorizeIntro -> AUTHORIZE_INTRO; fixing != null -> SET_UP_KEY_INTRO; else -> ADD_MACHINE_INTRO },
@@ -1476,11 +1498,12 @@ private fun readPairingLink(ctx: Context): PairingResult {
 }
 
 @Composable
-private fun WelcomeRoute(onEnterAddress: () -> Unit, onPairing: (PairingLink) -> Unit) {
+private fun WelcomeRoute(onEnterAddress: () -> Unit, onFind: () -> Unit, onPairing: (PairingLink) -> Unit) {
     val ctx = LocalContext.current
     var notice by remember { mutableStateOf<String?>(null) }
     Welcome(
         onEnterAddress = onEnterAddress,
+        onFind = onFind,
         onPasteLink = {
             when (val r = readPairingLink(ctx)) {
                 is PairingResult.Valid -> { notice = null; onPairing(r.link) }
@@ -1488,6 +1511,36 @@ private fun WelcomeRoute(onEnterAddress: () -> Unit, onPairing: (PairingLink) ->
             }
         },
         notice = notice,
+    )
+}
+
+/** The finder page over [AppGraph.finder]. Nothing runs until Start; leaving the page stops whatever runs and releases the network. */
+@Composable
+private fun FindRoute(graph: AppGraph, onPick: (AddMachineInput) -> Unit, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val state by graph.finder.state.collectAsState()
+    var port by rememberSaveable { mutableStateOf("") }
+    var denied by rememberSaveable { mutableStateOf(false) }
+    val typed = FinderText.port(port).port
+    val resumes = rememberResumes()
+    // Said again when the port changes (the sentence names the ports), and when the grant is turned on in the system settings and the user returns.
+    LaunchedEffect(port) { graph.finder.refresh(typed) }
+    LaunchedEffect(resumes) { if (graph.finder.state.value.phase == FinderPhase.Idle) { if (denied && !graph.gate.lanAccessMissing()) denied = false; graph.finder.refresh(typed) } }
+    DisposableEffect(Unit) { onDispose { graph.finder.close() } }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        denied = !granted
+        graph.finder.refresh(typed)
+    }
+    FindOnNetwork(
+        state, port, { port = it.take(5) },
+        onStart = { graph.finder.start(typed) },
+        onCancel = { scope.launch { graph.finder.cancel() } },
+        onAllow = { permission.launch(LocalNetworkPolicy.PERMISSION) },
+        onPick = { row -> onPick(AddMachineInput(host = row.address, port = row.port.toString(), name = row.name)) },
+        onBack = onBack,
+        accessDenied = denied,
+        onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
     )
 }
 

@@ -115,6 +115,11 @@ fun AddMachine(
     onPastePairingLink: (() -> Unit)? = null,
     /** Sends this phone's key to the desktop the pairing link named, with the form as typed; null leaves the button out. */
     onSendKey: ((AddMachineInput) -> Unit)? = null,
+    /** Opens Find on this network; null leaves the button out. */
+    onFind: (() -> Unit)? = null,
+    /** A machine the finder found: its address, port and announced name replace those fields, nothing else changes. Call [onPickedApplied] once taken. */
+    picked: AddMachineInput? = null,
+    onPickedApplied: () -> Unit = {},
     initial: AddMachineInput = AddMachineInput(),
     title: String = "Add a machine",
     intro: String = ADD_MACHINE_INTRO,
@@ -124,13 +129,16 @@ fun AddMachine(
     var port by rememberSaveable { mutableStateOf(initial.port) }
     var user by rememberSaveable { mutableStateOf(initial.user) }
     var session by rememberSaveable { mutableStateOf(initial.session) }
+    // The name a finder or link gave the machine. It has no field: it only becomes the profile's name, and typing another host drops it.
+    var name by rememberSaveable { mutableStateOf(initial.name) }
+    var nameFor by rememberSaveable { mutableStateOf(initial.host) }
     var key by rememberSaveable { mutableStateOf(initial.key) }
     var showErrors by rememberSaveable { mutableStateOf(false) }
     var showQr by rememberSaveable { mutableStateOf(false) }
     // A pairing link's fingerprints apply to the host and port the link named; once either is changed they are not compared.
     val linked = initial.pairedFingerprints
     val linkApplies = linked != null && host.trim() == initial.host && port.trim() == initial.port
-    val input = AddMachineInput(host, port, user, key, if (key == KeyKind.Imported) state.importedKeyId else null, session, if (linkApplies) linked else null)
+    val input = AddMachineInput(host, port, user, key, if (key == KeyKind.Imported) state.importedKeyId else null, session, if (linkApplies) linked else null, name.takeIf { host.trim() == nameFor })
     val errors = AddMachineForm.errors(input)
     val typed = state.route(host)
     // The text-only hint shows while typing; the resolved one replaces it once the host has been still for a moment.
@@ -140,6 +148,12 @@ fun AddMachine(
         if (host.isBlank()) return@produceState
         delay(ROUTE_SETTLE_MILLIS)
         value = resolve(host)
+    }
+
+    LaunchedEffect(picked) {
+        val p = picked ?: return@LaunchedEffect
+        host = p.host; port = p.port; name = p.name; nameFor = p.host.trim()
+        onPickedApplied()
     }
 
     fun connect() {
@@ -170,6 +184,7 @@ fun AddMachine(
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Field("Host or IP address", host, { host = it }, error = if (showErrors) errors.host else null, keyboardType = KeyboardType.Uri, placeholder = "192.168.1.20 or box.example.ts.net", mono = true)
                 RouteHint(route, state.permissionDenied, onOpenSettings)
+                if (onFind != null) PaddockButton("Find on this network", onFind, kind = ButtonKind.Ghost, icon = PaddockIcons.Machine)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Field("User", user, { user = it }, Modifier.weight(2f), error = if (showErrors) errors.user else null, mono = true)
