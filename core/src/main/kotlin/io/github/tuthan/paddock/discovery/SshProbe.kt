@@ -47,10 +47,19 @@ object BannerReader {
  */
 class SshProbe(
     private val sockets: Sockets,
-    private val connectTimeoutMillis: Int = 300,
-    private val bannerTimeoutMillis: Int = 500,
-    private val parallelism: Int = 32,
+    private val connectTimeoutMillis: Int = DEFAULT_CONNECT_MILLIS,
+    private val bannerTimeoutMillis: Int = DEFAULT_BANNER_MILLIS,
+    private val parallelism: Int = DEFAULT_PARALLELISM,
 ) {
+    companion object {
+        // Measured on the API 36 emulator (Phase 14 spike S1): the first plan values (300 ms, 500 ms, 32 at a time) found nothing on 10.0.2.0/24,
+        // because the emulator's NAT answers a connect to the host late while many are in flight; these find the host every time in about 5 s.
+        // A real LAN answers a live host in milliseconds, so the margin is for Wi-Fi power saving; the scan stays under about 5 s on a quiet /24.
+        const val DEFAULT_CONNECT_MILLIS = 600
+        const val DEFAULT_BANNER_MILLIS = 800
+        const val DEFAULT_PARALLELISM = 64
+    }
+
     fun scan(addresses: List<Inet4Address>, ports: List<Int>): Flow<ProbeEvent> = channelFlow {
         val targets = addresses.flatMap { a -> ports.distinct().map { p -> a to p } }
         val done = AtomicInteger(0)

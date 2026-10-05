@@ -47,8 +47,8 @@ class FinderController(
     /** Pins TCP probes to the network being scanned (null clears it). */
     private val bindProbeTo: (String?) -> Unit = {},
     private val mdns: (() -> Flow<NsdService>)? = null,
-    connectTimeoutMillis: Int = 300,
-    bannerTimeoutMillis: Int = 500,
+    connectTimeoutMillis: Int = SshProbe.DEFAULT_CONNECT_MILLIS,
+    bannerTimeoutMillis: Int = SshProbe.DEFAULT_BANNER_MILLIS,
     /** The ports looked at for a typed one: SSH's own and the typed one. A test narrows it so a real sshd on the machine cannot answer. */
     private val portsFor: (Int?) -> List<Int> = FinderRules::ports,
     /** How long mDNS listening continues after the last address has been tried. */
