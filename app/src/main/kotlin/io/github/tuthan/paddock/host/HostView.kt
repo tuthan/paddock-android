@@ -4,6 +4,8 @@ import io.github.tuthan.paddock.attention.HomeModel
 import io.github.tuthan.paddock.live.BlockedPreview
 import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.herdr.ProtocolError
+import io.github.tuthan.paddock.live.ConnectFix
+import io.github.tuthan.paddock.live.DownReasonText
 import io.github.tuthan.paddock.ports.DownReason
 import io.github.tuthan.paddock.relay.HerdrError
 import io.github.tuthan.paddock.relay.RelayTimeout
@@ -71,29 +73,18 @@ object HomeUiMapper {
         f: HostPhase.Failed, now: Long,
         degraded: (String, String?, Recovery?, HostPhase.NeedsRelayInstall?) -> HostScreen,
     ): HostScreen {
-        val retry = f.retryAtMillis?.let { " Trying again in ${((it - now).coerceAtLeast(0) + 999) / 1000} s." } ?: ""
-        val reason = f.reason
-        return when (reason) {
-            DownReason.PermissionDenied -> degraded("Local-network access is off, so Paddock cannot reach this address.", "Open settings", Recovery.OpenSettings, null)
-            DownReason.HostKeyChanged -> degraded("The host's key changed. Nothing was signed in.", "Review the key", Recovery.ReviewKey, null)
-            DownReason.AuthFailed -> degraded("The host did not accept this phone's key. Authorize it on the host, then try again.", "Try again", Recovery.Retry, null)
-            DownReason.Refused -> degraded("The connection was not accepted.", "Try again", Recovery.Retry, null)
-            DownReason.KeyUnavailable -> degraded(
-                "The key stored on this phone can't be read. Import it again or create a new phone key, then authorize it on the host.",
-                "Set up the key", Recovery.SetUpKey, null,
-            )
-            DownReason.HostKeysUnreadable -> degraded(
-                "Saved host keys can't be read, so Paddock can't check this host's identity. Nothing was signed in. " +
-                    "Clearing Paddock's storage in system settings resets them; then add the machine and authorize this phone again.",
-                "Open settings", Recovery.OpenSettings, null,
-            )
-            DownReason.Timeout -> degraded("The host did not answer in time.$retry", if (retry.isEmpty()) "Try again" else null, if (retry.isEmpty()) Recovery.Retry else null, null)
-            DownReason.LocalNetworkTimeout -> degraded(
-                "The host did not answer in time. If it is on your local network, check that Paddock has local-network access.$retry",
-                "Open settings", Recovery.OpenSettings, null,
-            )
-            is DownReason.Network -> degraded("Cannot reach the host: ${reason.message}.$retry".replace("..", "."), if (retry.isEmpty()) "Try again" else null, if (retry.isEmpty()) Recovery.Retry else null, null)
-            DownReason.Closed -> degraded("Disconnected.$retry", if (retry.isEmpty()) "Try again" else null, if (retry.isEmpty()) Recovery.Retry else null, null)
+        val seconds = f.retryAtMillis?.let { ((it - now).coerceAtLeast(0) + 999) / 1000 }
+        val text = DownReasonText.sentence(f.reason, seconds)
+        return when (DownReasonText.fix(f.reason)) {
+            ConnectFix.OpenSettings -> degraded(text, "Open settings", Recovery.OpenSettings, null)
+            ConnectFix.ReviewKey -> degraded(text, "Review the key", Recovery.ReviewKey, null)
+            ConnectFix.SetUpKey -> degraded(text, "Set up the key", Recovery.SetUpKey, null)
+            ConnectFix.ShowCommand -> degraded(text, "Try again", Recovery.Retry, null)
+            // While Paddock is about to try by itself the banner has no button, except for a refusal, which says nothing about when.
+            ConnectFix.Retry ->
+                if (seconds == null || f.reason == DownReason.Refused) degraded(text, "Try again", Recovery.Retry, null)
+                else degraded(text, null, null, null)
+            ConnectFix.None -> degraded(text, null, null, null)
         }
     }
 }

@@ -1272,10 +1272,9 @@ private fun AddMachineRoute(
 
     fun finish(input: AddMachineInput) {
         scope.launch {
-            val existing = graph.profiles.list().map { it.id }.toSet()
-            val made = AddMachineForm.profile(input, existing - setOfNotNull(fixing?.id)) ?: return@launch
-            val same = fixing != null && made.host == fixing.host && made.port == fixing.port
-            val profile = if (same) made.copy(id = fixing.id, name = fixing.name) else made
+            // The same machine (host, port and user, or the one being fixed) stays one profile: its id, name and wake facts carry over.
+            val profile = AddMachineForm.resolve(input, graph.profiles.list(), fixing) ?: return@launch
+            val same = fixing != null && profile.id == fixing.id
             // Set or cleared on every Connect: a link's fingerprints are compared with the key this machine presents, and never outlive the form that carried them.
             graph.broker.expectPairing(profile.id, input.pairedFingerprints)
             graph.addMachine(profile)
