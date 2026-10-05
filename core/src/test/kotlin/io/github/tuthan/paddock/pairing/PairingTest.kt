@@ -186,6 +186,18 @@ class PairingCoordinatorTest {
         assertEquals(listOf("key", "status", "key", "status"), c.calls)
     }
 
+    @Test fun aClientThatThrowsIsAFailedExchangeNotTheEndOfTheLoop() = runBlocking {
+        // A NoSuchMethodError on an old Android (a JDK-only method in the client) once killed the job and left the page on "Sending" for good.
+        for (boom in listOf<() -> Nothing>({ throw IllegalStateException("boom") }, { throw NoSuchMethodError("toString(Charset)") })) {
+            val c = Script({ now.addAndGet(50_000); boom() }, { now.addAndGet(50_000); boom() })
+            val p = coordinator(c)
+            p.start()
+            val end = p.terminal()
+            assertTrue(end is PairingState.CannotReach, "$end")
+            assertTrue(c.calls.size >= 2, "it kept trying until the window ended: ${c.calls}")
+        }
+    }
+
     @Test fun aLostReplyThatTheDesktopHadReceivedIsNotResent() = runBlocking {
         val c = Script({ ClientResult.NoReply }, { reply(PairingReply.Ok) })
         val p = coordinator(c)

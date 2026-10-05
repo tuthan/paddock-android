@@ -122,6 +122,52 @@ class PairingFlowTest {
         log("PAIRED-AND-SIGNED-IN")
     }
 
+    // ---- Phase 14 slice 6: the real `pair` popup on the host, listening on loopback (the emulator reaches it at 10.0.2.2) ---------------------------
+    // The script (paddock-harness/run-pair-e2e.sh) runs pair.py in a pty and passes the link it printed (with its pair port and session
+    // handle) as -e pairLink; it answers the popup's prompt itself: approve (t5), reject (t6) or never answer, with a short window (t7).
+
+    private fun openPairLinkAndSend() {
+        val pairLink = args.getString("pairLink") ?: error("pairLink argument missing")
+        waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
+        openLink(pairLink)
+        waitFor("Add machine filled in from the link") { hasNode(text("Filled in from a pairing link", substring = true)) }
+        if (hasNode(text("Create this phone's key"))) rule.onNodeWithText("Create this phone's key").performScrollTo().performClick()
+        // The key is made off the main thread: wait for its ways to appear. The traditional ones are all still here beside the new one.
+        waitFor("the phone's key and its ways") { hasNode(text("Copy key only")) }
+        rule.onNodeWithText("Copy key only").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Send the key to $host").performScrollTo().performClick()
+        waitFor("the page that waits for the desktop", 30_000) { hasNode(text("Waiting for approval on the desktop.")) }
+        // The same fingerprint the popup shows, whole, with its first eight characters apart.
+        val fp = rule.onNode(hasContentDescription("Fingerprint of this phone's key", substring = true)).fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription)?.firstOrNull().orEmpty()
+        log("PAIR-WAITING $fp")
+    }
+
+    @Test fun t5_sendTheKeyToThePopupApproveThereAndSignInWithoutTheCommand() {
+        openPairLinkAndSend()
+        // The script approves in the popup; the app connects by itself, and the first connection still asks about the host key.
+        waitFor("the first-trust dialog", 90_000) { hasNode(text("New host: $host:$port")) }
+        rule.onNodeWithText("Trust and connect").performClick()
+        waitFor("the relay prompt, after signing in with the key the popup authorized", 60_000) { hasNode(text("Install the relay on $host?")) }
+        log("PAIRED-BY-POPUP-AND-SIGNED-IN")
+    }
+
+    @Test fun t6_aRejectionAtTheDesktopIsSaidAndNothingConnects() {
+        openPairLinkAndSend()
+        waitFor("the rejection", 60_000) { hasNode(text("Rejected on the desktop.")) }
+        assertFalse("a rejected key did not start a connection", hasNode(text("New host: $host:$port")))
+        rule.onNodeWithText("Back").performClick()
+        waitFor("the form again, with the command still there") { hasNode(hasContentDescription("Command to run on the machine", substring = true)) }
+        log("REJECTED-SAID")
+    }
+
+    @Test fun t7_aWindowThatEndsWithoutAnAnswerIsSaidAndTheCommandStillWorks() {
+        openPairLinkAndSend()
+        waitFor("the expiry", 120_000) { hasNode(text("The time ran out.")) }
+        rule.onNodeWithText("Back").performClick()
+        waitFor("the form again") { hasNode(text("Send the key to $host")) }
+        log("EXPIRED-SAID")
+    }
+
     @Test fun t3_aLinkWhoseFingerprintIsNotTheHostsIsRefusedBeforeAnyQuestion() {
         waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
         val other = "SHA256:" + "B".repeat(43)

@@ -107,7 +107,14 @@ class PairingCoordinator(
                 })
                 return
             }
-            val result = if (useStatus) client.status(p.host, p.port, p.sid) else client.key(p.host, p.port, p.sid, p.keyLine)
+            // Anything the client throws is a failed exchange, never the end of the loop: a request whose job died would sit on "Sending" for good.
+            val result = try {
+                if (useStatus) client.status(p.host, p.port, p.sid) else client.key(p.host, p.port, p.sid, p.keyLine)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                ClientResult.Unreachable(e.javaClass.simpleName)
+            }
             if (p.generation != generation) return
             when (result) {
                 is ClientResult.Unreachable -> { lastDetail = result.detail; emit(p.generation, PairingState.Unreachable(p, result.detail)) }

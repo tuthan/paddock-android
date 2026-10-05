@@ -1404,6 +1404,7 @@ private fun AddMachineRoute(
         importedKeyId = imported?.id,
         importedKeySummary = imported?.let { "${it.keyType} · ${it.fingerprint}" },
         permissionDenied = denied,
+        pairOfferHost = pairing?.takeIf { it.pairPort != null && it.sid != null }?.host,
         connecting = attempt?.connecting == true,
         connectError = attempt?.error,
         connectFix = attempt?.fix,

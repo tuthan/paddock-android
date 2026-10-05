@@ -69,6 +69,7 @@ class JavaSockets(
         override fun readLine(max: Int, timeoutMillis: Int): String? {
             val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
             val input = socket.getInputStream()
+            // ByteArrayOutputStream.toString(Charset) is API 33: build the String from the bytes, which every API level has.
             val out = java.io.ByteArrayOutputStream()
             while (out.size() < max) {
                 val left = (deadline - System.nanoTime()) / 1_000_000L
@@ -76,10 +77,10 @@ class JavaSockets(
                 socket.soTimeout = left.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                 val b = try { input.read() } catch (_: SocketTimeoutException) { break } catch (_: IOException) { break }
                 if (b < 0) break
-                if (b == '\n'.code) return out.toString(Charsets.ISO_8859_1).trimEnd('\r')
+                if (b == '\n'.code) return String(out.toByteArray(), Charsets.ISO_8859_1).trimEnd('\r')
                 out.write(b)
             }
-            return if (out.size() == 0) null else out.toString(Charsets.ISO_8859_1).trimEnd('\r')
+            return if (out.size() == 0) null else String(out.toByteArray(), Charsets.ISO_8859_1).trimEnd('\r')
         }
 
         override fun close() = socket.close()
