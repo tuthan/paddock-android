@@ -98,4 +98,13 @@ class PairingLinkTest {
         assertEquals(null, PairingLinks.find("nothing here")); assertEquals(null, PairingLinks.find(null)); assertEquals(null, PairingLinks.find(""))
         assertEquals(good, PairingLinks.find("paddock://open?x=1 $good"), "the first token that is a pairing link")
     }
+
+    @Test fun fromTextTakesWhatTheClipboardOrACameraGaveAndNeverMoreThanTheLinkLimit() {
+        assertEquals(PairingResult.Valid(valid(good)), PairingLinks.fromText("  $good  "), "a code that holds only the link, with stray spaces")
+        assertEquals(PairingResult.Valid(valid(good)), PairingLinks.fromText("Pair me:\n$good\nthanks"))
+        assertEquals(PairingRejection.NotAPairingLink, (PairingLinks.fromText("https://example.com/qr") as PairingResult.Rejected).reason, "any other QR code")
+        assertEquals(PairingRejection.NotAPairingLink, (PairingLinks.fromText(null) as PairingResult.Rejected).reason)
+        assertEquals(PairingRejection.TooLong, (PairingLinks.fromText("x".repeat(100_000)) as PairingResult.Rejected).reason, "a 100 KB payload is cut before it is looked at")
+        assertEquals(PairingRejection.TooLong, (PairingLinks.fromText("$good&" + "a".repeat(2_000)) as PairingResult.Rejected).reason)
+    }
 }

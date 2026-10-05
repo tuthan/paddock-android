@@ -106,6 +106,7 @@ import io.github.tuthan.paddock.hostprofile.AddMachineInput
 import io.github.tuthan.paddock.discovery.FinderPhase
 import io.github.tuthan.paddock.discovery.FinderText
 import io.github.tuthan.paddock.ui.screens.FindOnNetwork
+import io.github.tuthan.paddock.ui.screens.ScanLink
 import io.github.tuthan.paddock.hostprofile.PairingCopy
 import io.github.tuthan.paddock.hostprofile.PairingEvent
 import io.github.tuthan.paddock.hostprofile.PairingLink
@@ -232,6 +233,8 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     var welcomeChoice by rememberSaveable { mutableStateOf(false) }
     // Find on this network opened from Welcome (from Add machine it is opened inside the form's own route, which keeps what was typed).
     var welcomeFinder by rememberSaveable { mutableStateOf(false) }
+    // The scanner opened from Welcome (from Add machine it is opened inside the form's route, like the finder).
+    var welcomeScan by rememberSaveable { mutableStateOf(false) }
     // A machine the finder found, waiting for the form to take it. Taken once, then cleared.
     var found by remember { mutableStateOf<AddMachineInput?>(null) }
     // A Connect that has not finished. Above the screens: saving the first machine ends "no machines" and must not take the form away mid-attempt.
@@ -333,6 +336,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     // With no machine yet, Back from the form returns to Welcome instead of leaving the app.
     BackHandler(enabled = boot == Boot.NoMachines && attempt == null && welcomeChoice && pairing == null) { welcomeChoice = false }
     BackHandler(enabled = welcomeFinder && effective == Route.Welcome) { welcomeFinder = false }
+    BackHandler(enabled = welcomeScan && effective == Route.Welcome) { welcomeScan = false }
     ProGateHost(graph, pendingAnswerOnScreen = effective == Route.Decision || effective == Route.GuardedAnswers)
     Column(modifier.fillMaxSize().safeDrawingPadding()) {
     alertNotice?.let { NoticeBar(it, onDismiss = { alertNotice = null }, modifier = Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 8.dp)) }
@@ -345,7 +349,12 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
             else -> when (effective) {
                 Route.Welcome -> if (welcomeFinder) FindRoute(
                     graph, onPick = { found = it; welcomeFinder = false; welcomeChoice = true }, onBack = { welcomeFinder = false },
-                ) else WelcomeRoute(onEnterAddress = { welcomeChoice = true }, onFind = { welcomeFinder = true }, onPairing = { pairing = it; welcomeChoice = true })
+                ) else if (welcomeScan) ScanRoute(
+                    graph, onLink = { pairing = it; welcomeScan = false; welcomeChoice = true }, onBack = { welcomeScan = false },
+                ) else WelcomeRoute(
+                    onEnterAddress = { welcomeChoice = true }, onFind = { welcomeFinder = true }, onScan = { welcomeScan = true },
+                    onPairing = { pairing = it; welcomeChoice = true },
+                )
                 Route.Home, Route.Spaces, Route.Activity -> Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f)) {
                         if (effective == Route.Spaces) SpacesRoute(
@@ -1404,6 +1413,13 @@ private fun AddMachineRoute(
         ImportKeyRoute(graph, onDone = { importedTick++; importing = false }, onBack = { importing = false })
         return
     }
+    // The same for the scanner: opening it leaves the form's typed values under the holder, and a code read replaces them with the link's.
+    var scanning by rememberSaveable { mutableStateOf(false) }
+    if (scanning) {
+        BackHandler { scanning = false }
+        ScanRoute(graph, onLink = { onPairing(it); scanning = false }, onBack = { scanning = false })
+        return
+    }
     // The same for Find on this network: the form (and what was typed in it) waits under the holder while the finder is up.
     var finding by rememberSaveable { mutableStateOf(false) }
     if (finding) {
@@ -1478,6 +1494,7 @@ private fun AddMachineRoute(
             onImportKey = { importing = true },
             // Not while a key is being set up for the watched machine, or under a pairing link: the host there is already decided.
             onFind = if (fixing == null && pairing == null) ({ finding = true }) else null,
+            onScan = if (fixing == null) ({ scanning = true }) else null,
             picked = picked, onPickedApplied = { onPicked(null) },
             initial = fixing?.let { AddMachineInput(it.host, it.port.toString(), it.user, it.key, it.importedKeyId, it.session ?: "") } ?: pairing?.toInput() ?: AddMachineInput(),
             title = when { fixing != null && authorizeIntro -> "Authorize this phone"; fixing != null -> "Set up the key"; else -> "Add a machine" },
@@ -1494,16 +1511,17 @@ private const val CONNECT_WAIT_MILLIS = 45_000L
 /** The user asked for this read. Only a token that starts with the pairing scheme is looked at, and the text is never echoed. */
 private fun readPairingLink(ctx: Context): PairingResult {
     val text = runCatching { (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString() }.getOrNull()
-    return PairingLinks.parse(PairingLinks.find(text) ?: text?.trim()?.take(PairingLinks.MAX_LENGTH + 1))
+    return PairingLinks.fromText(text)
 }
 
 @Composable
-private fun WelcomeRoute(onEnterAddress: () -> Unit, onFind: () -> Unit, onPairing: (PairingLink) -> Unit) {
+private fun WelcomeRoute(onEnterAddress: () -> Unit, onFind: () -> Unit, onScan: () -> Unit, onPairing: (PairingLink) -> Unit) {
     val ctx = LocalContext.current
     var notice by remember { mutableStateOf<String?>(null) }
     Welcome(
         onEnterAddress = onEnterAddress,
         onFind = onFind,
+        onScan = onScan,
         onPasteLink = {
             when (val r = readPairingLink(ctx)) {
                 is PairingResult.Valid -> { notice = null; onPairing(r.link) }
@@ -1512,6 +1530,44 @@ private fun WelcomeRoute(onEnterAddress: () -> Unit, onFind: () -> Unit, onPairi
         },
         notice = notice,
     )
+}
+
+/**
+ * The scanner page. The camera is asked for here, when the scanner opens, and never before; a refusal leaves Allow the camera, Open
+ * settings and Paste a pairing link. A code that is not a pairing link says so and the scan starts again; a good one goes to [onLink].
+ * "Paste a pairing link" reads the clipboard here, the same as the paste buttons elsewhere, so the camera is never the only way.
+ */
+@Composable
+private fun ScanRoute(graph: AppGraph, onLink: (PairingLink) -> Unit, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var notice by remember { mutableStateOf<String?>(null) }
+    var tick by remember { mutableIntStateOf(0) }
+    var rescan by remember { mutableIntStateOf(0) }
+    val resumes = rememberResumes()
+    val granted = remember(tick, resumes) { ctx.checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    var asked by rememberSaveable { mutableStateOf(false) }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { tick++ }
+    LaunchedEffect(Unit) { if (!granted && !asked) { asked = true; permission.launch(android.Manifest.permission.CAMERA) } }
+    androidx.compose.runtime.key(rescan) {
+        ScanLink(
+            cameraGranted = granted,
+            onRequestCamera = { permission.launch(android.Manifest.permission.CAMERA) },
+            onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
+            onPayload = { text ->
+                when (val r = PairingLinks.fromText(text)) {
+                    is PairingResult.Valid -> onLink(r.link)
+                    is PairingResult.Rejected -> { notice = PairingCopy.invalid(r.reason); rescan++ }
+                }
+            },
+            onPaste = {
+                when (val r = readPairingLink(ctx)) {
+                    is PairingResult.Valid -> onLink(r.link)
+                    is PairingResult.Rejected -> { notice = PairingCopy.invalid(r.reason); rescan++ }
+                }
+            },
+            onBack = onBack, notice = notice,
+        )
+    }
 }
 
 /** The finder page over [AppGraph.finder]. Nothing runs until Start; leaving the page stops whatever runs and releases the network. */

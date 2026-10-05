@@ -10,7 +10,8 @@ Google's datatransport included. --flavor play checks the Play build against the
 is extended by a person reading the diff, not by the script.
 
 Checks, each printed as PASS or FAIL with what was found; the exit status is 1 if any FAIL:
-  - the permission set is exactly the four the design names (nothing else, no READ_LOGS, no storage, no contacts, no location); play adds com.android.vending.BILLING and nothing else;
+  - the permission set is exactly the five the design names (the four of Phase 02 to 07 and CAMERA, added by the in-app scanner, Phase 14; nothing else, no READ_LOGS, no storage, no contacts, no location),
+    and the camera is an optional feature (android.hardware.camera required=false); play adds com.android.vending.BILLING and nothing else;
   - not debuggable; allowBackup false; usesCleartextTraffic false; a network security config and both backup rule files are present;
   - the exported components are exactly the launcher activity, the UnifiedPush receiver and the three widget providers, plus the profile installer's
     receiver only while it requires the DUMP permission;
@@ -70,10 +71,13 @@ names = z.namelist()
 # ---- manifest ----
 tree = aapt("dump", "xmltree", "--file", "AndroidManifest.xml", APK)
 perms = sorted(set(re.findall(r'uses-permission[^\n]*\n\s+A: http://schemas.android.com/apk/res/android:name\(0x01010003\)="([^"]+)"', tree)))
-EXPECTED = sorted(["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_LOCAL_NETWORK"] + (PLAY_PERMISSIONS if PLAY else []))
+EXPECTED = sorted(["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_LOCAL_NETWORK", "android.permission.CAMERA"] + (PLAY_PERMISSIONS if PLAY else []))
 # AGP adds a signature-level DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION for the app's own receivers; it is the app's, not a grant.
 perms = [p for p in perms if not p.endswith(".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")]
-say(perms == EXPECTED, "permission set is exactly the four named" if not PLAY else "permission set is exactly the four named plus BILLING", ", ".join(p.rsplit(".", 1)[1] for p in perms))
+say(perms == EXPECTED, "permission set is exactly the five named" if not PLAY else "permission set is exactly the five named plus BILLING", ", ".join(p.rsplit(".", 1)[1] for p in perms))
+# The scanner is optional: a phone or a store listing without a camera must not be shut out of the app (paste and the camera app do the same).
+cam = re.search(r'E: uses-feature[^\n]*\n\s+A: http://schemas.android.com/apk/res/android:name\(0x01010003\)="android.hardware.camera"[^\n]*\n\s+A: http://schemas.android.com/apk/res/android:required\(0x0101028e\)=(true|false)', tree)
+say(bool(cam) and cam.group(1) == "false", "the camera is an optional feature (required=false)", "absent" if not cam else f"required={cam.group(1)}")
 
 def attr(name):
     m = re.search(r'A: http://schemas.android.com/apk/res/android:%s\([^)]*\)=(?:"([^"]*)"|\(type 0x\w+\)(0x\w+))' % name, tree)

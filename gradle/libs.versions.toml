@@ -12,6 +12,7 @@ compose-bom = "2026.09.00"
 activity-compose = "1.13.0"
 sshlib = "2.2.48"
 play-billing = "9.1.0"
+zxing = "3.5.4"
 
 [libraries]
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
@@ -32,6 +33,8 @@ activity-compose = { module = "androidx.activity:activity-compose", version.ref 
 
 
 sshlib = { module = "org.connectbot:sshlib", version.ref = "sshlib" }
+# The in-app scanner's QR decoder (Phase 14, decision D2); see the Phase 14 row in docs/dependency-reviews.md.
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 # play flavor only (Phase 13); see the review rows in docs/dependency-reviews.md.
 play-billing = { module = "com.android.billingclient:billing", version.ref = "play-billing" }
 

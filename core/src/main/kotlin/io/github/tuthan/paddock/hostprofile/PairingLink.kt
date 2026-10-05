@@ -66,6 +66,9 @@ object PairingLinks {
     /** The first token of pasted [text] that starts with `paddock://pair?`, for a link copied together with other words. Null when there is none. */
     fun find(text: String?): String? = text?.split(Regex("\\s+"))?.firstOrNull { it.startsWith(PREFIX, ignoreCase = true) }
 
+    /** Pasted or scanned [text] of any shape: the first link-looking token, or the whole trimmed text (cut where [parse] would call it too long). */
+    fun fromText(text: String?): PairingResult = parse(find(text) ?: text?.trim()?.take(MAX_LENGTH + 1))
+
     fun parse(text: String?): PairingResult {
         if (text == null) return PairingResult.Rejected(PairingRejection.NotAPairingLink)
         if (text.length > MAX_LENGTH) return PairingResult.Rejected(PairingRejection.TooLong)

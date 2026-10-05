@@ -4,6 +4,7 @@ Paddock is a phone companion for herdr, the terminal workspace manager for codin
 • Shows every agent on the machine you connect to, with its state and how long it has been in it
 • Reads agent output on the phone, and opens the live terminal when you need to type
 • Sends a prompt from a composer, with a record that tells you if an earlier send may already have arrived
+• Finds a machine on your Wi-Fi, or sets up the SSH key from a code the machine shows (the camera is used only when you scan one, and nothing is recorded), and can wake a sleeping machine over your network
 • Raises a notification while the app is open when an agent becomes blocked or done; a small relay script on your machine can reach a locked phone through ntfy or UnifiedPush
 
 <b>Pro</b>

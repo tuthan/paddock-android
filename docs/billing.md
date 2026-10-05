@@ -9,7 +9,7 @@ Phase 13 (store, billing, entitlements), as built on 2026-10-04. The plan and it
 | Routes | GitHub releases, F-Droid, IzzyOnDroid, the device harness, CI | Google Play |
 | Billing library | none; `NoBilling` | Play Billing 9.1.0 and what it brings (`docs/dependency-reviews.md`) |
 | `Distribution.UNLOCKED` | `false` in every published build: Pro capabilities are locked and nothing can be bought; Settings says "Free version" and where Pro comes from. A source build with `-PpaddockUnlocked=true` sets it `true` (Settings then says "Everything is unlocked"); `tools/release-build.sh` always passes `-PpaddockUnlocked=false`. The foss **debug** variant (device harness, flows, instrumentation; never published) defaults to `true` so flows written before Pro existed still reach every screen; `-PpaddockUnlocked=false` builds it locked to rehearse the gate | `false`: Pro is a purchase |
-| Permissions | the four (`INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`, `ACCESS_LOCAL_NETWORK`) | those four plus `com.android.vending.BILLING` |
+| Permissions | the five (`INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`, `ACCESS_LOCAL_NETWORK`, `CAMERA`) | those five plus `com.android.vending.BILLING` |
 
 Same application id, same code, same release key. The flag is what turns the gate on: with it `false`, the five capabilities in "What Pro locks" are locked. `tools/check-release-apk.py --flavor foss|play` (foss is the default) holds each artefact to its list; see "What the `play` APK adds" below.
 

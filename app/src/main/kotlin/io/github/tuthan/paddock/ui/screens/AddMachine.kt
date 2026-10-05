@@ -117,6 +117,8 @@ fun AddMachine(
     onSendKey: ((AddMachineInput) -> Unit)? = null,
     /** Opens Find on this network; null leaves the button out. */
     onFind: (() -> Unit)? = null,
+    /** Opens the scanner for the code a desktop shows; null leaves the button out. */
+    onScan: (() -> Unit)? = null,
     /** A machine the finder found: its address, port and announced name replace those fields, nothing else changes. Call [onPickedApplied] once taken. */
     picked: AddMachineInput? = null,
     onPickedApplied: () -> Unit = {},
@@ -177,8 +179,9 @@ fun AddMachine(
                     Note(PairingCopy.FILLED_IN, icon = PaddockIcons.Key)
                     Fact(if (linked.size == 1) "Host key fingerprint in the link" else "Host key fingerprints in the link", linked.joinToString("\n"))
                 } else Note(PairingCopy.FIELDS_CHANGED, icon = PaddockIcons.Warning)
-            } else if (onPastePairingLink != null) {
-                PaddockButton("Paste a pairing link", onPastePairingLink, kind = ButtonKind.Ghost, icon = PaddockIcons.Copy)
+            } else {
+                if (onScan != null) PaddockButton("Scan the code on the desktop", onScan, kind = ButtonKind.Ghost, icon = PaddockIcons.Qr)
+                if (onPastePairingLink != null) PaddockButton("Paste a pairing link", onPastePairingLink, kind = ButtonKind.Ghost, icon = PaddockIcons.Copy)
             }
             if (state.pairingNotice != null) Banner(state.pairingNotice)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
