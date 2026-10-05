@@ -174,7 +174,7 @@ fun AddMachine(
             val showCommandFix = state.connectError != null && state.connectFix == ConnectFix.ShowCommand
             LaunchedEffect(state.connectError, state.connectFix) {
                 // After the first layout: a request made before the anchor is placed has nowhere to scroll to.
-                if (showCommandFix) { androidx.compose.runtime.withFrameNanos { }; androidx.compose.runtime.withFrameNanos { }; commandAnchor.bringIntoView() }
+                if (showCommandFix) { delay(ANCHOR_SETTLE_MILLIS); commandAnchor.bringIntoView() }
             }
             // With this phone's key the sentence sits inside the key section, directly above the command it points at, and the screen scrolls
             // to that group; otherwise (an imported key, no key yet) it leads the sign-in block.
@@ -214,6 +214,9 @@ fun AddMachine(
 }
 
 private const val ROUTE_SETTLE_MILLIS = 500L
+
+/** Long enough for the first layout of the form; the scroll to the command is requested after it. */
+private const val ANCHOR_SETTLE_MILLIS = 120L
 
 const val ADD_MACHINE_INTRO =
     "Paddock reaches the machine that runs herdr over SSH. Over a VPN such as Tailscale it works from anywhere; on the same Wi-Fi a LAN address is enough."
