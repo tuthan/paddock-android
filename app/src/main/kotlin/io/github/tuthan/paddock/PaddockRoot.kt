@@ -1561,40 +1561,38 @@ private fun WelcomeRoute(onEnterAddress: () -> Unit, onFind: () -> Unit, onScan:
 
 /**
  * The scanner page. The camera is asked for here, when the scanner opens, and never before; a refusal leaves Allow the camera, Open
- * settings and Paste a pairing link. A code that is not a pairing link says so and the scan starts again; a good one goes to [onLink].
- * "Paste a pairing link" reads the clipboard here, the same as the paste buttons elsewhere, so the camera is never the only way.
+ * settings and Paste a pairing link. A code that is not a pairing link says so and the scan goes on (the camera is not restarted, and the same
+ * code left in view is not announced again); a good one goes to [onLink]. "Paste a pairing link" reads the clipboard here, the same as the
+ * paste buttons elsewhere, so the camera is never the only way.
  */
 @Composable
 private fun ScanRoute(graph: AppGraph, onLink: (PairingLink) -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
     var notice by remember { mutableStateOf<String?>(null) }
     var tick by remember { mutableIntStateOf(0) }
-    var rescan by remember { mutableIntStateOf(0) }
     val resumes = rememberResumes()
     val granted = remember(tick, resumes) { ctx.checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED }
     var asked by rememberSaveable { mutableStateOf(false) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { tick++ }
     LaunchedEffect(Unit) { if (!granted && !asked) { asked = true; permission.launch(android.Manifest.permission.CAMERA) } }
-    androidx.compose.runtime.key(rescan) {
-        ScanLink(
-            cameraGranted = granted,
-            onRequestCamera = { permission.launch(android.Manifest.permission.CAMERA) },
-            onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
-            onPayload = { text ->
-                when (val r = PairingLinks.fromText(text)) {
-                    is PairingResult.Valid -> onLink(r.link)
-                    is PairingResult.Rejected -> { notice = PairingCopy.invalid(r.reason); rescan++ }
-                }
-            },
-            onPaste = {
-                when (val r = readPairingLink(ctx)) {
-                    is PairingResult.Valid -> onLink(r.link)
-                    is PairingResult.Rejected -> { notice = PairingCopy.invalid(r.reason); rescan++ }
-                }
-            },
-            onBack = onBack, notice = notice,
-        )
-    }
+    ScanLink(
+        cameraGranted = granted,
+        onRequestCamera = { permission.launch(android.Manifest.permission.CAMERA) },
+        onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
+        onPayload = { text ->
+            when (val r = PairingLinks.fromText(text)) {
+                is PairingResult.Valid -> onLink(r.link)
+                is PairingResult.Rejected -> notice = PairingCopy.invalid(r.reason)
+            }
+        },
+        onPaste = {
+            when (val r = readPairingLink(ctx)) {
+                is PairingResult.Valid -> onLink(r.link)
+                is PairingResult.Rejected -> notice = PairingCopy.invalid(r.reason)
+            }
+        },
+        onBack = onBack, notice = notice,
+    )
 }
 
 /** The finder page over [AppGraph.finder]. Nothing runs until Start; leaving the page stops whatever runs and releases the network. */

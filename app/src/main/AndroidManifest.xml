@@ -13,9 +13,12 @@
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <!-- Phase 14 (decision D2): the in-app scanner reads the code a desktop shows. Asked for only when the scanner is opened, never at launch;
-         the scanner is optional (paste a pairing link, or the system camera app, do the same), so no camera is not a reason to hide the app from a store. -->
+         the scanner is optional (paste a pairing link, or the system camera app, do the same), so no camera is not a reason to hide the app from a store.
+         CAMERA implies the camera feature and autofocus both, so both are declared optional: a store filters on what is required, and a fixed-focus
+         camera still reads a code held at a distance. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <!-- Connector mode (Phase 07): which apps on this phone are UnifiedPush distributors, so the user can pick one. -->
     <queries>

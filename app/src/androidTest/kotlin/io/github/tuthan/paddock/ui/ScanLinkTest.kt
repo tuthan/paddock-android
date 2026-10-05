@@ -2,6 +2,7 @@ package io.github.tuthan.paddock.ui
 
 import android.content.Context
 import android.view.Surface
+import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,12 +11,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasContentDescription
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
+import androidx.lifecycle.Lifecycle
 import io.github.tuthan.paddock.hostprofile.AddMachineForm
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
 import io.github.tuthan.paddock.net.GateDecision
@@ -35,7 +37,7 @@ import org.junit.Test
 
 /** Phase 14 slice 9: the scanner page with a stand-in for the camera, and the two entry points. */
 class ScanLinkTest {
-    @get:Rule val rule = createComposeRule()
+    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
     // The page starts the camera only when the phone says CAMERA is granted, as it does for a real user; the test app is a fresh install without it.
     // `pm` through the shell works on every API level (UiAutomation.grantRuntimePermission is API 28). It is never revoked here: revoking a runtime
@@ -52,7 +54,10 @@ class ScanLinkTest {
         CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) { PaddockTheme(darkTheme = dark) { body() } }
     }
 
-    /** Stands in for the camera: records what the page asked of it and lets a test deliver a code or a failure. */
+    /**
+     * Stands in for the camera: records what the page asked of it and lets a test deliver a code or a failure. Like the real scanner, one
+     * that has started or been closed refuses to start again ("Scanner has already started or closed"), so a page that reuses one shows it.
+     */
     private class FakeCamera {
         val made = mutableListOf<Pair<(String) -> Unit, (String) -> Unit>>()
         var closed = 0
@@ -60,8 +65,14 @@ class ScanLinkTest {
         val factory: (Context, (String) -> Unit, (String) -> Unit) -> QrScanner = { _, payload, failure ->
             made += payload to failure
             object : QrScanner {
-                override fun start(preview: Surface) { started++ }
-                override fun close() { closed++ }
+                private var used = false
+                private var shut = false
+                override fun start(preview: Surface) {
+                    check(!shut && !used) { "Scanner has already started or closed" }
+                    used = true
+                    started++
+                }
+                override fun close() { if (!shut) { shut = true; closed++ } }
             }
         }
     }
@@ -117,6 +128,36 @@ class ScanLinkTest {
         rule.runOnUiThread { shown = false }
         rule.waitForIdle()
         assertEquals(1, camera.closed)
+    }
+
+    @Test fun leavingTheAppAndComingBackClosesTheCameraAndStartsANewOneInsteadOfFailing() {
+        val (_, camera) = page(granted = true)
+        rule.waitUntil(5_000) { camera.started == 1 }
+        // Home or the lock screen: the activity stops and its preview surface goes. Nothing may keep the camera open meanwhile.
+        rule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+        rule.waitUntil(5_000) { camera.closed == 1 }
+        // Back: the surface comes again, and with it a new scanner on it (the closed one cannot start twice).
+        rule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        rule.waitUntil(5_000) { camera.started == 2 }
+        assertEquals(2, camera.made.size)
+        assertEquals("the first scanner was closed once, the second is running", 1, camera.closed)
+        rule.onAllNodesWithText("The camera could not start", substring = true).assertCountEquals(0)
+        rule.onNode(hasContentDescription("Camera preview")).assertIsDisplayed()
+    }
+
+    @Test fun aCodeTheCallerRefusesDoesNotRestartTheCameraNorCloseIt() {
+        // The page reports each code and leaves the decision to its caller; a code that is not a pairing link keeps the camera running.
+        val (taps, camera) = page(granted = true)
+        rule.waitUntil(5_000) { camera.started == 1 }
+        val deliver = camera.made.single().first
+        deliver("https://example.com/menu")
+        deliver("https://example.com/menu")
+        rule.waitForIdle()
+        assertEquals(listOf("https://example.com/menu", "https://example.com/menu"), taps.payloads)
+        assertEquals("no new scanner", 1, camera.made.size)
+        assertEquals("no restart", 1, camera.started)
+        assertEquals("not closed", 0, camera.closed)
+        rule.onNode(hasContentDescription("Camera preview")).assertIsDisplayed()
     }
 
     @Test fun aNoticeAboutTheLastCodeShowsAboveTheCamera() {

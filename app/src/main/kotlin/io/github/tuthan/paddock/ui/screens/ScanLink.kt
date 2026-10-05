@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -32,8 +33,12 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import io.github.tuthan.paddock.scanner.CameraQrScanner
 import io.github.tuthan.paddock.scanner.QrScanner
+import io.github.tuthan.paddock.scanner.ScannerSession
 import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.PaddockButton
@@ -49,8 +54,9 @@ const val SCAN_CAMERA_OFF =
 
 /**
  * Scan the code on the desktop. The camera is asked for when this screen opens (the caller's [onRequestCamera]), the preview shows what
- * the camera sees, and the first code that is read ends the scan and goes to [onPayload] as text. A camera that cannot start says so
- * and offers Try again; every state offers Paste a pairing link, which does the same without the camera.
+ * the camera sees, and each code that is read goes to [onPayload] as text (the same code still in view is reported once). The camera
+ * keeps running until the page is left, hidden or stopped, so [onPayload] decides when the scan is over by leaving. A camera that cannot
+ * start says so and offers Try again; every state offers Paste a pairing link, which does the same without the camera.
  */
 @Composable
 fun ScanLink(
@@ -68,6 +74,8 @@ fun ScanLink(
     val context = LocalContext.current
     var failure by rememberSaveable { mutableStateOf<String?>(null) }
     var attempt by remember { mutableIntStateOf(0) }
+    // The scanner is made once per surface, long after this call: it reports to the page as it is now, not as it was.
+    val latestPayload by rememberUpdatedState(onPayload)
     Column(modifier.fillMaxSize()) {
         ScreenHeader("Scan the code", onBack = onBack)
         Column(
@@ -80,8 +88,23 @@ fun ScanLink(
                 failure?.let { Banner("The camera could not start: $it") }
             }
             if (cameraGranted && failure == null) {
-                val scanner = remember(context, attempt) { scannerFactory(context, onPayload) { message -> failure = message } }
-                DisposableEffect(scanner) { onDispose { scanner.close() } }
+                // A scanner starts once and is closed for good, so the camera is tied to the surface and to the page being visible: a scanner is made
+                // when the preview surface appears and closed when it goes (Home, the lock screen) or the activity stops, and the way back makes a new one.
+                val session = remember(context, attempt) {
+                    ScannerSession({ scannerFactory(context, { text -> latestPayload(text) }) { message -> failure = message } }) { message -> failure = message }
+                }
+                val owner = context as? LifecycleOwner
+                DisposableEffect(session, owner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        when (event) {
+                            Lifecycle.Event.ON_START -> session.start()
+                            Lifecycle.Event.ON_STOP -> session.stop()
+                            else -> Unit
+                        }
+                    }
+                    owner?.lifecycle?.addObserver(observer)
+                    onDispose { owner?.lifecycle?.removeObserver(observer); session.dispose() }
+                }
                 // The frames are 4:3 sensor frames; the preview keeps that shape (turned on a portrait screen) instead of stretching them.
                 val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
                 AndroidView(
@@ -89,12 +112,10 @@ fun ScanLink(
                         SurfaceView(viewContext).also { view ->
                             view.holder.addCallback(object : SurfaceHolder.Callback {
                                 override fun surfaceCreated(holder: SurfaceHolder) {
-                                    if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                                        runCatching { scanner.start(holder.surface) }.onFailure { failure = it.message ?: "The camera is unavailable" }
-                                    }
+                                    if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) session.surfaceCreated(holder.surface)
                                 }
                                 override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
-                                override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
+                                override fun surfaceDestroyed(holder: SurfaceHolder) = session.surfaceDestroyed()
                             })
                         }
                     },
