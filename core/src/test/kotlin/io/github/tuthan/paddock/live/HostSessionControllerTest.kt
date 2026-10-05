@@ -57,6 +57,40 @@ class HostSessionControllerTest {
     // ---- the phases, against a scripted host ----
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val target = io.github.tuthan.paddock.wake.WakeTarget(available = true, mac = "02:00:5e:10:00:01", iface = "wlp0s20f3", capturedAtMillis = 1)
+
+    @Test fun theWakeReadingRunsOncePerBringUpAfterTheRelayCheckAndIsExposed() = runBlocking<Unit> {
+        herdrFound = false
+        val order = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val session = host(sha256sum = { order += "relay-check"; result(0, "$sha  x\n") })
+        val c = controller(FakeLease(Connection.Connected(session, 1)), wakeCapture = { order += "capture"; target }).also { it.start() }
+        until("problem") { c.phase.value is HostPhase.Problem }
+        assertEquals(1, order.count { it == "capture" })
+        assertTrue(order.indexOf("relay-check") < order.indexOf("capture"), order.toString())
+        assertEquals(target, c.wake.value)
+        c.stop()
+    }
+
+    @Test fun aFailingWakeReadingDoesNotFailTheBringUp() = runBlocking<Unit> {
+        herdrFound = false
+        val session = host(sha256sum = { result(0, "$sha  x\n") })
+        val c = controller(FakeLease(Connection.Connected(session, 1)), wakeCapture = { error("boom") }).also { it.start() }
+        until("problem") { c.phase.value is HostPhase.Problem }
+        // The phase is the host fact about herdr, not "could not start watching".
+        assertTrue((c.phase.value as HostPhase.Problem).message.contains("~/.local/bin"))
+        assertNull(c.wake.value)
+        c.stop()
+    }
+
+    @Test fun aWakeReadingThatNeverReturnsIsGivenUpOn() = runBlocking<Unit> {
+        herdrFound = false
+        val session = host(sha256sum = { result(0, "$sha  x\n") })
+        val c = controller(FakeLease(Connection.Connected(session, 1)), wakeCapture = { kotlinx.coroutines.awaitCancellation() }, wakeTimeout = 50).also { it.start() }
+        until("problem") { c.phase.value is HostPhase.Problem }
+        assertNull(c.wake.value)
+        c.stop()
+    }
+
     private val clock = Clock { System.currentTimeMillis() }
     private val profile = HostProfile("laptop", "Laptop", "10.0.0.2", 22, "jdoe")
     private val script = "print('relay')\n".toByteArray()
@@ -64,7 +98,11 @@ class HostSessionControllerTest {
     private val ledger = Ledger(InMemoryLedgerStore()) { System.currentTimeMillis() }
     @After fun stop() { scope.coroutineContext[Job]?.cancel() }
 
-    private fun controller(lease: FakeLease) = HostSessionController(scope, profile, { lease }, ledger, clock, MutableStateFlow(true), script, sha)
+    private fun controller(
+        lease: FakeLease,
+        wakeCapture: (suspend (io.github.tuthan.paddock.ports.SshSession) -> io.github.tuthan.paddock.wake.WakeTarget)? = null,
+        wakeTimeout: Long = 5_000,
+    ) = HostSessionController(scope, profile, { lease }, ledger, clock, MutableStateFlow(true), script, sha, wakeCapture = wakeCapture, wakeCaptureTimeoutMillis = wakeTimeout)
 
     private suspend fun until(what: String, cond: () -> Boolean) {
         try { withTimeout(3_000) { while (!cond()) delay(5) } } catch (e: kotlinx.coroutines.TimeoutCancellationException) { throw AssertionError("timed out waiting for $what") }

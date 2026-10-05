@@ -104,7 +104,18 @@ class HostSessionController(
     private val hookSha256: String? = null,
     /** Where start-agent sagas are kept (Phase 09); null leaves the monitored host without the start-agent flow. */
     private val sagaStore: io.github.tuthan.paddock.ops.SagaStore? = null,
+    /**
+     * Reads which network interface this phone reached the machine on and whether it can be woken (Phase 14); null skips it. Run once
+     * per bring-up, after the relay check and before the first read, over the connection already open. Best effort: whatever it does
+     * (fail, hang, answer badly) never changes the phase.
+     */
+    private val wakeCapture: (suspend (SshSession) -> io.github.tuthan.paddock.wake.WakeTarget)? = null,
+    private val wakeCaptureTimeoutMillis: Long = 5_000,
 ) {
+    private val _wake = MutableStateFlow<io.github.tuthan.paddock.wake.WakeTarget?>(null)
+    /** What the last bring-up read about waking this machine; null until a capture has finished. */
+    val wake: StateFlow<io.github.tuthan.paddock.wake.WakeTarget?> = _wake.asStateFlow()
+
     private val _phase = MutableStateFlow<HostPhase>(HostPhase.Connecting)
     val phase: StateFlow<HostPhase> = _phase.asStateFlow()
 
@@ -228,8 +239,20 @@ class HostSessionController(
         }
     }
 
+    private suspend fun captureWake(session: SshSession) {
+        val capture = wakeCapture ?: return
+        try {
+            kotlinx.coroutines.withTimeoutOrNull(wakeCaptureTimeoutMillis) { capture(session) }?.let { _wake.value = it }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // Waking is a convenience: a failed read is "not read yet", never a failed connection.
+        }
+    }
+
     private suspend fun proceed(session: SshSession, installer: RelayInstaller, home: String, herdr: String?, plugin: PluginLocation?) {
         val path = installer.verifiedPath(home)
+        captureWake(session)
         if (herdr == null) {
             _phase.value = HostPhase.Problem("herdr was not found on the host (looked in ~/.local/bin, ~/.cargo/bin, /usr/local/bin and /usr/bin).")
             return

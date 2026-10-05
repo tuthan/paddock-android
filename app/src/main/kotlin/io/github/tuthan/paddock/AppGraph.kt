@@ -9,6 +9,7 @@ import io.github.tuthan.paddock.notify.AndroidAlertNotifier
 import io.github.tuthan.paddock.notify.NotificationAccessReader
 import io.github.tuthan.paddock.reconcile.Observation
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.filterNotNull
 import io.github.tuthan.paddock.alerts.AlertEvent
 import io.github.tuthan.paddock.alerts.AlertInbox
 import io.github.tuthan.paddock.alerts.AlertOutcome
@@ -134,6 +135,7 @@ class AppGraph(private val app: Application) {
         ledger.installedEpoch(host, session)?.let { ledger.seenLookup(host, session, it) } ?: io.github.tuthan.paddock.attention.SeenLookup { null }
     }
     @Volatile private var widgetWatcher: Job? = null
+    @Volatile private var wakeWatcher: Job? = null
     @Volatile private var lastWidgetCache: io.github.tuthan.paddock.widget.WidgetCache? = null
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
@@ -343,10 +345,12 @@ class AppGraph(private val app: Application) {
     /** Resumes the controller already watching [profile]; for any other profile, stops it and starts a new one. */
     private fun watch(profile: HostProfile) = synchronized(lock) {
         val c = controller
-        if (c != null && c.profile == profile) { c.resume(); return@synchronized }
+        // What was read about waking the machine changes on every bring-up and is no reason to reconnect.
+        if (c != null && c.profile.copy(wake = null) == profile.copy(wake = null)) { c.resume(); return@synchronized }
         c?.stop()
         val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin, journal = journal, alertScript = alertScript, alertSha256 = alertScriptSha256,
-            decideScript = decideScript, decideSha256 = decideScriptSha256, hookScript = hookScript, hookSha256 = hookScriptSha256, sagaStore = sagaStore)
+            decideScript = decideScript, decideSha256 = decideScriptSha256, hookScript = hookScript, hookSha256 = hookScriptSha256, sagaStore = sagaStore,
+            wakeCapture = { session -> io.github.tuthan.paddock.wake.WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) })
         controller = next
         hostUi.attach(next)
         next.start()
@@ -354,6 +358,33 @@ class AppGraph(private val app: Application) {
         alertWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) raiseAlerts(p.host) } }
         widgetWatcher?.cancel()
         widgetWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) trackWidgetCache(p.host) } }
+        wakeWatcher?.cancel()
+        wakeWatcher = scope.launch { next.wake.filterNotNull().collect { saveWake(next.profile, it) } }
+    }
+
+    /**
+     * Keeps what a bring-up read about waking the machine, with the relay the user saved. Skipped when the stored profile is no longer
+     * the machine that was read (the user edited its address meanwhile).
+     */
+    private suspend fun saveWake(read: HostProfile, target: io.github.tuthan.paddock.wake.WakeTarget) {
+        val stored = profiles.get(read.id) ?: return
+        if (!stored.host.equals(read.host, ignoreCase = true) || stored.port != read.port) return
+        val merged = stored.copy(wake = target.copy(relay = stored.wake?.relay))
+        if (merged == stored) return
+        profiles.put(merged)
+        if (_profile.value?.id == merged.id) _profile.value = merged
+    }
+
+    /**
+     * Saves, replaces or clears the relay for waking [profileId] from away. Before any reading the profile gets a "not read yet" target
+     * that carries only the relay; the next bring-up fills in the rest and keeps it.
+     */
+    suspend fun setWakeRelay(profileId: String, relay: io.github.tuthan.paddock.wake.WakeRelay?) {
+        val stored = profiles.get(profileId) ?: return
+        val base = stored.wake ?: io.github.tuthan.paddock.wake.WakeTarget.unavailable("Not read yet: connect once so Paddock can read the machine's network interface.", clock.nowMillis())
+        val merged = stored.copy(wake = base.copy(relay = relay))
+        profiles.put(merged)
+        if (_profile.value?.id == merged.id) _profile.value = merged
     }
 
     /**
