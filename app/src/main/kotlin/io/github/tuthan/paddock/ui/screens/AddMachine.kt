@@ -80,6 +80,8 @@ data class AddMachineState(
     val resolveRoute: (suspend (String) -> RouteNote)? = null,
     /** Why the pasted text could not be used as a pairing link, or null. Never the text itself. */
     val pairingNotice: String? = null,
+    /** The desktop's host when a pairing link says its `pair` popup is listening: offers Send the key under this phone's key. Null otherwise. */
+    val pairOfferHost: String? = null,
 )
 
 /** Where the phone's key is held, in words. Shown after generation, from what the platform reported, never assumed. */
@@ -111,6 +113,8 @@ fun AddMachine(
     onShareCommand: (String) -> Unit = {},
     /** Reads a pairing link from the clipboard; null hides the button. */
     onPastePairingLink: (() -> Unit)? = null,
+    /** Sends this phone's key to the desktop the pairing link named, with the form as typed; null leaves the button out. */
+    onSendKey: ((AddMachineInput) -> Unit)? = null,
     initial: AddMachineInput = AddMachineInput(),
     title: String = "Add a machine",
     intro: String = ADD_MACHINE_INTRO,
@@ -192,7 +196,10 @@ fun AddMachine(
                 if (state.importedKeyId != null) "Your own key, stored encrypted on this phone." else "Your own private key, stored encrypted on this phone. None imported yet.",
                 key == KeyKind.Imported, { key = KeyKind.Imported },
             )
-            if (key == KeyKind.Phone) PhoneKeySection(state, showQr, { showQr = it }, onGenerateKey, onCopyPublicKey, onCopyCommand, onShareCommand, if (sentenceInKeySection) AUTHORIZE_FAILED_PHONE_KEY else null, commandAnchor)
+            if (key == KeyKind.Phone) PhoneKeySection(
+                state, showQr, { showQr = it }, onGenerateKey, onCopyPublicKey, onCopyCommand, onShareCommand, if (sentenceInKeySection) AUTHORIZE_FAILED_PHONE_KEY else null, commandAnchor,
+                sendKeyTo = if (linkApplies && onSendKey != null) state.pairOfferHost else null, onSendKey = { if (!errors.any) onSendKey?.invoke(input) else showErrors = true },
+            )
             if (key == KeyKind.Imported) ImportedKeySection(state, onImportKey)
             if (key == KeyKind.Imported && state.importedKeyId == null && showErrors) Banner("Import a key before connecting, or use this phone's key.")
             if (key == KeyKind.Phone && state.publicKeyLine == null && showErrors) Banner("Create this phone's key first, then authorize it on the machine and press Connect.")
@@ -264,6 +271,8 @@ private fun PhoneKeySection(
     onCopyCommand: (String) -> Unit, onShareCommand: (String) -> Unit,
     /** The sentence that says the machine refused this key, drawn directly above the command, and the anchor the screen scrolls to. */
     refusedSentence: String? = null, anchor: BringIntoViewRequester? = null,
+    /** The desktop to send the key to, when the pairing link named one that is still what the fields say. */
+    sendKeyTo: String? = null, onSendKey: () -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     val line = state.publicKeyLine
@@ -294,6 +303,11 @@ private fun PhoneKeySection(
             { m -> PaddockButton("Copy key only", { onCopy(line) }, m, kind = ButtonKind.Secondary, small = true, icon = PaddockIcons.Copy) },
             { m -> PaddockButton(if (showQr) "Hide QR" else "Show as QR", { onShowQr(!showQr) }, m, kind = ButtonKind.Secondary, small = true, icon = PaddockIcons.Qr) },
         )
+        // An addition, never a replacement: the command, Copy, Share, Copy key only and Show as QR above are all still here.
+        if (sendKeyTo != null) {
+            PaddockButton("Send the key to $sendKeyTo", onSendKey, kind = ButtonKind.Secondary, icon = PaddockIcons.Send)
+            Note("The desktop shows this phone's fingerprint and asks its owner to approve it. Only this phone's public key is sent.")
+        }
         if (command == null) Note(withMono("Append it to ~/.ssh/authorized_keys on the machine, from a shell you already trust.", "~/.ssh/authorized_keys"))
         if (showQr) {
             val qr = remember(line) { runCatching { QrCode.encodeText(line) }.getOrNull() }

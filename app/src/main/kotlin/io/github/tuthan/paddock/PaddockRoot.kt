@@ -132,6 +132,10 @@ import io.github.tuthan.paddock.live.ConnectFix
 import io.github.tuthan.paddock.live.DownReasonText
 import io.github.tuthan.paddock.ui.screens.AUTHORIZE_INTRO
 import io.github.tuthan.paddock.ui.screens.Welcome
+import io.github.tuthan.paddock.ui.screens.PairWithDesktop
+import io.github.tuthan.paddock.ui.screens.PairingTarget
+import io.github.tuthan.paddock.pairing.PairingState
+import io.github.tuthan.paddock.pairing.PairingText
 import io.github.tuthan.paddock.live.SpacesState
 import io.github.tuthan.paddock.ops.CardAction
 import io.github.tuthan.paddock.ops.SagaCard
@@ -1335,6 +1339,10 @@ private fun AddMachineRoute(
     val resumes = rememberResumes()
     LaunchedEffect(resumes) { if (denied && !graph.gate.lanAccessMissing()) denied = false }
     var pending by remember { mutableStateOf<AddMachineInput?>(null) }
+    // Send the key waits for the local-network grant the way Connect does; kept here so the answer to the dialog can pick it up.
+    var pendingSend by remember { mutableStateOf<AddMachineInput?>(null) }
+    // The form as typed when the key was sent: what Connect uses once the desktop approves (or when the window ended unheard).
+    var sentInput by remember { mutableStateOf<AddMachineInput?>(null) }
 
     fun finish(input: AddMachineInput) {
         scope.launch {
@@ -1351,12 +1359,20 @@ private fun AddMachineRoute(
             onAttempt(ConnectAttempt(profile.id))
         }
     }
+    fun beginSend(input: AddMachineInput) {
+        val offer = pairing?.takeIf { it.pairPort != null && it.sid != null } ?: return
+        sentInput = input
+        scope.launch { if (!graph.sendPairingKey(offer.host, offer.pairPort!!, offer.sid!!)) onNotice("Create this phone's key first, then send it.") }
+    }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         denied = !granted
         val input = pending
         pending = null
         // A refusal is not the end: the screen keeps the recovery row, and a VPN address still works without the grant.
         if (granted && input != null) finish(input)
+        val send = pendingSend
+        pendingSend = null
+        if (granted && send != null) beginSend(send)
     }
     // Keystore reads and key generation can take a while on some phones: off the main thread. An unreadable key (lost
     // Keystore entry, corrupt store) reads as "no key" here; connecting reports it with its own recovery.
@@ -1392,6 +1408,29 @@ private fun AddMachineRoute(
         connectError = attempt?.error,
         connectFix = attempt?.fix,
     )
+    val pairState by graph.pairingCoordinator.state.collectAsState()
+    val pairNow = rememberNow()
+    val pairView = PairingText.view(pairState, pairNow)
+    // Approved: the key is authorized on the machine, so connect with the form as it was sent. The request is done with either way.
+    LaunchedEffect(pairState) {
+        val approved = pairState as? PairingState.Approved ?: return@LaunchedEffect
+        val input = sentInput
+        sentInput = null
+        graph.pairingCoordinator.clear()
+        if (input != null) finish(input) else onNotice("The desktop approved this phone's key. Press Connect to sign in.")
+    }
+    if (pairView != null && !pairView.approved) {
+        val p = (pairState as? PairingState.Sending)?.pending ?: (pairState as? PairingState.Waiting)?.pending ?: (pairState as? PairingState.Unreachable)?.pending
+            ?: (pairState as? PairingState.Rejected)?.pending ?: (pairState as? PairingState.Expired)?.pending ?: (pairState as? PairingState.Refused)?.pending
+            ?: (pairState as? PairingState.Busy)?.pending ?: (pairState as? PairingState.NotConfirmed)?.pending ?: (pairState as? PairingState.CannotReach)?.pending
+        PairWithDesktop(
+            pairView, PairingTarget(p?.let { "${it.host}:${it.port}" }.orEmpty(), p?.fingerprint.orEmpty()),
+            onCancel = { scope.launch { graph.pairingCoordinator.cancel() } },
+            onBack = { scope.launch { graph.pairingCoordinator.clear() } },
+            onConnect = { val input = sentInput; sentInput = null; scope.launch { graph.pairingCoordinator.clear() }; if (input != null) finish(input) },
+        )
+        return
+    }
     // Its own saved form: setting up a key starts from the watched machine's values, not from a half-typed new one.
     holder.SaveableStateProvider(fixing?.let { "key-${it.id}" } ?: pairing?.let { "pair-${it.hashCode()}" } ?: "add-machine") {
         AddMachine(
@@ -1399,6 +1438,10 @@ private fun AddMachineRoute(
             onConnect = { input ->
                 // Decided from where the name resolves (a LAN hostname needs the grant too); the lookup is bounded and off the main thread.
                 scope.launch { if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input) }
+            },
+            onSendKey = { input ->
+                // The TCP connect to the desktop is a LAN connection like Connect's: ask for the local-network grant first, then send.
+                scope.launch { if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pendingSend = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else beginSend(input) }
             },
             onGenerateKey = { scope.launch { graph.createPhoneKey(); keyTick++ } },
             onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },

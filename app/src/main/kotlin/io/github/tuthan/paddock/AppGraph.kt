@@ -104,6 +104,13 @@ class AppGraph(private val app: Application) {
     val gate = LocalNetworkGate(app)
     val lanPaths = io.github.tuthan.paddock.net.AndroidLanPaths(app)
     val sockets = io.github.tuthan.paddock.net.AndroidSockets(lanPaths)
+    /** Sending this phone's public key to a desktop's `pair` popup (Phase 14). The request is on disk before its first byte, so a restart reopens it within its window. */
+    val pairingCoordinator = io.github.tuthan.paddock.pairing.PairingCoordinator(
+        io.github.tuthan.paddock.pairing.FilePendingPairingStore(File(app.filesDir, "pending-pairing.json")),
+        io.github.tuthan.paddock.pairing.PairingClient(sockets), clock, scope,
+    )
+    // After a restart: a request still inside its window is reopened, asking the desktop first whether the first send ever arrived.
+    init { scope.launch { runCatching { pairingCoordinator.resume() } } }
     val ledger = Ledger(FileLedgerStore(File(files, "ledger.json"))) { System.currentTimeMillis() }
     private val settingsStore = FileAppSettingsStore(File(files, "settings.json"))
     /** Pro: the last verified answer from the store account, kept in a plain file; the foss build has no store and every capability unlocked (Phase 13). */
@@ -143,6 +150,7 @@ class AppGraph(private val app: Application) {
     @Volatile private var widgetWatcher: Job? = null
     @Volatile private var wakeWatcher: Job? = null
     @Volatile private var wakeFollow: Job? = null
+    @Volatile private var pairingWatcher: Job? = null
     private val _wakeFacts = MutableStateFlow<io.github.tuthan.paddock.wake.WakeFacts?>(null)
     /** What the last Wake tap on the watched machine came to; null before any tap and after switching machines. */
     val wakeFacts: StateFlow<io.github.tuthan.paddock.wake.WakeFacts?> = _wakeFacts.asStateFlow()
@@ -371,6 +379,9 @@ class AppGraph(private val app: Application) {
         widgetWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) trackWidgetCache(p.host) } }
         wakeWatcher?.cancel()
         wakeWatcher = scope.launch { next.wake.filterNotNull().collect { saveWake(next.profile, it) } }
+        // A live connection ends any pairing request: the key is no longer what stands between this phone and the machine.
+        pairingWatcher?.cancel()
+        pairingWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring && pairingCoordinator.state.value != io.github.tuthan.paddock.pairing.PairingState.Idle) pairingCoordinator.clear() } }
     }
 
     /**
@@ -384,6 +395,17 @@ class AppGraph(private val app: Application) {
         if (merged == stored) return
         profiles.put(merged)
         if (_profile.value?.id == merged.id) _profile.value = merged
+    }
+
+    /**
+     * Sends this phone's own public key to the desktop that showed the pairing code. Only the phone key is ever sent: an imported key
+     * can be any type and its public line is not kept. False when the phone has no key yet.
+     */
+    suspend fun sendPairingKey(host: String, port: Int, sid: String): Boolean {
+        val line = runCatching { phoneKey.publicLine("paddock@phone") }.getOrNull() ?: return false
+        val key = io.github.tuthan.paddock.ssh.AuthorizedKey.parse(line) ?: return false
+        pairingCoordinator.start(host, port, sid, line, key.fingerprint)
+        return true
     }
 
     /** True when this phone can send a wake packet for [profile]: its hardware address is read, and a LAN path or a saved relay can carry it. */
