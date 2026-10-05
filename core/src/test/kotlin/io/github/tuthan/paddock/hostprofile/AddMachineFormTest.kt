@@ -95,4 +95,54 @@ class AddMachineFormTest {
         assertEquals(RouteNote.LocalReady, AddMachineForm.route("nas.lan", GateDecision.Granted, EndpointClass.Local))
         assertEquals(RouteNote.NotLocal, AddMachineForm.route("nas.lan", GateDecision.NotRequired, EndpointClass.NotLocal))
     }
+
+    private fun profile(id: String, host: String = "192.168.1.20", port: Int = 22, user: String = "jdoe", wake: io.github.tuthan.paddock.wake.WakeTarget? = null, name: String = host) =
+        HostProfile(id = id, name = name, host = host, port = port, user = user, wake = wake)
+
+    @Test fun addingTheSameMachineAgainKeepsTheOneProfileItsNameAndItsWake() {
+        val wake = io.github.tuthan.paddock.wake.WakeTarget(available = true, mac = "02:00:5e:10:00:01", iface = "wlp0s20f3", capturedAtMillis = 5)
+        val have = profile("laptop", wake = wake, name = "Laptop")
+        val again = AddMachineForm.resolve(input(), listOf(have))!!
+        assertEquals("laptop", again.id)
+        assertEquals("Laptop", again.name)
+        assertEquals(wake, again.wake)
+    }
+
+    @Test fun theHostIsComparedWithoutCase() {
+        val again = AddMachineForm.resolve(input(host = "Box.Local"), listOf(profile("box-local", host = "box.local")))!!
+        assertEquals("box-local", again.id)
+    }
+
+    @Test fun aDifferentPortOrUserIsANewProfile() {
+        val have = listOf(profile("192-168-1-20"))
+        assertEquals("192-168-1-20-2", AddMachineForm.resolve(input(port = "2222"), have)!!.id)
+        assertEquals("192-168-1-20-2", AddMachineForm.resolve(input(user = "other"), have)!!.id)
+        assertNull(AddMachineForm.resolve(input(port = "2222"), have)!!.wake)
+    }
+
+    @Test fun aNameFromTheFinderRenamesTheKeptProfile() {
+        val have = profile("a", name = "old")
+        assertEquals("devbox", AddMachineForm.resolve(input().copy(name = " devbox "), listOf(have))!!.name)
+        assertEquals("old", AddMachineForm.resolve(input().copy(name = "  "), listOf(have))!!.name)
+    }
+
+    @Test fun aNewMachineUsesTheFinderNameOrTheHost() {
+        assertEquals("devbox", AddMachineForm.profile(input().copy(name = "devbox"), emptySet())!!.name)
+        assertEquals("192.168.1.20", AddMachineForm.profile(input(), emptySet())!!.name)
+        assertEquals(60, AddMachineForm.profile(input().copy(name = "n".repeat(90)), emptySet())!!.name.length)
+    }
+
+    @Test fun fixingTheKeyKeepsTheEditedProfileEvenWhenTheUserChanges() {
+        val editing = profile("a", user = "jdoe")
+        val fixed = AddMachineForm.resolve(input(user = "other"), listOf(editing, profile("b", host = "other.box")), replacing = editing)!!
+        assertEquals("a", fixed.id)
+        assertEquals("other", fixed.user)
+    }
+
+    @Test fun editingToAnotherHostMakesANewProfileAndLeavesTheOldOne() {
+        val editing = profile("a")
+        assertEquals("10-0-0-9", AddMachineForm.resolve(input(host = "10.0.0.9"), listOf(editing), replacing = editing)!!.id)
+    }
+
+    @Test fun invalidInputResolvesToNothing() = assertNull(AddMachineForm.resolve(input(user = ""), emptyList()))
 }

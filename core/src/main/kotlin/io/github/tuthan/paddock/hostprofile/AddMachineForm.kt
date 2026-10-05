@@ -19,6 +19,8 @@ data class AddMachineInput(
      * compares the key the machine presents with it before the trust dialog.
      */
     val pairedFingerprints: List<String>? = null,
+    /** The display name a finder or link found for the machine; blank or null means the host as typed. */
+    val name: String? = null,
 )
 
 /** One message per field, null when the field is fine. */
@@ -73,11 +75,26 @@ object AddMachineForm {
         val host = normalizeHost(input.host)
         return try {
             HostProfile(
-                id = idFor(host, existingIds), name = host.take(60), host = host, port = input.port.trim().toInt(), user = input.user.trim(),
+                id = idFor(host, existingIds), name = input.name?.trim()?.takeIf { it.isNotEmpty() }?.take(60) ?: host.take(60), host = host, port = input.port.trim().toInt(), user = input.user.trim(),
                 key = input.key, importedKeyId = if (input.key == KeyKind.Imported) input.importedKeyId else null,
                 session = input.session.trim().ifEmpty { null },
             )
         } catch (_: IllegalArgumentException) { null }
+    }
+
+    /**
+     * As [profile], but a machine the phone already has stays one profile: adding the same host, port and user again updates it
+     * (its id, so its pinned host key and history, its name unless the input names it, and what was read about waking it) instead of
+     * adding a second. [replacing] is the profile the form is editing; it matches on host and port alone, since fixing a key may
+     * change the user.
+     */
+    fun resolve(input: AddMachineInput, existing: List<HostProfile>, replacing: HostProfile? = null): HostProfile? {
+        val made = profile(input, existing.map { it.id }.toSet() - setOfNotNull(replacing?.id)) ?: return null
+        val same = replacing?.takeIf { it.host.equals(made.host, ignoreCase = true) && it.port == made.port }
+            ?: existing.firstOrNull { it.host.equals(made.host, ignoreCase = true) && it.port == made.port && it.user == made.user }
+            ?: return made
+        val named = input.name?.trim()?.takeIf { it.isNotEmpty() }?.take(60)
+        return made.copy(id = same.id, name = named ?: same.name, wake = same.wake)
     }
 
     fun idFor(host: String, existingIds: Set<String>): String {
