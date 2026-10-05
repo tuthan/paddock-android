@@ -187,13 +187,13 @@ class WakeTargetTest {
 class WakeSenderTest {
     private class Sent(val payload: ByteArray, val address: InetAddress, val port: Int, val broadcast: Boolean, val pathId: String?)
 
-    private class FakeSockets(val failOn: Set<String> = emptySet(), val failOpen: Boolean = false) : Sockets {
+    private class FakeSockets(val failOn: Set<String> = emptySet(), val failOpen: Boolean = false, val openError: String = "no socket") : Sockets {
         val sent = mutableListOf<Sent>()
         var opened = 0
         override fun tcp(): TcpConnection = error("not used")
         override fun udp(path: LanPath?): UdpSender {
             opened++
-            if (failOpen) throw IOException("no socket")
+            if (failOpen) throw IOException(openError)
             return object : UdpSender {
                 override fun send(payload: ByteArray, address: InetAddress, port: Int, broadcast: Boolean) {
                     if (address.hostAddress in failOn) throw IOException("sendto failed: EPERM")
@@ -263,6 +263,21 @@ class WakeSenderTest {
         assertTrue(r is WakeSendResult.Partial && r.reason == WakeSendFailure.SendFailed, r.toString())
         assertEquals(3, s.sent.size)
         assertTrue(s.sent.all { it.address.hostAddress == "192.168.1.255" })
+    }
+
+    @Test fun everySendRefusedWithEpermIsTheLocalNetworkGrantBeingOffNotAGenericFailure() = runBlocking {
+        // Spike S3 (API 37): with the grant off every send throws IOException "sendto failed: EPERM" (not a SecurityException), unicast and broadcast alike.
+        val s = FakeSockets(failOn = setOf("192.168.1.255", "255.255.255.255"))
+        val r = sender(s).send(TARGET, listOf(lan()), null)
+        assertTrue(r is WakeSendResult.Failed && r.reason == WakeSendFailure.Permission, r.toString())
+    }
+
+    @Test fun aSocketThatCannotBeOpenedWithEpermIsTheGrantToo() = runBlocking {
+        val r = sender(FakeSockets(failOpen = true, openError = "socket failed: EPERM (Operation not permitted)")).send(TARGET, listOf(lan()), null)
+        assertTrue(r is WakeSendResult.Failed && r.reason == WakeSendFailure.Permission, r.toString())
+        // Any other open failure stays a send failure.
+        val other = sender(FakeSockets(failOpen = true)).send(TARGET, listOf(lan()), null)
+        assertTrue(other is WakeSendResult.Failed && other.reason == WakeSendFailure.SendFailed, other.toString())
     }
 
     @Test fun aTargetThatIsNotAvailableSendsNothing() = runBlocking {

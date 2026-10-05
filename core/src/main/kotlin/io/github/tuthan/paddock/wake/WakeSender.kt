@@ -60,6 +60,7 @@ class WakeSender(
         val sent = LinkedHashSet<InetAddress>()
         var failure: WakeSendFailure? = null
         var detail: String? = null
+        var denied = false
         try {
             sockets.udp(path).use { udp ->
                 for (round in 0 until packets) {
@@ -72,6 +73,7 @@ class WakeSender(
                             udp.send(payload, address, port, broadcast = !path.tunnel)
                             sent += address
                         } catch (e: IOException) {
+                            if (isDenied(e)) denied = true
                             if (failure == null) { failure = WakeSendFailure.SendFailed; detail = describe(e) }
                         }
                     }
@@ -81,9 +83,12 @@ class WakeSender(
         } catch (e: SecurityException) {
             return failed(sent, WakeSendFailure.Permission, describe(e))
         } catch (e: IOException) {
-            return failed(sent, WakeSendFailure.SendFailed, describe(e))
+            return failed(sent, if (isDenied(e)) WakeSendFailure.Permission else WakeSendFailure.SendFailed, describe(e))
         }
         val f = failure
+        // Nothing left the phone and the system said EPERM: that is the local-network grant being off (spike S3), not a network that refused.
+        // One destination refused with EPERM while another went out is not that, and stays a send failure.
+        if (f == WakeSendFailure.SendFailed && denied && sent.isEmpty()) return WakeSendResult.Failed(WakeSendFailure.Permission, detail)
         return if (f != null) failed(sent, f, detail) else WakeSendResult.Sent(sent.toList(), viaRelay = path.tunnel)
     }
 
@@ -92,6 +97,9 @@ class WakeSender(
 
     companion object {
         const val LAN_PORT = 9
+
+        /** Android 17 without ACCESS_LOCAL_NETWORK fails a send with `IOException: sendto failed: EPERM (Operation not permitted)`, not with a SecurityException. */
+        private fun isDenied(e: IOException) = "EPERM" in e.message.orEmpty()
 
         fun describe(e: Exception): String = "${e.javaClass.simpleName}: ${e.message.orEmpty()}".trim().trimEnd(':').take(120)
     }
