@@ -115,4 +115,45 @@ class HomeUiMapperTest {
         val s = map(HostView(phase = HostPhase.Connecting, lastHome = model, lastReadAtMillis = now + 5_000)).state as HomeUiState.Degraded
         assertEquals(0L, s.ageMillis)
     }
+
+    private fun mapWake(reason: DownReason, retryAt: Long? = null) = HomeUiMapper.map("Laptop", HostView(phase = HostPhase.Failed(reason, retryAt)), now, wakeAvailable = true)
+
+    @Test fun aMachineThatMaySimplyBeAsleepOffersWakeFirstAndTryAgainBeside() {
+        for (reason in listOf(DownReason.Timeout, DownReason.Closed, DownReason.Network("no route"))) {
+            val r = mapWake(reason)
+            val s = r.state as HomeUiState.Degraded
+            assertEquals("$reason", Recovery.Wake, r.recovery)
+            assertEquals("$reason", Recovery.Retry, r.secondary)
+            assertEquals("Wake the machine", s.recoveryLabel)
+            assertEquals("Try again", s.secondaryLabel)
+        }
+    }
+
+    @Test fun wakeIsOfferedEvenWhilePaddockIsAboutToRetryItself() {
+        val r = mapWake(DownReason.Timeout, now + 4_000)
+        assertEquals(Recovery.Wake, r.recovery)
+        assertTrue((r.state as HomeUiState.Degraded).reason.contains("Trying again in 4 s"))
+    }
+
+    @Test fun theMissingGrantKeepsItsFixFirstAndWakeIsTheSecondPossibility() {
+        val r = mapWake(DownReason.LocalNetworkTimeout)
+        assertEquals(Recovery.OpenSettings, r.recovery)
+        assertEquals(Recovery.Wake, r.secondary)
+        assertEquals("Wake the machine", (r.state as HomeUiState.Degraded).secondaryLabel)
+    }
+
+    @Test fun failuresThatAreNotSilenceNeverOfferWake() {
+        for (reason in listOf(DownReason.AuthFailed, DownReason.HostKeyChanged, DownReason.Refused, DownReason.PermissionDenied, DownReason.KeyUnavailable, DownReason.HostKeysUnreadable)) {
+            val r = mapWake(reason)
+            assertTrue("$reason", r.recovery != Recovery.Wake && r.secondary != Recovery.Wake)
+            assertNull("$reason", (r.state as HomeUiState.Degraded).secondaryLabel)
+        }
+    }
+
+    @Test fun withoutWakeAvailableNothingChanges() {
+        val r = HomeUiMapper.map("Laptop", HostView(phase = HostPhase.Failed(DownReason.Timeout, null)), now)
+        assertEquals(Recovery.Retry, r.recovery)
+        assertNull(r.secondary)
+        assertNull((r.state as HomeUiState.Degraded).secondaryLabel)
+    }
 }

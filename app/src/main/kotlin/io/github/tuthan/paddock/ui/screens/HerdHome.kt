@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -68,6 +70,8 @@ sealed interface HomeUiState {
         val reason: String,
         val ageMillis: Long?,
         val recoveryLabel: String? = null,
+        /** A second action beside [recoveryLabel] (Try again beside Wake the machine). */
+        val secondaryLabel: String? = null,
     ) : HomeUiState
 }
 
@@ -92,6 +96,9 @@ fun HerdHome(
     /** Long-press on a live row: rename it, or show its workspace or tab on the desktop (Phase 09). Null leaves the gesture out. */
     onRowMenu: ((AgentRowModel) -> Unit)? = null,
     onRecovery: () -> Unit = {},
+    onSecondaryRecovery: () -> Unit = {},
+    /** What the last Wake tap came to, one line per fact (packet sent, machine answered, herdr reachable); empty hides it. */
+    wakeLines: List<String> = emptyList(),
     /** The captured prompt of the first blocked agent, when one was read. Only a live host expands that row. */
     preview: BlockedPreview? = null,
     onReview: (AgentRowModel) -> Unit = {},
@@ -142,7 +149,16 @@ fun HerdHome(
                     }
                 }
                 if (state is HomeUiState.Degraded) {
-                    item(key = "banner") { Banner(state.reason, Modifier.padding(top = 4.dp), actionLabel = state.recoveryLabel, onAction = onRecovery) }
+                    item(key = "banner") {
+                        Banner(state.reason, Modifier.padding(top = 4.dp), actionLabel = state.recoveryLabel, onAction = onRecovery, secondaryLabel = state.secondaryLabel, onSecondary = onSecondaryRecovery)
+                    }
+                    if (wakeLines.isNotEmpty()) {
+                        item(key = "wake") {
+                            Column(Modifier.padding(top = 4.dp).semantics(mergeDescendants = true) { contentDescription = wakeLines.joinToString(". ") }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                for (line in wakeLines) Text(line, style = PaddockTokens.type.secondary, color = PaddockTokens.colors.dim)
+                            }
+                        }
+                    }
                 }
                 if (model != null && model.rows.isEmpty() && state is HomeUiState.Live) {
                     item(key = "quiet") { Text("Start an agent in herdr and it appears here.", style = PaddockTokens.type.body, color = PaddockTokens.colors.dim, modifier = Modifier.padding(top = 8.dp)) }

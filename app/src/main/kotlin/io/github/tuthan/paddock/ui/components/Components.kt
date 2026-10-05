@@ -393,13 +393,15 @@ fun HostChip(name: String, status: String, modifier: Modifier = Modifier, health
 fun Banner(
     text: String, modifier: Modifier = Modifier, actionLabel: String? = null, onAction: () -> Unit = {},
     tint: Color = PaddockTokens.colors.attention, icon: androidx.compose.ui.graphics.vector.ImageVector = PaddockIcons.Warning,
+    /** A second action beside the first (Wake, then Try again); it makes the banner stack, so two buttons never squeeze the sentence. */
+    secondaryLabel: String? = null, onSecondary: () -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.row)
     // Side by side only when there is room: on a narrow phone or at a large font the action goes under the sentence.
     val density = LocalDensity.current
     val width = with(density) { LocalWindowInfo.current.containerSize.width.toDp() }
-    val stacked = density.fontScale >= 1.3f || width < 400.dp
+    val stacked = density.fontScale >= 1.3f || width < 400.dp || (actionLabel != null && secondaryLabel != null)
     val body: @Composable (Modifier) -> Unit = { m ->
         Row(m, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
@@ -407,7 +409,10 @@ fun Banner(
         }
     }
     val action: @Composable () -> Unit = {
-        if (actionLabel != null) PaddockButton(actionLabel, onAction, Modifier.padding(start = if (stacked) 30.dp else 0.dp), kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
+        Row(Modifier.padding(start = if (stacked) 30.dp else 0.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (actionLabel != null) PaddockButton(actionLabel, onAction, kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
+            if (actionLabel != null && secondaryLabel != null) PaddockButton(secondaryLabel, onSecondary, kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
+        }
     }
     val frame = modifier.fillMaxWidth().clip(shape).background(c.bannerWash(tint)).border(1.dp, c.bannerBorder(tint), shape)
         .padding(horizontal = 12.dp, vertical = 10.dp)

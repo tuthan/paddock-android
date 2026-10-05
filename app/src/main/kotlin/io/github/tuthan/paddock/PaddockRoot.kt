@@ -172,6 +172,7 @@ import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.PaddockNavBar
 import io.github.tuthan.paddock.ui.components.ScreenHeader
 import io.github.tuthan.paddock.ui.screens.MachineSummary
+import io.github.tuthan.paddock.ui.screens.clockLabel
 import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import kotlinx.coroutines.delay
@@ -371,7 +372,11 @@ private fun HomeRoute(
     val view by graph.hostUi.view.collectAsState()
     val now = rememberNow()
     val name = profile?.name ?: "this machine"
-    val screen = HomeUiMapper.map(name, view, now)
+    val wakeFacts by graph.wakeFacts.collectAsState()
+    // Read again when the connection changes and on every return: the phone may have joined or left a network meanwhile.
+    val homeResumes = rememberResumes()
+    val wakeReady = remember(profile, view.phase, homeResumes) { profile?.let { graph.wakeReady(it) } == true }
+    val screen = HomeUiMapper.map(name, view, now, wakeAvailable = wakeReady && wakeFacts?.canWakeAgain(now) != false)
     val ctx = LocalContext.current
     // The captured prompt is agent output, so while it is on Home the window is protected like Output is.
     val settings by graph.settings.collectAsState()
@@ -420,6 +425,17 @@ private fun HomeRoute(
             graph.scope.launch { rowOps?.rename(row.key, name)?.let { onNotice(presenter.line(io.github.tuthan.paddock.ops.OperationKind.Rename, it).text) } }
         })
     }
+    fun recover(r: Recovery?) {
+        when (r) {
+            Recovery.OpenSettings -> ctx.startActivity(graph.gate.settingsIntent())
+            Recovery.ReviewKey -> onReviewKey()
+            Recovery.InstallRelay -> setRelayDismissed(false)
+            Recovery.Retry -> graph.retry()
+            Recovery.SetUpKey -> onSetUpKey()
+            Recovery.Wake -> graph.wake()
+            null -> Unit
+        }
+    }
     HerdHome(
         screen.state, now, preview = view.blockedPreview, onSettings = onSettings,
         onRowMenu = if (host?.operations != null && host.spaceOps != null) { row -> menuRow = row } else null,
@@ -431,16 +447,9 @@ private fun HomeRoute(
             if (row.state == StateWord.Done) host?.markSeen(row)
             onOpen(row.key.target.terminalId)
         },
-        onRecovery = {
-            when (screen.recovery) {
-                Recovery.OpenSettings -> ctx.startActivity(graph.gate.settingsIntent())
-                Recovery.ReviewKey -> onReviewKey()
-                Recovery.InstallRelay -> setRelayDismissed(false)
-                Recovery.Retry -> graph.retry()
-                Recovery.SetUpKey -> onSetUpKey()
-                null -> Unit
-            }
-        },
+        onRecovery = { recover(screen.recovery) },
+        onSecondaryRecovery = { recover(screen.secondary) },
+        wakeLines = wakeFacts?.lines(::clockLabel).orEmpty(),
     )
 }
 

@@ -74,6 +74,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -86,6 +87,9 @@ enum class Boot { Loading, NoMachines, Ready }
  * stores or lose the last home. The connection itself follows visibility: it is held only while an activity is started, and
  * [ConnectionOwner] closes it a few seconds after the last release.
  */
+/** How long after a Wake tap the app keeps watching the connection to fill in "the machine answered" and "herdr reachable". */
+private const val WAKE_FOLLOW_MILLIS = 180_000L
+
 class AppGraph(private val app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val clock = Clock { System.currentTimeMillis() }
@@ -98,6 +102,8 @@ class AppGraph(private val app: Application) {
     val phoneKey = PhoneKey()
     val importedKeys = ImportedKeyStore(KeystoreSecretStore(File(files, "secrets")))
     val gate = LocalNetworkGate(app)
+    val lanPaths = io.github.tuthan.paddock.net.AndroidLanPaths(app)
+    val sockets = io.github.tuthan.paddock.net.AndroidSockets(lanPaths)
     val ledger = Ledger(FileLedgerStore(File(files, "ledger.json"))) { System.currentTimeMillis() }
     private val settingsStore = FileAppSettingsStore(File(files, "settings.json"))
     /** Pro: the last verified answer from the store account, kept in a plain file; the foss build has no store and every capability unlocked (Phase 13). */
@@ -136,6 +142,10 @@ class AppGraph(private val app: Application) {
     }
     @Volatile private var widgetWatcher: Job? = null
     @Volatile private var wakeWatcher: Job? = null
+    @Volatile private var wakeFollow: Job? = null
+    private val _wakeFacts = MutableStateFlow<io.github.tuthan.paddock.wake.WakeFacts?>(null)
+    /** What the last Wake tap on the watched machine came to; null before any tap and after switching machines. */
+    val wakeFacts: StateFlow<io.github.tuthan.paddock.wake.WakeFacts?> = _wakeFacts.asStateFlow()
     @Volatile private var lastWidgetCache: io.github.tuthan.paddock.widget.WidgetCache? = null
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
@@ -348,6 +358,7 @@ class AppGraph(private val app: Application) {
         // What was read about waking the machine changes on every bring-up and is no reason to reconnect.
         if (c != null && c.profile.copy(wake = null) == profile.copy(wake = null)) { c.resume(); return@synchronized }
         c?.stop()
+        if (c?.profile?.id != profile.id) _wakeFacts.value = null
         val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin, journal = journal, alertScript = alertScript, alertSha256 = alertScriptSha256,
             decideScript = decideScript, decideSha256 = decideScriptSha256, hookScript = hookScript, hookSha256 = hookScriptSha256, sagaStore = sagaStore,
             wakeCapture = { session -> io.github.tuthan.paddock.wake.WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) })
@@ -373,6 +384,53 @@ class AppGraph(private val app: Application) {
         if (merged == stored) return
         profiles.put(merged)
         if (_profile.value?.id == merged.id) _profile.value = merged
+    }
+
+    /** True when this phone can send a wake packet for [profile]: its hardware address is read, and a LAN path or a saved relay can carry it. */
+    fun wakeReady(profile: HostProfile): Boolean {
+        val target = profile.wake?.takeIf { it.available } ?: return false
+        return target.relay != null || io.github.tuthan.paddock.wake.WakePaths.candidates(lanPaths.paths(), profile.host, target.iface).any { !it.tunnel && it.hasIpv4 }
+    }
+
+    /** One Wake tap on the watched machine: send, show the three facts, ask for a reconnect at once. A second tap inside the guard does nothing. */
+    fun wake() { scope.launch { wakeNow() } }
+
+    private suspend fun wakeNow() {
+        val profile = _profile.value ?: return
+        val target = (profiles.get(profile.id) ?: profile).wake ?: return
+        if (_wakeFacts.value?.canWakeAgain(clock.nowMillis()) == false) return
+        val result = withContext(Dispatchers.IO) {
+            val candidates = io.github.tuthan.paddock.wake.WakePaths.candidates(lanPaths.paths(), profile.host, target.iface)
+            io.github.tuthan.paddock.wake.WakeSender(sockets, permissionMissing = { gate.lanAccessMissing() }).send(target, candidates, target.relay)
+        }
+        val facts = io.github.tuthan.paddock.wake.WakeFacts(clock.nowMillis(), result)
+        _wakeFacts.value = facts
+        if (facts.transmitted) { retry(); followWake(facts) }
+    }
+
+    /** Fills in the two later facts as the connection comes up, for at most three minutes after the tap. */
+    private fun followWake(first: io.github.tuthan.paddock.wake.WakeFacts) {
+        wakeFollow?.cancel()
+        wakeFollow = scope.launch {
+            withTimeoutOrNull(WAKE_FOLLOW_MILLIS) {
+                hostUi.view.first { v ->
+                    val now = clock.nowMillis()
+                    val p = v.phase
+                    // Any phase past Connecting means the SSH connect itself answered; only a live read means herdr did.
+                    val answered = p is HostPhase.InstallingRelay || p is HostPhase.NeedsRelayInstall || p is HostPhase.Problem || p is HostPhase.Monitoring
+                    val reachable = p is HostPhase.Monitoring && v.freshness == io.github.tuthan.paddock.reconcile.Freshness.Live
+                    var done = false
+                    _wakeFacts.update { f ->
+                        if (f == null || f.sentAtMillis != first.sentAtMillis) { done = true; f }
+                        else f.copy(
+                            answeredAtMillis = f.answeredAtMillis ?: now.takeIf { answered },
+                            reachableAtMillis = f.reachableAtMillis ?: now.takeIf { reachable },
+                        ).also { done = it.answeredAtMillis != null && it.reachableAtMillis != null }
+                    }
+                    done
+                }
+            }
+        }
     }
 
     /**

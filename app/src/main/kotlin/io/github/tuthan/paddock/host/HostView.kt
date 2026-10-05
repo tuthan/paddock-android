@@ -30,9 +30,10 @@ data class HostView(
 )
 
 /** What tapping the degraded banner's action does. */
-enum class Recovery { OpenSettings, ReviewKey, Retry, InstallRelay, SetUpKey }
+enum class Recovery { OpenSettings, ReviewKey, Retry, InstallRelay, SetUpKey, Wake }
 
-data class HostScreen(val state: HomeUiState, val recovery: Recovery? = null, val relayPrompt: HostPhase.NeedsRelayInstall? = null)
+/** [secondary] is the banner's second action, shown beside [recovery] (Try again beside Wake the machine). */
+data class HostScreen(val state: HomeUiState, val recovery: Recovery? = null, val relayPrompt: HostPhase.NeedsRelayInstall? = null, val secondary: Recovery? = null)
 
 /** Turns a [HostView] into what Home draws. Pure: the same view and clock always give the same screen. */
 object HomeUiMapper {
@@ -47,7 +48,11 @@ object HomeUiMapper {
         }
     }
 
-    fun map(name: String, v: HostView, nowMillis: Long, clock: (Long) -> String = ::clockLabel): HostScreen {
+    /**
+     * [wakeAvailable] is true when this phone has what it takes to send a wake packet for this machine and the last tap is old enough
+     * to send another: a failure that may mean "the machine is asleep" then offers Wake the machine, with Try again beside it.
+     */
+    fun map(name: String, v: HostView, nowMillis: Long, clock: (Long) -> String = ::clockLabel, wakeAvailable: Boolean = false): HostScreen {
         val age = v.lastReadAtMillis?.let { (nowMillis - it).coerceAtLeast(0) }
         fun degraded(reason: String, label: String? = null, recovery: Recovery? = null, prompt: HostPhase.NeedsRelayInstall? = null) =
             HostScreen(HomeUiState.Degraded(name, v.lastHome, reason, age, label), recovery, prompt)
@@ -59,7 +64,7 @@ object HomeUiMapper {
                 "Paddock has to install its small relay script on $name before it can watch your agents.", "Review the relay", Recovery.InstallRelay, p,
             )
             is HostPhase.Problem -> degraded(p.message, "Try again", Recovery.Retry)
-            is HostPhase.Failed -> failed(p, nowMillis, ::degraded)
+            is HostPhase.Failed -> failed(p, nowMillis, wakeAvailable, ::degraded)
             is HostPhase.Monitoring -> when {
                 v.freshness == Freshness.Live && v.home != null && v.lastReadAtMillis != null ->
                     HostScreen(HomeUiState.Live(name, v.home, age ?: 0))
@@ -70,11 +75,20 @@ object HomeUiMapper {
     }
 
     private fun failed(
-        f: HostPhase.Failed, now: Long,
+        f: HostPhase.Failed, now: Long, wakeAvailable: Boolean,
         degraded: (String, String?, Recovery?, HostPhase.NeedsRelayInstall?) -> HostScreen,
     ): HostScreen {
         val seconds = f.retryAtMillis?.let { ((it - now).coerceAtLeast(0) + 999) / 1000 }
         val text = DownReasonText.sentence(f.reason, seconds)
+        // A machine that may simply be asleep: these four say "no answer", never "refused" or "wrong key".
+        val maybeAsleep = f.reason == DownReason.Timeout || f.reason == DownReason.Closed || f.reason is DownReason.Network
+        if (wakeAvailable && maybeAsleep) {
+            return degraded(text, "Wake the machine", Recovery.Wake, null).let { it.copy(state = (it.state as HomeUiState.Degraded).copy(secondaryLabel = "Try again"), secondary = Recovery.Retry) }
+        }
+        if (wakeAvailable && f.reason == DownReason.LocalNetworkTimeout) {
+            // The missing grant may be the cause: its fix stays first, and waking is the other possibility.
+            return degraded(text, "Open settings", Recovery.OpenSettings, null).let { it.copy(state = (it.state as HomeUiState.Degraded).copy(secondaryLabel = "Wake the machine"), secondary = Recovery.Wake) }
+        }
         return when (DownReasonText.fix(f.reason)) {
             ConnectFix.OpenSettings -> degraded(text, "Open settings", Recovery.OpenSettings, null)
             ConnectFix.ReviewKey -> degraded(text, "Review the key", Recovery.ReviewKey, null)
