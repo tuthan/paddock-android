@@ -12,7 +12,11 @@ import java.nio.charset.CodingErrorAction
  * pre-fills Add machine, and the first connection compares the key the machine presents with [fingerprints]. A match only
  * adds a line to the trust dialog; the user still taps Trust, and a key the link does not name is refused.
  */
-data class PairingLink(val host: String, val port: Int, val user: String, val fingerprints: List<String>, val session: String?) {
+data class PairingLink(
+    val host: String, val port: Int, val user: String, val fingerprints: List<String>, val session: String?,
+    /** The desktop's pairing listener and its session handle, when the machine's `pair` popup is listening; both or neither. The handle is no secret and no credential. */
+    val pairPort: Int? = null, val sid: String? = null,
+) {
     /** The input Add machine starts from: the machine's fields, this phone's key, and the link's fingerprints to compare. */
     fun toInput() = AddMachineInput(host = host, port = port.toString(), user = user, session = session.orEmpty(), pairedFingerprints = fingerprints)
 }
@@ -51,7 +55,8 @@ object PairingLinks {
     const val MAX_LENGTH = 1024
     const val MAX_FINGERPRINTS = 4
     private const val MAX_PARAMS = 16
-    private val KEYS = setOf("v", "host", "port", "user", "fp", "session")
+    private val KEYS = setOf("v", "host", "port", "user", "fp", "session", "pair", "sid")
+    private val SID = Regex("[A-Za-z0-9_-]{22}")
     private val REQUIRED = listOf("v", "host", "port", "user", "fp")
     private val HOSTNAME = Regex("[A-Za-z0-9._:\\[\\]-]{1,253}")
     private val USER = Regex("[A-Za-z0-9._][A-Za-z0-9._-]{0,63}")
@@ -93,13 +98,20 @@ object PairingLinks {
         val fingerprints = values.getValue("fp").split(',')
         if (fingerprints.size !in 1..MAX_FINGERPRINTS || fingerprints.any { !FINGERPRINT.matches(it) } || fingerprints.toSet().size != fingerprints.size) return bad("fp")
         val session = values["session"]?.let { s -> s.takeIf { HerdrCli.SESSION_NAME.matches(it) } ?: return bad("session") }
-        return PairingResult.Valid(PairingLink(host, port, user, fingerprints, session))
+        // The desktop's listener: both parameters or neither, so a half-made link is refused rather than guessed at.
+        val pairText = values["pair"]
+        val sid = values["sid"]
+        if ((pairText == null) != (sid == null)) return PairingResult.Rejected(PairingRejection.MissingField, if (pairText == null) "pair" else "sid")
+        val pairPort = pairText?.let { t -> t.takeIf { PORT.matches(it) }?.toIntOrNull()?.takeIf { it in 1..65535 } ?: return bad("pair") }
+        if (sid != null && !SID.matches(sid)) return bad("sid")
+        return PairingResult.Valid(PairingLink(host, port, user, fingerprints, session, pairPort, sid))
     }
 
     /** The link for [link], as the plugin writes it (raw fingerprints). Used by tests and by the docs; the app only reads links. */
     fun build(link: PairingLink): String =
         PREFIX + listOfNotNull(
             "v=1", "host=${link.host}", "port=${link.port}", "user=${link.user}", "fp=${link.fingerprints.joinToString(",")}", link.session?.let { "session=$it" },
+            link.pairPort?.let { "pair=$it" }, link.sid?.let { "sid=$it" },
         ).joinToString("&")
 
     /** Percent-decodes [v] strictly: a `%` not followed by two hex digits, or bytes that are not UTF-8, make the link malformed. */

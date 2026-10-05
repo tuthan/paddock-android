@@ -2,6 +2,7 @@ package io.github.tuthan.paddock.hostprofile
 
 import io.github.tuthan.paddock.identity.HostProfileId
 import io.github.tuthan.paddock.ssh.SshTarget
+import io.github.tuthan.paddock.wake.WakeTarget
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -31,6 +32,8 @@ data class HostProfile(
     val importedKeyId: String? = null,
     /** The herdr session to watch on this machine, or null for the running default. Names come from `herdr session list`. */
     val session: String? = null,
+    /** What the phone knows about waking this machine (Phase 14), or null before it has been read. Old files without it load. */
+    val wake: WakeTarget? = null,
 ) {
     init {
         require(ID.matches(id)) { "invalid profile id" }
