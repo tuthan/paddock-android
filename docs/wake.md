@@ -41,7 +41,7 @@ A Wake tap is reported as three separate facts, and "sent" is never read as "awa
 2. **The machine answered**: the SSH connect, with the time, or *not yet*.
 3. **herdr reachable**: the first read, with the time, or *not yet*.
 
-A second tap is offered after 30 seconds (a second magic packet says nothing the first has not). After a Wake the connection is followed for three minutes. A packet that was sent and followed by nothing means a machine that did not wake, a relay that dropped it, or a different network; the three lines make that visible without claiming which.
+A tap that sent a packet starts a 30 second guard before another is offered (a second magic packet says nothing the first has not); a tap that sent nothing (local-network access off, no relay, no network) starts none, so the action stays and the sentence says why. A second tap while one is still sending is ignored. After a packet is sent the connection is followed for three minutes, and **only a change after the tap counts**: a connection that already looked connected at the tap (or a view that has not caught up with a dead one) is not recorded as the machine answering. A machine already connected with herdr live when you tapped says so in one line (*The machine was already connected, and herdr already live, when you tapped.*) instead of the two facts. A packet that was sent and followed by nothing means a machine that did not wake, a relay that dropped it, or a different network; the three lines make that visible without claiming which.
 
 ## What it does not do
 

@@ -7,6 +7,7 @@ import io.github.tuthan.paddock.ui.screens.relayEntry
 import io.github.tuthan.paddock.wake.WakeFacts
 import io.github.tuthan.paddock.wake.WakeReadiness
 import io.github.tuthan.paddock.wake.WakeRelay
+import io.github.tuthan.paddock.wake.WakeSendFailure
 import io.github.tuthan.paddock.wake.WakeSendResult
 import io.github.tuthan.paddock.wake.WakeTarget
 import org.junit.Assert.assertEquals
@@ -61,6 +62,15 @@ class WakeWordsMapperTest {
         assertFalse(w.canWake)
         assertEquals(3, w.lines.size)
         assertTrue(words(profile(ready), facts, now = 130_000).canWake)
+    }
+
+    @Test fun aTapThatSentNothingKeepsTheButtonAndShowsWhyAtOnce() {
+        // "Local-network access is off" and "needs a relay" sent nothing: nothing to wait out before the user fixes it and taps again.
+        for (reason in listOf(WakeSendFailure.Permission, WakeSendFailure.RelayRequired, WakeSendFailure.NetworkMissing)) {
+            val w = words(profile(ready), WakeFacts(99_000, WakeSendResult.Failed(reason)), now = 100_000)
+            assertTrue("$reason", w.canWake)
+            assertEquals("$reason", 1, w.lines.size)
+        }
     }
 
     @Test fun wakeIsWithheldWhenNothingCanSendIt() {

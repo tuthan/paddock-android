@@ -1,5 +1,7 @@
 package io.github.tuthan.paddock.wake
 
+import io.github.tuthan.paddock.live.HostPhase
+import io.github.tuthan.paddock.reconcile.Freshness
 import java.net.InetAddress
 
 /**
@@ -11,13 +13,28 @@ data class WakeFacts(
     val result: WakeSendResult,
     val answeredAtMillis: Long? = null,
     val reachableAtMillis: Long? = null,
+    /**
+     * The connection was already up and herdr already live when the tap came. The two later facts would then be true at the tap and
+     * say nothing about this packet, so they are not recorded and the screen says what it saw instead.
+     */
+    val alreadyLive: Boolean = false,
 ) {
     /** True once something left the phone, so the other two facts mean something. */
     val transmitted: Boolean get() = result is WakeSendResult.Sent || result is WakeSendResult.Partial
 
+    /** Both later facts are known, or there is nothing to wait for: the connection need not be followed any more. */
+    val settled: Boolean get() = alreadyLive || (answeredAtMillis != null && reachableAtMillis != null)
+
+    /** What a later look at the connection adds: a fact once seen is kept, a fact not yet seen is recorded at [nowMillis]. */
+    fun observed(link: WakeLink, nowMillis: Long): WakeFacts = copy(
+        answeredAtMillis = answeredAtMillis ?: nowMillis.takeIf { link.answered },
+        reachableAtMillis = reachableAtMillis ?: nowMillis.takeIf { link.reachable },
+    )
+
     fun lines(clockLabel: (Long) -> String): List<String> {
         val first = sentence(result)
         if (!transmitted) return listOf(first)
+        if (alreadyLive) return listOf(first, "The machine was already connected, and herdr already live, when you tapped.")
         return listOf(
             first,
             "The machine answered: " + (answeredAtMillis?.let { "at ${clockLabel(it)}" } ?: "not yet"),
@@ -25,10 +42,14 @@ data class WakeFacts(
         )
     }
 
-    /** Another Wake is offered only after the guard: a second tap changes nothing a magic packet has not already said. */
-    fun canWakeAgain(nowMillis: Long): Boolean = nowMillis - sentAtMillis >= GUARD_MILLIS
+    /**
+     * Another Wake is offered only after the guard: a second tap changes nothing a magic packet has not already said. The guard
+     * follows what left the phone: a tap that sent nothing (no grant, no relay, no network) leaves the action where it was.
+     */
+    fun canWakeAgain(nowMillis: Long): Boolean = !transmitted || nowMillis - sentAtMillis >= GUARD_MILLIS
 
-    fun secondsUntilAgain(nowMillis: Long): Long = ((GUARD_MILLIS - (nowMillis - sentAtMillis)).coerceAtLeast(0) + 999) / 1000
+    fun secondsUntilAgain(nowMillis: Long): Long =
+        if (!transmitted) 0 else ((GUARD_MILLIS - (nowMillis - sentAtMillis)).coerceAtLeast(0) + 999) / 1000
 
     /** Settings should open the relay field when the failure says a relay is the fix. */
     val needsRelay: Boolean get() = (result as? WakeSendResult.Failed)?.reason == WakeSendFailure.RelayRequired
@@ -57,5 +78,20 @@ data class WakeFacts(
             val names = a.map { it.hostAddress.orEmpty() }
             return when (names.size) { 0 -> "no address"; 1 -> names[0]; else -> names.dropLast(1).joinToString(", ") + " and " + names.last() }
         }
+    }
+}
+
+/**
+ * What the phone sees of the connection to the machine, reduced to what the two later facts are about. Any phase past Connecting
+ * means the SSH connect itself answered; only a live read means herdr did.
+ */
+data class WakeLink(val answered: Boolean, val reachable: Boolean) {
+    companion object {
+        val DOWN = WakeLink(answered = false, reachable = false)
+
+        fun of(phase: HostPhase?, freshness: Freshness?) = WakeLink(
+            answered = phase is HostPhase.InstallingRelay || phase is HostPhase.NeedsRelayInstall || phase is HostPhase.Problem || phase is HostPhase.Monitoring,
+            reachable = phase is HostPhase.Monitoring && freshness == Freshness.Live,
+        )
     }
 }

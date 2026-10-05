@@ -61,4 +61,19 @@ class WakeFactsTest {
         assertEquals(1, f.secondsUntilAgain(39_001))
         assertEquals(0, f.secondsUntilAgain(60_000))
     }
+
+    @Test fun aSendThatTransmittedNothingDoesNotStartTheGuard() {
+        // Nothing left the phone, so there is nothing for a second packet to repeat: the action stays.
+        for (r in WakeSendFailure.entries) {
+            val f = WakeFacts(10_000, WakeSendResult.Failed(r))
+            assertTrue(f.canWakeAgain(10_000), "$r")
+            assertEquals(0, f.secondsUntilAgain(10_000), "$r")
+        }
+    }
+
+    @Test fun aPartialSendStartsTheGuardBecauseSomethingLeftThePhone() {
+        val f = WakeFacts(10_000, WakeSendResult.Partial(listOf(ip("192.168.42.255")), WakeSendFailure.SendFailed))
+        assertFalse(f.canWakeAgain(10_001))
+        assertTrue(f.canWakeAgain(40_000))
+    }
 }

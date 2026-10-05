@@ -88,9 +88,6 @@ enum class Boot { Loading, NoMachines, Ready }
  * stores or lose the last home. The connection itself follows visibility: it is held only while an activity is started, and
  * [ConnectionOwner] closes it a few seconds after the last release.
  */
-/** How long after a Wake tap the app keeps watching the connection to fill in "the machine answered" and "herdr reachable". */
-private const val WAKE_FOLLOW_MILLIS = 180_000L
-
 class AppGraph(private val app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val clock = Clock { System.currentTimeMillis() }
@@ -155,11 +152,30 @@ class AppGraph(private val app: Application) {
     }
     @Volatile private var widgetWatcher: Job? = null
     @Volatile private var wakeWatcher: Job? = null
-    @Volatile private var wakeFollow: Job? = null
     @Volatile private var pairingWatcher: Job? = null
-    private val _wakeFacts = MutableStateFlow<io.github.tuthan.paddock.wake.WakeFacts?>(null)
+    /**
+     * The Wake tap on the watched machine (see [wake]). Lazy because it reads [hostUi], which is declared further down; nothing in it
+     * runs before a tap.
+     */
+    private val wakeTap by lazy {
+        io.github.tuthan.paddock.wake.WakeTap(
+            scope, clock,
+            send = {
+                val profile = _profile.value
+                val target = profile?.let { (profiles.get(it.id) ?: it).wake }
+                if (profile == null || target == null) null
+                else withContext(Dispatchers.IO) {
+                    val candidates = io.github.tuthan.paddock.wake.WakePaths.candidates(lanPaths.paths(), profile.host, target.iface)
+                    io.github.tuthan.paddock.wake.WakeSender(sockets, permissionMissing = { gate.lanAccessMissing() }).send(target, candidates, target.relay)
+                }
+            },
+            link = { hostUi.view.value.let { io.github.tuthan.paddock.wake.WakeLink.of(it.phase, it.freshness) } },
+            links = hostUi.view.map { io.github.tuthan.paddock.wake.WakeLink.of(it.phase, it.freshness) },
+            reconnect = { retry() },
+        )
+    }
     /** What the last Wake tap on the watched machine came to; null before any tap and after switching machines. */
-    val wakeFacts: StateFlow<io.github.tuthan.paddock.wake.WakeFacts?> = _wakeFacts.asStateFlow()
+    val wakeFacts: StateFlow<io.github.tuthan.paddock.wake.WakeFacts?> get() = wakeTap.facts
     @Volatile private var lastWidgetCache: io.github.tuthan.paddock.widget.WidgetCache? = null
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
@@ -372,7 +388,7 @@ class AppGraph(private val app: Application) {
         // What was read about waking the machine changes on every bring-up and is no reason to reconnect.
         if (c != null && c.profile.copy(wake = null) == profile.copy(wake = null)) { c.resume(); return@synchronized }
         c?.stop()
-        if (c?.profile?.id != profile.id) _wakeFacts.value = null
+        if (c?.profile?.id != profile.id) wakeTap.forget()
         val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin, journal = journal, alertScript = alertScript, alertSha256 = alertScriptSha256,
             decideScript = decideScript, decideSha256 = decideScriptSha256, hookScript = hookScript, hookSha256 = hookScriptSha256, sagaStore = sagaStore,
             wakeCapture = { session -> io.github.tuthan.paddock.wake.WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) })
@@ -434,46 +450,11 @@ class AppGraph(private val app: Application) {
         return io.github.tuthan.paddock.wake.WakePaths.canSend(candidates, target.relay)
     }
 
-    /** One Wake tap on the watched machine: send, show the three facts, ask for a reconnect at once. A second tap inside the guard does nothing. */
-    fun wake() { scope.launch { wakeNow() } }
-
-    private suspend fun wakeNow() {
-        val profile = _profile.value ?: return
-        val target = (profiles.get(profile.id) ?: profile).wake ?: return
-        if (_wakeFacts.value?.canWakeAgain(clock.nowMillis()) == false) return
-        val result = withContext(Dispatchers.IO) {
-            val candidates = io.github.tuthan.paddock.wake.WakePaths.candidates(lanPaths.paths(), profile.host, target.iface)
-            io.github.tuthan.paddock.wake.WakeSender(sockets, permissionMissing = { gate.lanAccessMissing() }).send(target, candidates, target.relay)
-        }
-        val facts = io.github.tuthan.paddock.wake.WakeFacts(clock.nowMillis(), result)
-        _wakeFacts.value = facts
-        if (facts.transmitted) { retry(); followWake(facts) }
-    }
-
-    /** Fills in the two later facts as the connection comes up, for at most three minutes after the tap. */
-    private fun followWake(first: io.github.tuthan.paddock.wake.WakeFacts) {
-        wakeFollow?.cancel()
-        wakeFollow = scope.launch {
-            withTimeoutOrNull(WAKE_FOLLOW_MILLIS) {
-                hostUi.view.first { v ->
-                    val now = clock.nowMillis()
-                    val p = v.phase
-                    // Any phase past Connecting means the SSH connect itself answered; only a live read means herdr did.
-                    val answered = p is HostPhase.InstallingRelay || p is HostPhase.NeedsRelayInstall || p is HostPhase.Problem || p is HostPhase.Monitoring
-                    val reachable = p is HostPhase.Monitoring && v.freshness == io.github.tuthan.paddock.reconcile.Freshness.Live
-                    var done = false
-                    _wakeFacts.update { f ->
-                        if (f == null || f.sentAtMillis != first.sentAtMillis) { done = true; f }
-                        else f.copy(
-                            answeredAtMillis = f.answeredAtMillis ?: now.takeIf { answered },
-                            reachableAtMillis = f.reachableAtMillis ?: now.takeIf { reachable },
-                        ).also { done = it.answeredAtMillis != null && it.reachableAtMillis != null }
-                    }
-                    done
-                }
-            }
-        }
-    }
+    /**
+     * One Wake tap on the watched machine: send, show the three facts, ask for a reconnect at once. A tap while one is sending, or
+     * inside the guard of one that sent something, does nothing.
+     */
+    fun wake() = wakeTap.tap()
 
     /**
      * Saves, replaces or clears the relay for waking [profileId] from away. Before any reading the profile gets a "not read yet" target
