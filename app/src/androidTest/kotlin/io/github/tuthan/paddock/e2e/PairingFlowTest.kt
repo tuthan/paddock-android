@@ -74,6 +74,17 @@ class PairingFlowTest {
         try { rule.waitUntil(ms, cond) } catch (e: androidx.compose.ui.test.ComposeTimeoutException) { throw AssertionError("timed out waiting for $what") }
     }
 
+    /**
+     * Creating the key is asynchronous (a Keystore generation, seconds on an API 26 emulator): Connect pressed before the key exists does
+     * nothing, so a test that pressed it straight after the tap on Create lost its click on that slow image and timed out waiting for what
+     * Connect shows. The command appears when the key is there.
+     */
+    private fun createTheKeyIfNeeded() {
+        if (!hasNode(text("Create this phone's key"))) return
+        rule.onNodeWithText("Create this phone's key").performScrollTo().performClick()
+        waitFor("the key and its command") { hasNode(hasContentDescription("Command to run on the machine", substring = true)) }
+    }
+
     /** What a message app or the system does with a tapped link: a VIEW intent for the package, resolved by the manifest's filter and delivered to the running single-task activity. */
     private fun openLink(link: String) {
         ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).setPackage(ctx.packageName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -83,7 +94,7 @@ class PairingFlowTest {
 
     @Test fun t1_createTheKeyAndCopyTheCommand() {
         waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
-        if (hasNode(text("Create this phone's key"))) rule.onNodeWithText("Create this phone's key").performScrollTo().performClick()
+        createTheKeyIfNeeded()
         waitFor("the command") { hasNode(hasContentDescription("Command to run on the machine: ", substring = true)) }
         val said = rule.onNode(hasContentDescription("Command to run on the machine: ", substring = true)).fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription)!!.single()
         val command = said.removePrefix("Command to run on the machine: ")
@@ -134,7 +145,7 @@ class PairingFlowTest {
         waitFor("the Add machine screen") { rule.passWelcome(); hasNode(text("Add a machine")) }
         openLink(pairLink)
         waitFor("Add machine filled in from the link") { hasNode(text("Filled in from a pairing link", substring = true)) }
-        if (hasNode(text("Create this phone's key"))) rule.onNodeWithText("Create this phone's key").performScrollTo().performClick()
+        createTheKeyIfNeeded()
         // The key is made off the main thread: wait for its ways to appear. The traditional ones are all still here beside the new one.
         waitFor("the phone's key and its ways") { hasNode(text("Copy key only")) }
         rule.onNodeWithText("Copy key only").performScrollTo().assertIsDisplayed()
@@ -176,7 +187,7 @@ class PairingFlowTest {
         val other = "SHA256:" + "B".repeat(43)
         openLink(link(other))
         waitFor("Add machine filled in from the link") { hasNode(text("Filled in from a pairing link", substring = true)) }
-        if (hasNode(text("Create this phone's key"))) rule.onNodeWithText("Create this phone's key").performScrollTo().performClick()
+        createTheKeyIfNeeded()
         rule.onNodeWithText("Connect").performClick()
 
         waitFor("the refusal") { hasNode(text("$host:$port is not the machine in the pairing link")) }
