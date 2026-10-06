@@ -254,7 +254,7 @@ class HostSessionController(
         val path = installer.verifiedPath(home)
         captureWake(session)
         if (herdr == null) {
-            _phase.value = HostPhase.Problem("herdr was not found on the host (looked in ~/.local/bin, ~/.cargo/bin, /usr/local/bin and /usr/bin).")
+            _phase.value = HostPhase.Problem(io.github.tuthan.paddock.cli.HerdrLocator.notFoundMessage())
             return
         }
         val cli = HerdrCli(herdr, "default")

@@ -101,6 +101,6 @@ class RelaySagaHost(private val relay: RelayClient, private val session: SshSess
         val EXECUTABLE = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
         val SHELLS = setOf("bash", "zsh", "fish", "sh", "dash", "ksh", "ash", "nu", "pwsh", "tcsh", "csh", "xonsh", "elvish")
         private val LOGIN_SHELLS = setOf("bash", "zsh", "fish", "sh", "dash", "ksh")
-        const val PLAIN = "PATH=\"\$HOME/.local/bin:\$HOME/.cargo/bin:/usr/local/bin:\$PATH\"; for c in \"\$@\"; do command -v \"\$c\" >/dev/null 2>&1 && exit 0; done; exit 1"
+        const val PLAIN = "PATH=\"\$HOME/.local/bin:\$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:\$PATH\"; for c in \"\$@\"; do command -v \"\$c\" >/dev/null 2>&1 && exit 0; done; exit 1"
     }
 }
