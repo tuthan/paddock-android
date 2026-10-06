@@ -60,6 +60,12 @@ class PairingTextTest {
         assertTrue("--host" in v.detail)
     }
 
+    @Test fun bothUnreachableStatesNameAFirewallOnTheDesktop() {
+        // A desktop firewall drops the phone's connection without an answer, so "cannot reach" is all the phone ever sees (found 2026-10-06: ufw, port 45173).
+        assertTrue("firewall" in PairingText.view(PairingState.Unreachable(pending, "x"), now)!!.detail)
+        assertTrue("firewall" in PairingText.view(PairingState.CannotReach(pending, null), now)!!.detail)
+    }
+
     @Test fun theClockIsMinutesAndSeconds() {
         assertEquals("1:59", PairingText.clock(119))
         assertEquals("0:05", PairingText.clock(5))

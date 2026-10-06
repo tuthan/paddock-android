@@ -111,6 +111,22 @@ class ConnectionOwner(
     /** The default network changed: every held session is replaced, without backoff. */
     fun onNetworkChanged() { synchronized(lock) { entries.values.toList() }.forEach { it.kicks.trySend(Kick.NetworkChanged) } }
 
+    /**
+     * A machine was removed from this phone: its connection ends now, not after the grace and whatever leases are left, so no reconnect (and no
+     * first-trust prompt for a key the phone has just forgotten) can follow. A lease still held for it goes quiet; asking for the same id again starts afresh.
+     */
+    suspend fun drop(profileId: String) {
+        val entry: Entry
+        val loop: Job?
+        synchronized(lock) {
+            entry = entries.remove(profileId) ?: return
+            entry.teardown?.cancel(); entry.teardown = null
+            loop = entry.loop; entry.loop = null
+        }
+        loop?.cancelAndJoin()
+        entry.state.value = Connection.Idle
+    }
+
     private suspend fun closeIfUnclaimed(entry: Entry) {
         val loop = synchronized(lock) {
             if (entry.leases > 0) return

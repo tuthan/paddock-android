@@ -16,7 +16,7 @@ object ProCopy {
     fun gateTitle(capabilityId: String): String = ProCapabilities.byId(capabilityId)?.let { "${it.label} is a Pro capability" } ?: "This is a Pro capability"
 
     /** What stays free, said beside every offer so Free is a path and not a hidden option. */
-    const val STAYS_FREE = "Everything else stays free: every view of your agents, readable output, typing into any terminal, snippets, every alert, and adding a machine."
+    const val STAYS_FREE = "Everything else stays free: every view of your agents, readable output, typing into any terminal, snippets, every alert, and adding or removing a machine."
 
     /** The free version's way to every capability: Pro is bought in the Google Play build, or the app is built from source code. */
     const val FREE_VERSION_ROUTE = "This is the free version. Pro capabilities are bought in the Google Play build, and building Paddock from its source code turns every capability on."

@@ -97,6 +97,31 @@ class ConnectionOwnerTest {
         until("idle") { b.state.value == Connection.Idle }
     }
 
+    @Test fun droppingAMachineClosesItsConnectionAtOnceAndNothingReconnectsIt() = runBlocking<Unit> {
+        gate = CompletableDeferred() // a grace timer, if one were started, would never end
+        val o = owner(grace = 8_000)
+        val held = o.acquire(profile)
+        until("connected") { connected(held) != null }
+        o.drop(profile.id)
+        assertTrue(made[0].closed.get(), "closed now, not after the grace")
+        assertEquals(Connection.Idle, held.state.value)
+        o.onNetworkChanged(); o.refresh(profile.id); o.refreshAll()
+        delay(150)
+        assertEquals(1, connects.get(), "a kick for a dropped machine connects nothing")
+        held.release() // the lease the stopped controller held is a no-op now
+        delay(60)
+        val again = o.acquire(profile)
+        until("a fresh connection") { connected(again) != null }
+        assertEquals(2, connects.get())
+        again.release()
+    }
+
+    @Test fun droppingAMachineThatIsNotConnectedIsNotAnError() = runBlocking<Unit> {
+        val o = owner()
+        o.drop("never-connected")
+        assertEquals(0, connects.get())
+    }
+
     @Test fun releasingTwiceCountsOnce() = runBlocking<Unit> {
         val o = owner()
         val a = o.acquire(profile); val b = o.acquire(profile)

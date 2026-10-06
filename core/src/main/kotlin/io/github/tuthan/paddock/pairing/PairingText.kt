@@ -29,7 +29,8 @@ object PairingText {
             is PairingState.Unreachable -> PairingView(
                 "Cannot reach ${state.pending.host}:${state.pending.port} yet.",
                 "Paddock keeps trying until the time runs out. This phone and the desktop need to be on the same network, and the pair popup has to stay open. " +
-                    "If ${state.pending.host} is a name the phone cannot resolve to the desktop's LAN address, run the pair action with --host set to that address.",
+                    "If ${state.pending.host} is a name the phone cannot resolve to the desktop's LAN address, run the pair action with --host set to that address. " +
+                    "A firewall on the desktop (ufw, firewalld) drops the connection without an answer: when the pair popup names one, run the commands it prints to open the port for this pairing.",
                 active = true, secondsLeft = left(state.pending),
             )
             is PairingState.Approved -> PairingView("Approved.", "The key is authorized on the machine. Paddock connects now.", active = false, approved = true)
@@ -44,7 +45,7 @@ object PairingText {
             )
             is PairingState.CannotReach -> PairingView(
                 "Could not reach ${state.pending.host}:${state.pending.port}.",
-                "Check that this phone and the desktop are on the same network and that the pair popup is still open. The command always works instead.",
+                "Check that this phone and the desktop are on the same network, that the pair popup is still open, and that a firewall on the desktop is not dropping the port (the popup prints the commands that open it). The command always works instead.",
                 active = false,
             )
         }

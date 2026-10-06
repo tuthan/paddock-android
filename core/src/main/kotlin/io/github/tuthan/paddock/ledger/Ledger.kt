@@ -82,6 +82,21 @@ class Ledger(private val store: LedgerStore, private val now: () -> Long) {
         data.epochs.firstOrNull { it.host == host.value && it.session == session }?.installed
     }
 
+    /**
+     * Forgets everything this ledger holds about [host] (a machine the user removed): its observations, acknowledgements and actions. The epoch
+     * counters stay, without their installed mark, because an epoch is never handed out twice on this phone: the same machine added again must not get
+     * numbers that rows kept elsewhere (the operation journal) already carry. A counter is a host id, a session name and a number; no text from a machine.
+     */
+    fun forgetHost(host: HostProfileId) = synchronized(lock) {
+        val id = host.value
+        commit(data.copy(
+            observations = data.observations.filterNot { it.host == id },
+            seen = data.seen.filterNot { it.host == id },
+            actions = data.actions.filterNot { it.host == id },
+            epochs = data.epochs.map { if (it.host == id) it.copy(installed = null) else it },
+        ))
+    }
+
     fun observations(): List<Observation> = synchronized(lock) { data.observations }
     fun actions(): List<PhoneAction> = synchronized(lock) { data.actions }
 

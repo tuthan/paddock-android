@@ -156,4 +156,40 @@ class LedgerTest {
         assertTrue(l.saveFailed)
         assertEquals(2L, l.seenLookup(host, "paddock-test", 1).seenSeq("t1"))
     }
+
+    @Test fun forgettingAHostDropsItsFactsAndOnlyItsFacts() {
+        val other = HostProfileId("h2")
+        val l = ledger()
+        val e1 = l.allocateEpoch(host, "paddock-test")
+        l.observe(ObservationKind.AgentAppeared, key(epoch = e1))
+        l.markSeen(key(epoch = e1), 5)
+        val e2 = l.allocateEpoch(other, "paddock-test")
+        l.observe(ObservationKind.AgentAppeared, TerminalKey(TargetRef(other, "paddock-test", "t9"), e2))
+        l.markSeen(TerminalKey(TargetRef(other, "paddock-test", "t9"), e2), 3)
+        l.forgetHost(host)
+        assertTrue(l.observations().none { it.host == "h1" })
+        assertTrue(l.actions().none { it.host == "h1" })
+        assertNull(l.seenLookup(host, "paddock-test", e1).seenSeq("t1"))
+        assertEquals(1, l.observations().count { it.host == "h2" })
+        assertEquals(3L, l.seenLookup(other, "paddock-test", e2).seenSeq("t9"))
+    }
+
+    @Test fun anEpochIsNeverHandedOutTwiceEvenAfterTheHostWasForgotten() {
+        val l = ledger()
+        val first = l.allocateEpoch(host, "paddock-test")
+        l.onInstalled(host, "paddock-test", first, emptyMap())
+        l.forgetHost(host)
+        assertNull("no read is installed for a machine that was forgotten", l.installedEpoch(host, "paddock-test"))
+        assertTrue("rows kept elsewhere may still carry the old number", l.allocateEpoch(host, "paddock-test") > first)
+    }
+
+    @Test fun forgettingAHostIsWrittenToTheStoreAndAnUnknownHostIsNotAnError() {
+        val store = InMemoryLedgerStore()
+        val l = ledger(store)
+        l.observe(ObservationKind.AgentAppeared, key())
+        l.forgetHost(HostProfileId("nobody"))
+        l.forgetHost(host)
+        l.flush()
+        assertTrue(store.load().observations.isEmpty())
+    }
 }

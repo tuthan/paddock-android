@@ -72,11 +72,14 @@ interface WidgetCacheStore {
     fun load(): WidgetCache?
     /** Durable on return, or an [IOException]. */
     fun save(cache: WidgetCache)
+    /** Forgets the cache (a machine was removed): nothing is left to draw. A cache that is not there is not an error. */
+    fun clear()
 }
 
 class InMemoryWidgetCacheStore(private var cache: WidgetCache? = null) : WidgetCacheStore {
     override fun load() = cache
     override fun save(cache: WidgetCache) { this.cache = cache }
+    override fun clear() { cache = null }
 }
 
 /** `files/widget-cache.json`, replaced atomically (fsynced temp file, then rename), so a widget redraw never reads half a write. */
@@ -95,6 +98,8 @@ class FileWidgetCacheStore(private val file: File) : WidgetCacheStore {
     }
 
     override fun save(cache: WidgetCache) { DurableFile.replace(file, json.encodeToString(WidgetCache.serializer(), cache).toByteArray(Charsets.UTF_8)) }
+
+    override fun clear() { Files.deleteIfExists(file.toPath()); Files.deleteIfExists(File(file.absolutePath + ".corrupt").toPath()) }
 
     private fun setAside() {
         try { Files.move(file.toPath(), File(file.absolutePath + ".corrupt").toPath(), StandardCopyOption.REPLACE_EXISTING) } catch (_: IOException) { /* the next save replaces it */ }

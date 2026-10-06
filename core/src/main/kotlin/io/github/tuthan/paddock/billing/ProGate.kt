@@ -28,8 +28,10 @@ data class ProCapability(val id: String, val label: String, val built: Boolean =
 
 /**
  * Vault decision M8, taken by the user on 2026-10-04: bundle C (guarded answers, operations, widgets) plus several hosts. Free keeps
- * everything that watches (agent status, readable output, manual input, snippets, alerts, the machine picker and adding a machine) and the
+ * everything that watches (agent status, readable output, manual input, snippets, alerts, adding a machine and removing one) and the
  * safety and recovery paths; Pro is the phone-side work that mutates or extends it. Counts never appear here: only what the user chooses.
+ * On 2026-10-06 the user decided that choosing which saved machine to watch (the machine list on Home) is part of "several hosts" and so Pro; this
+ * replaces the vault's earlier "machine picker is Free". Adding a machine is still Free and still makes it the watched one.
  */
 object ProCapabilities {
     /** Setting up native Yes/No answers (Settings, the hook install) and the answer entry above the output. Never the Yes/No of a request already on screen. */
@@ -44,10 +46,13 @@ object ProCapabilities {
     /** The three home-screen widgets: a locked widget says so and draws no count. */
     val WIDGETS = ProCapability("widgets", "Home-screen widgets")
 
+    /** Choosing, from the machine list on Home, which saved machine to watch. Adding a machine and removing one are Free, and so is the switch an alert makes. */
+    val SWITCH_MACHINE = ProCapability("hosts.switch", "Switching between saved machines")
+
     /** One attention queue across several machines. Reserved: nothing merges machines yet, and connecting a second machine stays free (vault Free/Pro rules). */
     val HOSTS_MERGED = ProCapability("hosts.merged", "Watching several machines in one list", built = false)
 
-    val ALL: List<ProCapability> = listOf(GUARDED_ANSWERS, START_AGENT, MANAGE_SESSIONS, WIDGETS, HOSTS_MERGED)
+    val ALL: List<ProCapability> = listOf(GUARDED_ANSWERS, START_AGENT, MANAGE_SESSIONS, WIDGETS, SWITCH_MACHINE, HOSTS_MERGED)
 
     fun byId(id: String): ProCapability? = ALL.firstOrNull { it.id == id }
 }

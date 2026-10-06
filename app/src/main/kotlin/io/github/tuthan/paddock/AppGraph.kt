@@ -40,6 +40,9 @@ import io.github.tuthan.paddock.hostkey.HostKeyPolicy
 import io.github.tuthan.paddock.hostprofile.FileHostProfileStore
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.hostprofile.KeyKind
+import io.github.tuthan.paddock.hostprofile.MachineRemoval
+import io.github.tuthan.paddock.hostprofile.MachineRoster
+import io.github.tuthan.paddock.identity.HostProfileId
 import io.github.tuthan.paddock.ledger.FileLedgerStore
 import io.github.tuthan.paddock.ledger.Ledger
 import io.github.tuthan.paddock.lifecycle.AndroidTriggers
@@ -78,6 +81,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.github.tuthan.paddock.pairing.pendingOrNull
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Where the machine list stands at start-up. */
@@ -211,6 +215,17 @@ class AppGraph(private val app: Application) {
     private val _profile = MutableStateFlow<HostProfile?>(null)
     val profile: StateFlow<HostProfile?> = _profile.asStateFlow()
 
+    private val _machines = MutableStateFlow<List<HostProfile>>(emptyList())
+    /** Every machine saved on this phone, by name: the list behind the machine chip on Home. Only one is watched ([profile]). */
+    val machines: StateFlow<List<HostProfile>> = _machines.asStateFlow()
+
+    /** One change to the saved machines at a time: add, switch and remove each read and write the profile store and the watched machine. */
+    private val machineLock = kotlinx.coroutines.sync.Mutex()
+    /** Machines being removed: nothing may start watching them (a foreground flip does `watch(_profile.value)`, and the removed machine is still that until the end). */
+    private val removing: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    private suspend fun refreshMachines() { runCatching { profiles.list() }.onSuccess { _machines.value = it } }
+
     val hostUi = HostUiModel(scope)
     /** The open terminal session, kept through a rotation so turning the phone does not release control. */
     val terminals = io.github.tuthan.paddock.host.Retained<io.github.tuthan.paddock.terminal.TerminalSession>(scope) { it.close() }
@@ -252,6 +267,7 @@ class AppGraph(private val app: Application) {
             _settings.value = settingsStore.load()
             _snippets.value = runCatching { snippetStore.load() }.getOrDefault(emptyList())
             val all = runCatching { profiles.list() }.getOrDefault(emptyList())
+            _machines.value = all
             // The machine watched last time, not whichever sorts first.
             val watched = all.firstOrNull { it.id == _settings.value.watchedProfileId } ?: all.firstOrNull()
             _profile.value = watched
@@ -321,8 +337,9 @@ class AppGraph(private val app: Application) {
     }
 
     /** Saves [profile], makes it the watched machine and connects. */
-    suspend fun addMachine(profile: HostProfile) {
+    suspend fun addMachine(profile: HostProfile) = machineLock.withLock {
         profiles.put(profile)
+        refreshMachines()
         _settings.value = _settings.value.copy(watchedProfileId = profile.id)
         settingsStore.save(_settings.value)
         _profile.value = profile
@@ -330,16 +347,89 @@ class AppGraph(private val app: Application) {
         if (triggers.foreground.value) watch(profile)
     }
 
+    /**
+     * Everything this phone holds about a machine, forgotten before its profile goes. Not here, on purpose: this phone's own key and the one imported key
+     * (every machine shares them), and the operation journal (what the phone sent, with no machine text; adding the same machine again finds an unknown outcome there).
+     */
+    private val removal by lazy {
+        MachineRemoval(
+            listOf(
+                MachineRemoval.Forget("its alert registration") { id -> push.unregister(id) },
+                MachineRemoval.Forget("the host key") { id -> hostKeyStore.remove(id); broker.clearChanged(id); broker.expectPairing(id, null) },
+                MachineRemoval.Forget("what the phone saw there") { id -> ledger.forgetHost(HostProfileId(id)); withContext(Dispatchers.IO) { ledger.flush() } },
+                MachineRemoval.Forget("its widget copy") { id ->
+                    withContext(Dispatchers.IO) {
+                        if (widgetStore.load()?.hostId == id) { widgetStore.clear(); runCatching { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) } }
+                    }
+                },
+                // A request made for this machine's desktop is no longer about anything this phone has.
+                MachineRemoval.Forget("a pairing request") { id ->
+                    val host = profiles.get(id)?.host?.trim()
+                    val pending = pairingCoordinator.state.value.pendingOrNull
+                    val sharedWithAnother = profiles.list().any { it.id != id && it.host.trim().equals(host, ignoreCase = true) }
+                    if (host != null && pending != null && !sharedWithAnother && pending.host.trim().equals(host, ignoreCase = true)) pairingCoordinator.clear()
+                },
+            ),
+        ) { id -> profiles.remove(id) }
+    }
+
+    /** The connection to the watched machine and everything that follows it, stopped (Remove of the machine being watched). */
+    private fun stopWatching() = synchronized(lock) {
+        controller?.stop(); controller = null
+        alertWatcher?.cancel(); alertWatcher = null
+        widgetWatcher?.cancel(); widgetWatcher = null
+        wakeWatcher?.cancel(); wakeWatcher = null
+        pairingWatcher?.cancel(); pairingWatcher = null
+        wakeTap.forget()
+        lastWidgetCache = null
+        hostUi.detach()
+    }
+
+    /**
+     * Removes a machine from this phone (see [MachineRemoval]). Removing the watched one stops watching it first, so nothing it writes comes after the
+     * forgetting, then watches the next saved machine as at start-up, or none. When something could not be forgotten the machine stays listed (and watched
+     * again) for another try. Free: the user must always be able to forget a machine.
+     */
+    suspend fun removeMachine(id: String): MachineRemoval.Result = machineLock.withLock {
+        if (profiles.get(id) == null) return@withLock MachineRemoval.Result.Removed
+        val wasWatched = _profile.value?.id == id
+        val before = _profile.value
+        // From here nothing may start watching it, and its connection (and the grace after it) is closed now: a reconnect would raise a first-trust prompt for a key just forgotten.
+        removing += id
+        try {
+            if (wasWatched) stopWatching()
+            owner.drop(id)
+            val result = removal.remove(id)
+            refreshMachines()
+            if (result != MachineRemoval.Result.Removed) {
+                removing -= id
+                if (wasWatched && before != null && triggers.foreground.value) watch(before)
+                return@withLock result
+            }
+            if (wasWatched) {
+                val next = MachineRoster.after(_machines.value, id)
+                _settings.value = _settings.value.copy(watchedProfileId = next?.id)
+                runCatching { settingsStore.save(_settings.value) }
+                _profile.value = next
+                hostUi.reset()
+                if (next == null) _boot.value = Boot.NoMachines else if (triggers.foreground.value) watch(next)
+            }
+            result
+        } finally {
+            removing -= id
+        }
+    }
+
     /** Makes [id] the watched machine, as tapping an alert for it needs. Null when this phone has no such machine. */
-    suspend fun watchProfile(id: String): HostProfile? {
-        val profile = profiles.get(id) ?: return null
+    suspend fun watchProfile(id: String): HostProfile? = machineLock.withLock {
+        val profile = profiles.get(id) ?: return@withLock null
         if (_profile.value?.id != profile.id) {
             _settings.value = _settings.value.copy(watchedProfileId = profile.id)
             runCatching { settingsStore.save(_settings.value) }
             _profile.value = profile
             if (triggers.foreground.value) watch(profile)
         }
-        return profile
+        profile
     }
 
     /**
@@ -384,6 +474,7 @@ class AppGraph(private val app: Application) {
 
     /** Resumes the controller already watching [profile]; for any other profile, stops it and starts a new one. */
     private fun watch(profile: HostProfile) = synchronized(lock) {
+        if (profile.id in removing) return@synchronized
         val c = controller
         // What was read about waking the machine changes on every bring-up and is no reason to reconnect.
         if (c != null && c.profile.copy(wake = null) == profile.copy(wake = null)) { c.resume(); return@synchronized }
@@ -519,7 +610,13 @@ class AppGraph(private val app: Application) {
         try {
             val state = withTimeoutOrNull(WIDGET_CONNECT_MILLIS) { lease.state.first { it is io.github.tuthan.paddock.lifecycle.Connection.Connected || it is io.github.tuthan.paddock.lifecycle.Connection.Failed } }
             val connected = state as? io.github.tuthan.paddock.lifecycle.Connection.Connected ?: return "skipped: not connected (${state ?: "timed out"})"
-            return when (val out = widgetRefresher.refresh(profile, connected.session, cache.session)) {
+            val out = widgetRefresher.refresh(profile, connected.session, cache.session)
+            // The machine may have been removed while this job read it (it saves the cache itself): what it saved is forgotten again, so a removed machine's herd never stays on a widget.
+            if (profile.id in removing || profiles.get(profile.id) == null) {
+                runCatching { widgetStore.clear(); io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) }
+                return "skipped: ${profile.name} was removed meanwhile"
+            }
+            return when (out) {
                 is io.github.tuthan.paddock.widget.WidgetRefresher.Outcome.Updated -> { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app); "updated: ${out.cache.counts}" }
                 is io.github.tuthan.paddock.widget.WidgetRefresher.Outcome.Unchanged -> "unchanged: ${out.reason}"
             }

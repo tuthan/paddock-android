@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.hardware.camera2.CameraManager
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +38,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import io.github.tuthan.paddock.scanner.CameraQrScanner
+import io.github.tuthan.paddock.scanner.CameraPlans
+import io.github.tuthan.paddock.scanner.FrameSize
 import io.github.tuthan.paddock.scanner.QrScanner
 import io.github.tuthan.paddock.scanner.ScannerSession
 import io.github.tuthan.paddock.ui.components.Banner
@@ -70,6 +73,8 @@ fun ScanLink(
     /** Why the last code could not be used (`PairingCopy.invalid`, which never repeats the code); the scan starts again under it. */
     notice: String? = null,
     scannerFactory: (Context, (String) -> Unit, (String) -> Unit) -> QrScanner = { context, payload, failure -> CameraQrScanner(context, payload, failure) },
+    /** The frame the camera will give, so the preview surface is made that size and shape; null (no camera, or a test) keeps the 4:3 shape. */
+    previewFrame: (Context) -> FrameSize? = { context -> context.getSystemService(CameraManager::class.java)?.let { CameraPlans.query(it)?.frame } },
 ) {
     val context = LocalContext.current
     var failure by rememberSaveable { mutableStateOf<String?>(null) }
@@ -105,11 +110,16 @@ fun ScanLink(
                     owner?.lifecycle?.addObserver(observer)
                     onDispose { owner?.lifecycle?.removeObserver(observer); session.dispose() }
                 }
-                // The frames are 4:3 sensor frames; the preview keeps that shape (turned on a portrait screen) instead of stretching them.
+                // The preview surface is made the size of the frames the camera will give (CameraPlans, the same choice the scanner makes) and the view has that
+                // shape, turned on a portrait screen. A surface of any other size is rounded by the camera service to the nearest size it has, whatever its shape,
+                // and then stretched to the view: the code on the screen looked squeezed in the preview.
                 val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+                val frame = remember(context) { previewFrame(context) }
+                val shape = frame?.let { it.width.toFloat() / it.height } ?: (4f / 3f)
                 AndroidView(
                     factory = { viewContext ->
                         SurfaceView(viewContext).also { view ->
+                            if (frame != null) view.holder.setFixedSize(frame.width, frame.height)
                             view.holder.addCallback(object : SurfaceHolder.Callback {
                                 override fun surfaceCreated(holder: SurfaceHolder) {
                                     if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) session.surfaceCreated(holder.surface)
@@ -119,7 +129,7 @@ fun ScanLink(
                             })
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().aspectRatio(if (landscape) 4f / 3f else 3f / 4f).semantics { contentDescription = "Camera preview" },
+                    modifier = Modifier.fillMaxWidth().aspectRatio(if (landscape) shape else 1f / shape).semantics { contentDescription = "Camera preview" },
                 )
             } else if (!cameraGranted) {
                 Banner(SCAN_CAMERA_OFF, icon = PaddockIcons.Qr)

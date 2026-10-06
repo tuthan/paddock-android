@@ -349,15 +349,16 @@ enum class HostHealth { Live, Degraded, Connecting }
 
 /**
  * The watched machine as a chip with its reachability dot, then how fresh the screen is ("live · 3 s", "as of 14:02")
- * on a dashed chip. Read together by TalkBack.
+ * on a dashed chip. Read together by TalkBack. With [onClick] the whole chip opens the machine list (Home): a chevron says so, and the target is 48 dp.
  */
 @Composable
-fun HostChip(name: String, status: String, modifier: Modifier = Modifier, health: HostHealth = HostHealth.Live) {
+fun HostChip(name: String, status: String, modifier: Modifier = Modifier, health: HostHealth = HostHealth.Live, onClick: (() -> Unit)? = null) {
     val c = PaddockTokens.colors
     val pill = RoundedCornerShape(50)
     val healthWord = when (health) { HostHealth.Live -> "live"; HostHealth.Degraded -> "not live"; HostHealth.Connecting -> "connecting" }
     Row(
-        modifier.semantics(mergeDescendants = true) { contentDescription = "$name, $healthWord, $status" },
+        modifier.then(if (onClick != null) Modifier.heightIn(min = 48.dp).clickable(onClickLabel = "Show saved machines", role = Role.Button, onClick = onClick) else Modifier)
+            .semantics(mergeDescendants = true) { contentDescription = "$name, $healthWord, $status" },
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
     ) {
         val (bg, border, fg, dot) = when (health) {
@@ -371,6 +372,7 @@ fun HostChip(name: String, status: String, modifier: Modifier = Modifier, health
         ) {
             Dot(dot)
             Text(name, style = PaddockTokens.type.chip, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (onClick != null) Icon(PaddockIcons.Machine, contentDescription = null, tint = fg, modifier = Modifier.size(16.dp))
         }
         val dash = with(LocalDensity.current) { floatArrayOf(4.dp.toPx(), 3.dp.toPx()) }
         val line = c.control()

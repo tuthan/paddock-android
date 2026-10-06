@@ -10,7 +10,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
@@ -62,18 +61,11 @@ class CameraQrScanner(
         require(preview.isValid) { "Preview surface is unavailable" }
         started = true
         try {
-            val id = cameras.cameraIdList.firstOrNull { candidate ->
-                cameras.getCameraCharacteristics(candidate).get(CameraCharacteristics.LENS_FACING) ==
-                    CameraCharacteristics.LENS_FACING_BACK
-            } ?: throw IllegalStateException("No back camera is available")
-            val sizes = cameras.getCameraCharacteristics(id)
-                .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                ?.getOutputSizes(ImageFormat.YUV_420_888).orEmpty()
-            val autofocus = cameras.getCameraCharacteristics(id).get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
-                ?.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE) == true
-            val size = sizes.filter { it.width <= MAX_WIDTH && it.height <= MAX_HEIGHT }
-                .minByOrNull { kotlin.math.abs(it.width * it.height - PREFERRED_PIXELS) }
-                ?: throw IllegalStateException("No supported QR camera frame size")
+            // The same plan the scanner page used to size the preview surface (CameraPlans.query is deterministic), so the preview and the frames agree.
+            val plan = CameraPlans.query(cameras) ?: throw IllegalStateException("No back camera is available")
+            val id = plan.cameraId
+            val size = plan.frame
+            val autofocus = plan.autofocus
             val worker = HandlerThread("paddock-qr-camera").also { it.start() }
             thread = worker
             val handler = Handler(worker.looper)
@@ -177,9 +169,6 @@ class CameraQrScanner(
     }
 
     companion object {
-        private const val MAX_WIDTH = 1_280
-        private const val MAX_HEIGHT = 720
-        private const val PREFERRED_PIXELS = 640 * 480
         private const val MIN_DECODE_INTERVAL_NANOS = 150_000_000L
         private const val REPEAT_WINDOW_NANOS = 3_000_000_000L
     }

@@ -48,6 +48,11 @@ import io.github.tuthan.paddock.answers.DecisionModel
 import io.github.tuthan.paddock.answers.DecisionPresenter
 import io.github.tuthan.paddock.ui.screens.AUTHORIZE_INTRO_IMPORTED
 import io.github.tuthan.paddock.hostprofile.KeyKind
+import io.github.tuthan.paddock.ui.screens.ConfirmDialog
+import io.github.tuthan.paddock.ui.screens.MachinesDialog
+import io.github.tuthan.paddock.hostprofile.MachineRoster
+import io.github.tuthan.paddock.hostprofile.MachineRemoval
+import io.github.tuthan.paddock.hostprofile.MachineCopy
 import io.github.tuthan.paddock.ui.screens.DecisionActions
 import io.github.tuthan.paddock.ui.screens.DecisionSheet
 import io.github.tuthan.paddock.ui.screens.GateNoticeBar
@@ -60,6 +65,7 @@ import io.github.tuthan.paddock.ui.screens.ProGateSheet
 import io.github.tuthan.paddock.ui.screens.TipOption
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
+import io.github.tuthan.paddock.billing.GateContext
 import io.github.tuthan.paddock.billing.ProCapabilities
 import io.github.tuthan.paddock.billing.ProView
 import io.github.tuthan.paddock.ops.ComposerRules
@@ -228,6 +234,10 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     var snippetsFrom by rememberSaveable { mutableStateOf(Route.Settings) }
     var guardedFrom by rememberSaveable { mutableStateOf(Route.Settings) }
     var relayDismissed by rememberSaveable { mutableStateOf(false) }
+    // "Not now" on the relay prompt is about the machine it was shown for: another machine watched means its own prompt, if it has one.
+    val watchedId = graph.profile.collectAsState().value?.id
+    var dismissedFor by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(watchedId) { if (dismissedFor != null && dismissedFor != watchedId) relayDismissed = false; dismissedFor = watchedId }
     var reviewKey by rememberSaveable { mutableStateOf(false) }
     // The composer's text lives here, above the route: leaving the composer (Edit snippets, Back) or a reconnect that swaps it for "not available" must not lose it.
     var draft by rememberSaveable(stateSaver = PromptDraftSaver) { mutableStateOf(PromptDraft()) }
@@ -387,6 +397,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                             onSetUpKey = { editing = true; authorizeIntro = false; pairing = null; addFrom = Route.Home; route = Route.AddMachine },
                             onShowCommand = { editing = true; authorizeIntro = true; pairing = null; addFrom = Route.Home; route = Route.AddMachine },
                             onNotice = { alertNotice = it },
+                            onAddMachine = { editing = false; pairing = null; addFrom = Route.Home; route = Route.AddMachine },
                         ) else ActivityRoute(graph, onOpenAgent = { terminalId = it; outputTab = AgentTab.Output; route = Route.Output })
                     }
                     PaddockNavBar(NAV, when (effective) { Route.Home -> 0; Route.Spaces -> 1; else -> 2 }, { route = when (it) { 0 -> Route.Home; 1 -> Route.Spaces; else -> Route.Activity } })
@@ -453,7 +464,7 @@ private fun rememberResumes(): Int {
 private fun HomeRoute(
     graph: AppGraph, relayDismissed: Boolean, setRelayDismissed: (Boolean) -> Unit, onReviewKey: () -> Unit,
     onOpen: (terminalId: String) -> Unit, onReviewPrompt: (terminalId: String) -> Unit, onSettings: () -> Unit, onSetUpKey: () -> Unit,
-    onShowCommand: () -> Unit, onNotice: (String) -> Unit = {},
+    onShowCommand: () -> Unit, onNotice: (String) -> Unit = {}, onAddMachine: () -> Unit = {},
 ) {
     val profile by graph.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
@@ -512,6 +523,51 @@ private fun HomeRoute(
             graph.scope.launch { rowOps?.rename(row.key, name)?.let { onNotice(presenter.line(io.github.tuthan.paddock.ops.OperationKind.Rename, it).text) } }
         })
     }
+    // The machine chip (Phase 13 follow-up, 2026-10-06): the saved machines, to watch another one (Pro) or remove one (Free).
+    var machinesOpen by rememberSaveable { mutableStateOf(false) }
+    var removeId by rememberSaveable { mutableStateOf<String?>(null) }
+    var removing by remember { mutableStateOf(false) }
+    val machines by graph.machines.collectAsState()
+    val pro by graph.pro.collectAsState()
+    val switchLocked = graph.locked(ProCapabilities.SWITCH_MACHINE, pro)
+    if (machinesOpen) {
+        MachinesDialog(
+            MachineRoster.rows(machines, profile?.id), switchLocked, busy = removing,
+            onSwitch = { row ->
+                machinesOpen = false
+                // A Pro capability asks the gate; a free user is shown the sheet (or told why not now), and the machine is not switched.
+                if (graph.requestCapability(ProCapabilities.SWITCH_MACHINE.id, pendingAnswerOnScreen = false)) {
+                    // Leaving a machine ends whatever is running on it as unknown (the journal's rule), so a switch waits for an operation in flight.
+                    if (graph.gateContext(pendingAnswerOnScreen = false) == GateContext.OPERATION_IN_FLIGHT) onNotice(MachineCopy.SWITCH_BUSY)
+                    else graph.scope.launch { graph.watchProfile(row.id)?.let { onNotice("Watching ${it.name}.") } }
+                }
+            },
+            onRemove = { row -> removeId = row.id },
+            onAdd = { machinesOpen = false; onAddMachine() },
+            onClose = { machinesOpen = false },
+        )
+    }
+    removeId?.let { id ->
+        val gone = machines.firstOrNull { it.id == id }
+        if (gone == null) removeId = null
+        else ConfirmDialog(
+            MachineCopy.removeTitle(gone.name),
+            MachineCopy.removeBody(gone.name, watched = gone.id == profile?.id, next = MachineRoster.after(machines, gone.id)?.name),
+            confirm = MachineCopy.REMOVE, facts = MachineCopy.REMOVE_FACTS, danger = true,
+            onCancel = { removeId = null },
+            onConfirm = {
+                removeId = null
+                removing = true
+                graph.scope.launch {
+                    val result = try { graph.removeMachine(id) } finally { removing = false }
+                    when (result) {
+                        MachineRemoval.Result.Removed -> { machinesOpen = machinesOpen && graph.machines.value.isNotEmpty(); onNotice("Removed ${gone.name}.") }
+                        is MachineRemoval.Result.Incomplete -> onNotice(MachineCopy.removeFailed(result.failed))
+                    }
+                }
+            },
+        )
+    }
     fun recover(r: Recovery?) {
         when (r) {
             Recovery.OpenSettings -> ctx.startActivity(graph.gate.settingsIntent())
@@ -525,7 +581,7 @@ private fun HomeRoute(
         }
     }
     HerdHome(
-        screen.state, now, preview = view.blockedPreview, onSettings = onSettings,
+        screen.state, now, preview = view.blockedPreview, onSettings = onSettings, onMachines = { machinesOpen = true },
         onRowMenu = if (host?.operations != null && host.spaceOps != null) { row -> menuRow = row } else null,
         onRefresh = if (host != null) ({ refreshing = true; host.refresh() }) else null, refreshing = refreshing,
         // Review prompt opens the live terminal for that agent, observing only; the captured prompt on Home is not read again, since the terminal shows it as it is.

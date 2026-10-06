@@ -2,6 +2,8 @@
 
 Two additions to the three ways of `docs/enrollment.md`, for a machine you sit at. **Nothing here replaces the traditional steps** (decision D1): this phone's key with its authorize command, Copy, Share, Copy key only, Show as QR, an imported key and Paste a pairing link are on Add machine in the same place whether or not a link was used, and every one still works. Pairing only saves running the command by hand.
 
+The pairing link's default host is the desktop's LAN address (the default route's), not its host name, because a phone almost never resolves the host name; the host name is used only when there is no LAN address, and `--host` or the popup's question overrides either. The listener's port is random per run, so a desktop firewall that denies incoming connections drops the phone's connection (seen with ufw: `UFW BLOCK ... DPT=45173` in the kernel log, phone says "cannot reach"); the popup says so when ufw or firewalld is active and prints `sudo ufw allow proto tcp from <network> to any port <port>` and the matching delete.
+
 The host side is the herdr plugin's **Paddock: pair a phone** popup (`docs/host-plugin.md`; the plugin is `herdr-plugin-paddock`, version 0.2.0, local only). The wire is the plugin's `PROTOCOL.md`, summarised below.
 
 ## The flow
@@ -20,14 +22,14 @@ The webcam path is the other half: **Show as QR** on Add machine (and **Show the
 | --- | --- | --- |
 | Sending | Sending this phone's key to {host}… (compare the fingerprint) | Cancel |
 | Waiting | Waiting for approval on the desktop. | Cancel |
-| Cannot reach yet | Cannot reach {host}:{port} yet. Paddock keeps trying until the time runs out… and says to run the pair action with `--host` set to the desktop's LAN address when the host is a name the phone cannot resolve | Cancel |
+| Cannot reach yet | Cannot reach {host}:{port} yet. Paddock keeps trying until the time runs out… and says to run the pair action with `--host` set to the desktop's LAN address when the host is a name the phone cannot resolve, and that a firewall on the desktop (ufw, firewalld) drops the connection silently: the pair popup names the active one and prints the commands that open and close the listener's port for this pairing | Cancel |
 | Approved | Approved. The key is authorized on the machine. Paddock connects now. | connects |
 | Rejected | Rejected on the desktop. Nothing was written there. The desktop keeps that answer for the whole popup, so sending again changes nothing: run the pair action again for a new code, or use the command | Back |
 | Time ran out | The desktop did not approve in time. Run the pair action again. Said only when the desktop's last word was still "waiting" (or it said `expired` itself) | Back |
 | Code not recognized | The desktop did not recognize this code (another popup, or it was closed). | Back |
 | Busy | Another key is being paired at this desktop. Wait for it or for that popup to close, then run the pair action again for a new code | Back |
 | No answer before the time ran out | The desktop may have written the key anyway. Press Connect to find out; if the machine does not accept it, run the pair action again for a new code, or use the command. Also what a desktop that answered and then went quiet ends as (the owner may have approved and closed the popup) | Connect, Back |
-| Could not reach | Check the same network and that the pair popup is still open. The command always works instead. | Back |
+| Could not reach | Check the same network, that the pair popup is still open, and that a firewall on the desktop is not dropping the port. The command always works instead. | Back |
 
 Two rules of the page: **Send the key** is offered only while the Host, Port and (when the link names one) User are what the link said, because the key is authorized for the user the popup runs as, and what the Send button sends and to whom is read at the tap (an Android local-network dialog that stays up while another link arrives cannot redirect the key). The system Back gesture is the header arrow's twin: it cancels a request that is still going, so a late approval cannot connect a phone that has left the page. Another machine coming up does not end a request made for a different desktop.
 

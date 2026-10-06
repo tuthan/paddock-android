@@ -103,6 +103,8 @@ fun HerdHome(
     preview: BlockedPreview? = null,
     onReview: (AgentRowModel) -> Unit = {},
     onSettings: () -> Unit = {},
+    /** The machine chip opens the list of saved machines (switch, remove, add); null leaves the chip a plain label. */
+    onMachines: (() -> Unit)? = null,
     /** Pull down to read the herd again; null hides the gesture. */
     onRefresh: (() -> Unit)? = null,
     refreshing: Boolean = false,
@@ -145,7 +147,7 @@ fun HerdHome(
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         val summary = live?.summary ?: if (state is HomeUiState.Loading) "Connecting…" else "No data yet"
                         HerdSummary(summary, flag = if (state is HomeUiState.Degraded) "not live" else null, dimmed = state !is HomeUiState.Live)
-                        HostChip(state.hostName, chipStatus, health = health)
+                        HostChip(state.hostName, chipStatus, health = health, onClick = onMachines)
                     }
                 }
                 if (state is HomeUiState.Degraded) {

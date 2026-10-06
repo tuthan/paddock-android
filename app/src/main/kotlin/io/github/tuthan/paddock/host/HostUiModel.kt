@@ -58,6 +58,9 @@ class HostUiModel(private val scope: CoroutineScope) {
     }
 
     fun detach() { job?.cancel(); job = null; spacesJob?.cancel(); spacesJob = null }
+
+    /** A machine was removed: nothing of it stays as a fallback, not even for the same machine added again (the id would match, and its old herd would come back dimmed). */
+    fun reset() { detach(); profileId = null; _view.value = HostView() }
 }
 
 private data class Snapshot5(

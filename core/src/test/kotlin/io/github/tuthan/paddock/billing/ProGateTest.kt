@@ -10,7 +10,7 @@ class ProGateTest {
     @Test
     fun m8BundleCPlusSeveralHostsIsWhatIsGated() {
         assertEquals(
-            setOf("answers.guarded", "operations.start", "operations.manage", "widgets", "hosts.merged"),
+            setOf("answers.guarded", "operations.start", "operations.manage", "widgets", "hosts.switch", "hosts.merged"),
             ProGate.GATED,
         )
         assertEquals(ProGate.GATED.size, ProCapabilities.ALL.map { it.id }.toSet().size, "ids are unique")
@@ -26,8 +26,8 @@ class ProGateTest {
 
     @Test
     fun whatStaysFreeIsNotInTheGatedSet() {
-        // Vault Free/Pro rules: watching, alerts, manual input, snippets, adding a machine and the machine picker are never Pro.
-        for (id in listOf("alerts", "alerts.relay", "output", "input.manual", "snippets", "hosts.add", "hosts.pick", "answers.yes", "terminal")) {
+        // Vault Free/Pro rules: watching, alerts, manual input, snippets and adding a machine are never Pro; nor is removing one (the user, 2026-10-06: choosing which saved machine to watch is Pro, forgetting one is not).
+        for (id in listOf("alerts", "alerts.relay", "output", "input.manual", "snippets", "hosts.add", "hosts.remove", "answers.yes", "terminal")) {
             for (context in GateContext.entries) assertEquals(GateDecision.PROCEED, ProGate.decide(id, hasPro = false, context = context), id)
         }
     }
