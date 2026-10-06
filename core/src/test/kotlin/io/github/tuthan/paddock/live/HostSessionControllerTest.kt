@@ -152,7 +152,7 @@ class HostSessionControllerTest {
     }
 
     private val pluginDir = "/home/jdoe/.local/share/herdr/plugins/paddock"
-    private val pluginListing = """{"id":"cli:plugin","result":{"plugins":[{"plugin_id":"paddock","plugin_root":"$pluginDir","version":"0.1.0","enabled":true}],"type":"plugin_list"}}"""
+    private val pluginListing = """{"id":"cli:plugin","result":{"plugins":[{"plugin_id":"tuthan.paddock","plugin_root":"$pluginDir","version":"0.1.0","enabled":true}],"type":"plugin_list"}}"""
     private val oneSession = """{"sessions":[{"name":"main","default":true,"running":true,"session_dir":"/d/main","socket_path":"/d/main/herdr.sock"}]}"""
     private val pushedPath = "/home/jdoe/.local/share/paddock/paddock-relay.py"
 
@@ -169,7 +169,7 @@ class HostSessionControllerTest {
         until("the relay is started") { session.streams.isNotEmpty() }
         assertTrue(session.streams.first().argv.contains("$pluginDir/host/paddock-relay.py"), session.streams.first().argv.toString())
         assertTrue(session.execs.none { (_, stdin) -> stdin != null }, "nothing was written to the host")
-        assertEquals(listOf("/usr/bin/herdr", "plugin", "list", "--plugin", "paddock", "--json"), session.execs.map { it.first }.single { it.getOrNull(1) == "plugin" })
+        assertEquals(listOf("/usr/bin/herdr", "plugin", "list", "--plugin", "tuthan.paddock", "--json"), session.execs.map { it.first }.single { it.getOrNull(1) == "plugin" })
         c.stop()
     }
 

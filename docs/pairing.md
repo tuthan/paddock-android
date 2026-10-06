@@ -4,7 +4,7 @@ Two additions to the three ways of `docs/enrollment.md`, for a machine you sit a
 
 The pairing link's default host is the desktop's LAN address (the default route's), not its host name, because a phone almost never resolves the host name; the host name is used only when there is no LAN address, and `--host` or the popup's question overrides either. The listener's port is random per run, so a desktop firewall that denies incoming connections drops the phone's connection (seen with ufw: `UFW BLOCK ... DPT=45173` in the kernel log, phone says "cannot reach"); the popup says so when ufw or firewalld is active and prints `sudo ufw allow proto tcp from <network> to any port <port>` and the matching delete.
 
-The host side is the herdr plugin's **Paddock: pair a phone** popup (`docs/host-plugin.md`; the plugin is `herdr-plugin-paddock`, version 0.2.0, local only). The wire is the plugin's `PROTOCOL.md`, summarised below.
+The host side is the herdr plugin's **Paddock: pair a phone** popup (`docs/host-plugin.md`; the plugin is `herdr-plugin-paddock`, version 0.2.0, public, not yet tagged). The wire is the plugin's `PROTOCOL.md`, summarised below.
 
 ## The flow
 

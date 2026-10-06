@@ -45,4 +45,4 @@ The inbound share sheet (Paddock listed as a target for shared text) is not buil
 
 ## The herdr plugin
 
-An optional herdr plugin does on the machine what the phone otherwise does by hand: `authorize-phone` takes a pasted key line and does what the command above does, `show-pairing` prints the link, and the plugin ships the pinned relay and control helper so the app can use them from the plugin directory when their hashes match. How the app finds and checks them, what happens when they differ, and why none of it is published yet are in [host-plugin.md](host-plugin.md).
+An optional herdr plugin does on the machine what the phone otherwise does by hand: `authorize-phone` takes a pasted key line and does what the command above does, `show-pairing` prints the link, and the plugin ships the pinned relay and control helper so the app can use them from the plugin directory when their hashes match. How the app finds and checks them, what happens when they differ, and what is and is not published yet are in [host-plugin.md](host-plugin.md).

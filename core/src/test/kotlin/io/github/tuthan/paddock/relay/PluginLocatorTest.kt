@@ -11,7 +11,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PluginLocatorTest {
-    private fun listing(root: String? = "/home/u/.local/share/herdr/plugins/paddock", version: String? = "0.1.0", enabled: Boolean = true, id: String = "paddock") =
+    private fun listing(root: String? = "/home/u/.local/share/herdr/plugins/paddock", version: String? = "0.1.0", enabled: Boolean = true, id: String = "tuthan.paddock") =
         buildString {
             append("""{"id":"cli:plugin","result":{"plugins":[{"plugin_id":"$id",""")
             if (root != null) append(""""plugin_root":"$root",""")
@@ -25,9 +25,9 @@ class PluginLocatorTest {
     }
 
     @Test fun herdrsOwnListingOfALinkedPluginIsUnderstood() {
-        // Captured from herdr 0.9.1 with the plugin linked in an isolated HOME; the path is replaced, the shape is herdr's.
+        // Captured from herdr 0.9.1 with plugin 0.2.0 (id tuthan.paddock) linked in an isolated HOME; the path is replaced, the shape is herdr's.
         val real = File(System.getProperty("paddock.repoRoot"), "fixtures/herdr-0.9.1/plugin-list-paddock.json").readText()
-        assertEquals(PluginLocation("/srv/herdr/plugins/paddock", "0.1.0"), PluginLocator.parse(real))
+        assertEquals(PluginLocation("/srv/herdr/plugins/tuthan.paddock", "0.2.0"), PluginLocator.parse(real))
     }
 
     @Test fun nothingInstalledOrAnythingOddIsNoPlugin() {
@@ -39,7 +39,7 @@ class PluginLocatorTest {
         assertNull(PluginLocator.parse("""{"error":{"code":"nope"}}"""))
         assertNull(PluginLocator.parse(listing(root = null)), "an entry without a directory")
         assertNull(PluginLocator.parse(listing(enabled = false)), "a plugin the user switched off is left alone")
-        assertNull(PluginLocator.parse(listing(id = "neyham.paddock")), "only the plugin id paddock counts")
+        assertNull(PluginLocator.parse(listing(id = "neyham.paddock")), "only the plugin id tuthan.paddock counts")
     }
 
     @Test fun aDirectoryThatIsNotAPlainAbsolutePathIsNeverUsed() {
@@ -63,7 +63,7 @@ class PluginLocatorTest {
     @Test fun findAsksHerdrWithNoShellAndFailsToNoPlugin() = runBlocking<Unit> {
         val ok = FakeSession(onExec = { _, _ -> result(0, listing()) })
         assertEquals("/home/u/.local/share/herdr/plugins/paddock", PluginLocator.find(ok, "/usr/bin/herdr")?.dir)
-        assertEquals(listOf("/usr/bin/herdr", "plugin", "list", "--plugin", "paddock", "--json"), ok.execs.single().first)
+        assertEquals(listOf("/usr/bin/herdr", "plugin", "list", "--plugin", "tuthan.paddock", "--json"), ok.execs.single().first)
         assertNull(PluginLocator.find(FakeSession(onExec = { _, _ -> result(1, "", "unknown command") }), "/usr/bin/herdr"), "an older herdr without plugins")
         assertNull(PluginLocator.find(FakeSession(onExec = { _, _ -> result(0, listing().replace("}", "")) }), "/usr/bin/herdr"))
         assertNull(PluginLocator.find(FakeSession(onExec = { _, _ -> error("link dropped") }), "/usr/bin/herdr"))

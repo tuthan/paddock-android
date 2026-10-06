@@ -49,7 +49,7 @@
     "fixtures/herdr-0.9.1/pane-move-new-tab.json": "sha256:201c6beabd3b603eb5c912a39b19699367302936fd49a93f86cb0572cd618c93",
     "fixtures/herdr-0.9.1/pane-process-info-shell.json": "sha256:f4726e9b29e9ed401c5e45f20b10c49f9f7251a5144d0d5922b72177423d94fc",
     "fixtures/herdr-0.9.1/pane-read-recent.txt": "sha256:683dce259cf3c6126f6b1b7251395c7b5b1982375e007c129a84b71410de0889",
-    "fixtures/herdr-0.9.1/plugin-list-paddock.json": "sha256:51ec10d420cc314e5a3b953944ed609975cc626a662d467aaa6246cec960e20a",
+    "fixtures/herdr-0.9.1/plugin-list-paddock.json": "sha256:cde419b189bae59dc019a5b518957410cfd90117b7f03a623a465329624d2ac4",
     "fixtures/herdr-0.9.1/report-agent-blocked.txt": "sha256:19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",
     "fixtures/herdr-0.9.1/report-agent-idle.txt": "sha256:19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",
     "fixtures/herdr-0.9.1/report-agent-unknown.txt": "sha256:19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",

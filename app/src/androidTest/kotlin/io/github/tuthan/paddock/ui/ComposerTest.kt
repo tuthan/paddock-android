@@ -64,7 +64,7 @@ class ComposerTest {
     @get:Rule val rule = createComposeRule()
 
     private val now = 1_000_000L
-    private val header = AgentHeader("Assess Rust migration", "codex · blindpass › tab 3 · main · devbox", StateWord.Ready, now - 120_000, agentKind = "codex")
+    private val header = AgentHeader("Assess Rust migration", "codex · blindpass › tab 3 · main · jdoe-arch", StateWord.Ready, now - 120_000, agentKind = "codex")
     private val key = TerminalKey(TargetRef(HostProfileId("h1"), "paddock-test", "term_1"), 2)
     private val open = SendGate.Open(hintsUnreported = false)
 

@@ -55,9 +55,9 @@ To undo: remove that entry from `~/.claude/settings.json` and delete `~/.config/
 
 Neither is needed: section 1 always works. Both are additions (Phase 14).
 
-**Pair from the desktop** saves running the authorize command by hand. It needs the herdr plugin (`docs/host-plugin.md`), which is optional and local until published.
+**Pair from the desktop** saves running the authorize command by hand. It needs the herdr plugin (`docs/host-plugin.md`), which is optional (github.com/tuthan/herdr-plugin-paddock; installing it from GitHub has not been run yet).
 
-1. On the machine, run **Paddock: pair a phone** in herdr (`herdr plugin action invoke pair --plugin paddock`, or a key bound to `paddock.pair`). The popup prints a pairing link and a QR, opens a LAN listener on this machine's address, and waits 120 seconds.
+1. On the machine, run **Paddock: pair a phone** in herdr (`herdr plugin action invoke pair --plugin tuthan.paddock`, or a key bound to `tuthan.paddock.pair`). The popup prints a pairing link and a QR, opens a LAN listener on this machine's address, and waits 120 seconds.
 2. On the phone: **Scan the code on the desktop** (or **Paste a pairing link**), then **Send the key**. The popup shows the key's fingerprint; compare it with the phone's and press `a`.
 3. Only then is the key line appended to `~/.ssh/authorized_keys`; the phone connects by itself. Anything else (Reject is the default, a time-out, a different key) writes nothing. To undo, delete the `paddock@phone` line, as in section 1.
 

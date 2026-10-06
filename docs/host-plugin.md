@@ -1,6 +1,8 @@
 # The herdr plugin and how the app uses it (Phase 11, with the `pair` action of Phase 14)
 
-The host side of enrollment is a herdr plugin kept in its own repository (`herdr-plugin-paddock`, id `paddock`, local only until it is published: see [Not published](#not-published)). It is optional. Everything it does has a path without it: the copy command, a pairing link written by hand, and the consented push install of the relay.
+The host side of enrollment is a herdr plugin kept in its own repository (`herdr-plugin-paddock`, id `tuthan.paddock`, public at github.com/tuthan/herdr-plugin-paddock under Apache-2.0, not yet tagged or listed: see [Publication](#publication)). It is optional. Everything it does has a path without it: the copy command, a pairing link written by hand, and the consented push install of the relay.
+
+**Platforms.** The plugin declares `linux` and `macos`. Linux is what was run for real (the plugin's live check against a disposable herdr session, and a phone). The macOS paths (LAN address from `route` and `ipconfig`, `pbcopy`, the application-firewall note, no camera intake because that needs a V4L2 camera and `zbarcam`) are unit-tested against stand-ins that print what the macOS programs print, and **have not been run on a Mac**. The two host scripts the plugin ships use only POSIX calls, so the app's pins are unchanged. What the app does with a macOS host (relay, control, alerts) was not exercised either.
 
 ## What the plugin gives
 
@@ -16,7 +18,7 @@ The host side of enrollment is a herdr plugin kept in its own repository (`herdr
 On every bring-up of a machine (`HostSessionController.bringUp`), before the relay is checked:
 
 1. Find herdr (the usual places, or the profile's path).
-2. `herdr plugin list --plugin paddock --json`: no tty, no server needed. One JSON line; `result.plugins` empty means no plugin (`PluginLocator`). Read `plugin_id`, `plugin_root`, `version` and `enabled` and nothing else: `source.kind` and the path pattern are never relied on (a GitHub install's directory was not observed). A directory that is not a plain absolute path (`PluginLocator.isSafe`: no spaces, quotes, `.` or `..`, at most 400 characters), a disabled plugin, another plugin id, or any failure of the command is "no plugin".
+2. `herdr plugin list --plugin tuthan.paddock --json`: no tty, no server needed. One JSON line; `result.plugins` empty means no plugin (`PluginLocator`). Read `plugin_id`, `plugin_root`, `version` and `enabled` and nothing else: `source.kind` and the path pattern are never relied on (a GitHub install's directory was not observed). A directory that is not a plain absolute path (`PluginLocator.isSafe`: no spaces, quotes, `.` or `..`, at most 400 characters), a disabled plugin, another plugin id, or any failure of the command is "no plugin".
 3. Hash `<plugin_root>/host/paddock-relay.py` on the host (`sha256sum`) and compare it with the app's own pin:
    - **equal:** the relay runs from there. Nothing is asked and nothing is written to the host.
    - **different:** that file is never run. If the pushed copy (`~/.local/share/paddock/paddock-relay.py`) is the pin, it runs from there. Otherwise the usual install screen is shown with a note naming the plugin's version and saying to reinstall the plugin from the release that matches the app (herdr has no plugin update command), or to install the relay here. Install is still the user's tap.
@@ -32,14 +34,14 @@ The app never runs `herdr plugin install` on the host. It shows the user what to
 ## Checks
 
 - `PluginLocatorTest`, `RelayInstallerPluginTest`, `HostSessionControllerTest` (plugin cases), `RelayInstallTest` (the note): the table of hostile directories, the order above, nothing written for a pinned plugin copy, a mismatched copy never run, a change after connecting refused.
-- `fixtures/herdr-0.9.1/plugin-list-paddock.json`: herdr 0.9.1's own listing of a linked plugin, captured under `env -i` with an isolated HOME; only the plugin path was replaced.
+- `fixtures/herdr-0.9.1/plugin-list-paddock.json`: herdr 0.9.1's own listing of the linked plugin (id `tuthan.paddock`, version 0.2.0), captured under `env -i` with an isolated HOME; only the plugin path was replaced.
 - `Phase11PluginLiveTest` (set `PADDOCK_TEST_PLUGIN_DIR` to a plugin checkout): the real herdr and the real plugin files through a wrapper that runs herdr with an isolated HOME. Finds the plugin and accepts its relay by hash; a copy of the plugin with an edited relay is found, reported and not run, and the push install still works.
 - In the plugin repository: 200 Python tests (the 70 above plus the `pair` popup, its listener and the open-pane wrapper), `tools/check_pins.py` (the plugin's copies against this repository's pins, which live in two places), and `tools/live_check.py` against a real herdr 0.9.1 in isolation.
 
 ## The `pair` action (Phase 14)
 
-Plugin version 0.2.0 adds `paddock.pair` and a pane for it (`bin/pair.py`, `PairListener` in `lib/paddock_plugin.py`, `PROTOCOL.md`). The app side is the pairing page and its coordinator (`docs/pairing.md`). The app learns two optional link parameters, `pair=<port>` and `sid=<22 characters>`; an older app ignores both and pairs the old way, and a link without them is exactly what `show-pairing` always printed. Nothing about the discovery order above changes: the pair popup does not install or replace any script.
+Plugin version 0.2.0 adds the `pair` action (`tuthan.paddock.pair`) and a pane for it (`bin/pair.py`, `PairListener` in `lib/paddock_plugin.py`, `PROTOCOL.md`). The app side is the pairing page and its coordinator (`docs/pairing.md`). The app learns two optional link parameters, `pair=<port>` and `sid=<22 characters>`; an older app ignores both and pairs the old way, and a link without them is exactly what `show-pairing` always printed. Nothing about the discovery order above changes: the pair popup does not install or replace any script.
 
-## Not published
+## Publication
 
-Nothing about the plugin is public: the repository has a local tag and no remote, no GitHub topic, no marketplace listing, and no licence is chosen. Publishing is the owner's decision (owner and repository name, licence, whether the id stays the bare `paddock`, and a look at the existing marketplace entry that is also called Paddock). The app looks for the id `paddock`; publishing under another id means changing `PluginLocator.PLUGIN_ID`. The install from GitHub (AC-11.7) and what `herdr plugin list` reports for it are therefore not observed yet.
+The plugin repository is public at github.com/tuthan/herdr-plugin-paddock, under Apache-2.0 like this app. Still the owner's steps: a release tag (the README's install line names `v0.2.0`, which does not exist yet), the `herdr-plugin` GitHub topic that puts it in herdr's marketplace, and a look at the other marketplace entry that is also called Paddock (`neyham.paddock`). The id is `tuthan.paddock`, owner-qualified like herdr's own examples, so the two cannot be confused; the app looks for that id (`PluginLocator.PLUGIN_ID`), and an id change means changing it. The install from GitHub (AC-11.7) and what `herdr plugin list` reports for it are therefore not observed yet.

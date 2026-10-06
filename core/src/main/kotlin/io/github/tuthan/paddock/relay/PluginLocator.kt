@@ -8,13 +8,13 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Asks herdr where the Paddock plugin is installed: `herdr plugin list --plugin paddock --json`, which needs no running server
+ * Asks herdr where the Paddock plugin is installed: `herdr plugin list --plugin tuthan.paddock --json`, which needs no running server
  * and no tty (spike S3). It answers only with what herdr printed for the plugin id `paddock`; a directory that is not a plain
  * absolute path, a disabled plugin, an empty list or any failure is "no plugin", and the push install stays the way forward.
  * The path is a hint about where to look, never trust: the script found there is hashed against the app's pin before it runs.
  */
 object PluginLocator {
-    const val PLUGIN_ID = "paddock"
+    const val PLUGIN_ID = "tuthan.paddock"
 
     private val SEGMENT = Regex("[A-Za-z0-9._@+-]{1,100}")
     private val VERSION = Regex("[A-Za-z0-9._+-]{1,32}")

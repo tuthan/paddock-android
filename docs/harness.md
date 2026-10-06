@@ -37,4 +37,4 @@ The harness reaches `tools/test-sshd.sh`, `tools/fake-agent.py`, `tools/desktop-
 
 ## Visibility
 
-The harness repository is local only for now. Whether it is published, and under which licence, follows the app's licence decision (M1). If it is private while this repository is public, this page says so and the evidence reports still cite the harness commit, so the record is complete where a reader cannot open it.
+The harness repository is private (github.com/tuthan/paddock-harness) while this repository is public, so the evidence reports cite the harness commit and the record is complete where a reader cannot open it. Its licence follows the app's licence decision (M1, Apache-2.0): the licence file is added before it is ever made public.
