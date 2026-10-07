@@ -22,6 +22,13 @@ data class AppSettings(
     /** The machine to watch on start; null (or a removed profile) falls back to the first one. */
     val watchedProfileId: String? = null,
     /**
+     * The machine the user chose themselves, as opposed to the one an alert moved the phone to: set by adding a machine, by Watch in the machine list,
+     * and by the fallback when the watched machine is removed; never by an alert. Returning to it is free (`hosts.switch` gates every other switch), so
+     * an alert never leaves a phone without Pro watched by whichever machine alerted last. Null in a file written before it existed; the app fills it
+     * with the watched machine at start.
+     */
+    val chosenProfileId: String? = null,
+    /**
      * Off by default: the operation journal records a prompt as a SHA-256 and nothing else. On, it also keeps the text,
      * which then shows in the unknown-outcome check ("does this text appear in the pane?") after a restart.
      */
@@ -45,6 +52,14 @@ data class AppSettings(
      * letters for every agent. It changes only what is drawn; nothing else depends on it.
      */
     val agentGlyphs: Boolean = true,
+    /**
+     * Off until the user turns it on (and proves it is them, so a lock that cannot be satisfied is never switched on). On: Paddock's screens are covered
+     * until the phone's own screen lock (fingerprint, face, PIN, pattern or password) says it is the user, at start and again after
+     * [appLockAfterSeconds] out of sight. Paddock keeps no code of its own.
+     */
+    val appLock: Boolean = false,
+    /** How long Paddock may be out of sight before the lock asks again; one of `LockTimeout`'s seconds, anything else is read as a minute. */
+    val appLockAfterSeconds: Int = 60,
 )
 
 interface AppSettingsStore {

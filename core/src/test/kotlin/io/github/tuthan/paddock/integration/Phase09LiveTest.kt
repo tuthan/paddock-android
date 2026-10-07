@@ -209,7 +209,7 @@ class Phase09LiveTest {
         StartAgentSaga(wrap(RelaySagaHost(relay, session, cli)), null, j, store, clock, startTimeoutMs = startTimeoutMs, verifyWindowMillis = 10_000, pollMillis = 250) to j
 
     private suspend fun workspaceId() = snapshot().workspaces.first { it.label == "work" }.workspaceId
-    private fun request(workspaceId: String, agent: String, kind: String = "claude", branch: String? = null) = SagaRequest(host, name, agent, kind, workspaceId, branch, repository = work.name)
+    private fun request(workspaceId: String, agent: String, kind: String = "claude", branch: String? = null, folder: String? = null) = SagaRequest(host, name, agent, kind, workspaceId, branch, repository = work.name, folder = folder)
 
     @Test fun aTabSagaStartsTheAgentInThePaneThatCameBack() = runBlocking<Unit> {
         val (saga, j) = saga()
@@ -221,6 +221,33 @@ class Phase09LiveTest {
         assertEquals("claude", agent.agent, "agent as herdr lists it: ${cliText("agent", "list")}")
         assertEquals(listOf(OperationKind.TabCreate, OperationKind.AgentStart), j.records.value.map { it.kind })
         assertTrue(j.records.value.all { it.outcome == OperationOutcome.Acknowledged })
+    }
+
+    /** The folder the user types goes through `~` and a symlink, and the pane really is in the real folder (herdr resolves it; the check compares with it). */
+    @Test fun aFolderOfTheUsersChoiceIsWhereTheShellAndTheAgentStart() = runBlocking<Unit> {
+        val real = File(home, "projects/api service").also { it.mkdirs() }.canonicalFile
+        val link = File(home, "api-link").also { Files.createSymbolicLink(it.toPath(), real.toPath()) }
+        val (saga, j) = saga()
+        for ((agent, typed) in listOf("viahome" to "~/projects/api service", "vialink" to link.path)) {
+            val rec = saga.run(request(workspaceId(), agent, folder = typed))
+            assertEquals(SagaState.Succeeded, rec.state, rec.message)
+            assertEquals(real.path, snapshot().panes.single { it.paneId == rec.createdPaneId }.cwd)
+            assertEquals(real.path, rec.expectedCwd)
+        }
+        assertEquals(4, j.records.value.size, "two tab creates and two agent starts")
+    }
+
+    /** herdr 0.9.1 opens the tab in its default folder for a folder that is not there; the saga asks first, so no tab is made. */
+    @Test fun aFolderThatIsNotThereCreatesNothing() = runBlocking<Unit> {
+        val (saga, j) = saga()
+        val tabs = snapshot().tabs.size
+        for (bad in listOf("/tmp/p9h-does-not-exist", "~/missing", File(work, ".git/HEAD").path)) {
+            val rec = saga.run(request(workspaceId(), "nowhere", folder = bad))
+            assertEquals(SagaFailure.FOLDER_MISSING, rec.failure, rec.message)
+            assertEquals(false, rec.createdSomething)
+        }
+        assertEquals(tabs, snapshot().tabs.size)
+        assertTrue(j.records.value.isEmpty(), "nothing was sent to herdr")
     }
 
     @Test fun aWorktreeSagaStartsTheAgentInTheWorktreesRootPaneAndItsCwdIsTheWorktreePath() = runBlocking<Unit> {
@@ -292,8 +319,8 @@ class Phase09LiveTest {
         // Between the create and the check the pane is moved to a tab of its own. It keeps its pane id (measured on 0.9.1) and the tab
         // it was created in is closed, so the id alone would have passed the check.
         val moving = { inner: SagaHost -> object : SagaHost by inner {
-            override suspend fun createTab(workspaceId: String, before: suspend () -> Unit): Created =
-                inner.createTab(workspaceId, before).also { cliText("pane", "move", it.paneId, "--new-tab") }
+            override suspend fun createTab(workspaceId: String, cwd: String?, before: suspend () -> Unit): Created =
+                inner.createTab(workspaceId, cwd, before).also { cliText("pane", "move", it.paneId, "--new-tab") }
         } }
         val (saga, j) = saga(wrap = moving)
         val rec = saga.run(request(workspaceId(), "mover"))

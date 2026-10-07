@@ -29,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -42,9 +43,11 @@ import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.tuthan.paddock.terminal.EndReason
@@ -108,6 +111,21 @@ internal fun endedText(reason: EndReason): Pair<String, String> = when (reason) 
 }
 
 /**
+ * [content] measured, but with no width, nothing drawn and nothing for a screen reader: only its height counts. The pill is alone in its row while the
+ * terminal connects, and a shorter row makes the grid under it taller. When the terminal's real size is unknown (a Mac host) the observer is drawn for the
+ * grid's size, so a taller grid reconnects it, and the reconnect shortens the row again, without end.
+ */
+@Composable
+private fun HeightOnly(content: @Composable () -> Unit) {
+    Box(
+        Modifier.alpha(0f).clearAndSetSemantics { }.layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(0, placeable.height) { }
+        },
+    ) { content() }
+}
+
+/**
  * The Terminal tab. Read-only until the user asks for control: the pill says which, Request control is the only way in
  * (never with takeover), a refusal is explained in herdr's words with Take over as its own action, and the key strip and the
  * hardware keyboard send nothing unless this phone controls the terminal. Resize to fit and a control request that would
@@ -150,16 +168,19 @@ fun TerminalTab(
     val notice = view.notice
     if (notice is TerminalNotice.Resynced) LaunchedEffect(notice, view.frames) { delay(4_000); actions.onDismissNotice() }
 
+    val requestControl: @Composable (Boolean) -> Unit = { enabled ->
+        PaddockButton(
+            "Request control", { if (view.controlWouldResizeDesktop) asking = Ask.TakeControlResizes(fitCells.first, fitCells.second) else actions.onRequestControl() },
+            kind = ButtonKind.Secondary, enabled = enabled, small = true, fillWidth = false, icon = PaddockIcons.Keyboard, dense = compact,
+        )
+    }
     val controls: @Composable () -> Unit = {
         Chip(
             if (compact) pillText(view).removePrefix("in ") else pillText(view), description = "Terminal: ${pillText(view)}", tone = if (controlling) c.attention else null,
             icon = if (controlling) PaddockIcons.Keyboard else PaddockIcons.Eye,
         )
         when (view.mode) {
-            TerminalMode.Observing -> if (notice !is TerminalNotice.HelperNeeded) PaddockButton(
-                "Request control", { if (view.controlWouldResizeDesktop) asking = Ask.TakeControlResizes(fitCells.first, fitCells.second) else actions.onRequestControl() },
-                kind = ButtonKind.Secondary, small = true, fillWidth = false, icon = PaddockIcons.Keyboard, dense = compact,
-            )
+            TerminalMode.Observing -> if (notice !is TerminalNotice.HelperNeeded) requestControl(true) else HeightOnly { requestControl(false) }
             TerminalMode.Controlling -> {
                 PaddockButton(
                     if (keyboardShown) "Hide keyboard" else "Keyboard",
@@ -172,7 +193,7 @@ fun TerminalTab(
                 PaddockButton("Release", actions.onRelease, kind = ButtonKind.Secondary, small = true, fillWidth = false, dense = compact)
                 PaddockButton("Resize to fit", { asking = Ask.Resize(fitCells.first, fitCells.second) }, kind = ButtonKind.Secondary, small = true, fillWidth = false, dense = compact)
             }
-            else -> Unit
+            else -> HeightOnly { requestControl(false) }
         }
     }
 

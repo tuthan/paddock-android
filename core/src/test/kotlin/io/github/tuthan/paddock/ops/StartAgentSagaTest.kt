@@ -7,6 +7,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -27,6 +28,8 @@ class StartAgentSagaTest {
     private class Host : SagaHost {
         val calls = mutableListOf<String>()
         var available: (List<String>) -> Boolean = { true }
+        /** What the host makes of a typed folder: its real path, or null when it is not a folder there. */
+        var folder: (String) -> String? = { it }
         var worktree: () -> Created = { Created("w9", "w9:t1", "w9:p1", "term_wt", "/wt/feat", worktreePath = "/wt/feat", repository = "repo") }
         var tab: () -> Created = { Created(null, "w1:t7", "w1:p7", "term_tab", "/work") }
         var pane: (n: Int) -> PaneFacts = { facts("term_tab", 1, "/work", hasAgent = false, atShellPrompt = true) }
@@ -36,7 +39,8 @@ class StartAgentSagaTest {
         var beforeFails = false
         override suspend fun executableAvailable(candidates: List<String>): Boolean { calls += "available ${candidates.joinToString("|")}"; return available(candidates) }
         override suspend fun createWorktree(parentWorkspaceId: String, branch: String, trust: Boolean, before: suspend () -> Unit): Created { calls += "worktree $parentWorkspaceId $branch trust=$trust"; before(); return worktree() }
-        override suspend fun createTab(workspaceId: String, before: suspend () -> Unit): Created { calls += "tab $workspaceId"; before(); return tab() }
+        override suspend fun createTab(workspaceId: String, cwd: String?, before: suspend () -> Unit): Created { calls += "tab $workspaceId" + (cwd?.let { " in $it" } ?: ""); before(); return tab() }
+        override suspend fun resolveFolder(path: String): String? { calls += "folder $path"; return folder(path) }
         override suspend fun inspectPane(paneId: String): PaneFacts { calls += "inspect $paneId"; return pane(inspects++) }
         override suspend fun startAgent(name: String, kind: String, paneId: String, timeoutMs: Int, before: suspend () -> Unit): StartedAgent { calls += "start $name $kind $paneId"; before(); return start(name) }
         override suspend fun closeWorkspace(workspaceId: String, before: suspend () -> Unit) { calls += "closeWorkspace $workspaceId"; before(); close() }
@@ -50,8 +54,8 @@ class StartAgentSagaTest {
     private fun saga(sagaStore: SagaStore = store, window: Long = 10_000) =
         StartAgentSaga(host, prompter, journal, sagaStore, { now }, verifyWindowMillis = window, pollMillis = 500, pause = { now += it })
 
-    private fun req(branch: String? = null, name: String = "worker", kind: String = "claude", prompt: String? = null, skip: Boolean = false, trust: Boolean = false) =
-        SagaRequest(h, "paddock-test-2", name, kind, "w1", branch, trust, prompt, skip, repository = "repo")
+    private fun req(branch: String? = null, name: String = "worker", kind: String = "claude", prompt: String? = null, skip: Boolean = false, trust: Boolean = false, folder: String? = null) =
+        SagaRequest(h, "paddock-test-2", name, kind, "w1", branch, trust, prompt, skip, repository = "repo", folder = folder)
 
     private fun rows(kind: OperationKind) = journal.records.value.filter { it.kind == kind }
 
@@ -110,6 +114,72 @@ class StartAgentSagaTest {
         assertEquals(SagaState.Succeeded, saga().run(req(name = "two")).state)
     }
 
+    // ---- the folder ---------------------------------------------------------------------------------------------------------------
+
+    @Test fun aFolderIsResolvedFirstAndTheTabIsCreatedThereAndCheckedAgainstTheRealPath() = runBlocking<Unit> {
+        host.folder = { "/srv/real/api" }
+        host.tab = { Created(null, "w1:t7", "w1:p7", "term_tab", "/srv/real/api") }
+        host.pane = { facts("term_tab", 1, "/srv/real/api", hasAgent = false, atShellPrompt = true) }
+        val rec = saga().run(req(folder = "~/api"))
+        assertEquals(SagaState.Succeeded, rec.state)
+        // The host is asked about what the user typed; the tab is made in what it answered; both are in the record.
+        assertEquals(listOf("available claude", "folder ~/api", "tab w1 in /srv/real/api", "inspect w1:p7", "start worker claude w1:p7"), host.calls)
+        assertEquals("~/api", rec.folder); assertEquals("/srv/real/api", rec.expectedCwd)
+    }
+
+    @Test fun aFolderThatIsNotThereStopsBeforeAnythingIsCreated() = runBlocking<Unit> {
+        host.folder = { null }
+        val rec = saga().run(req(folder = "/srv/nothing"))
+        assertEquals(SagaState.Failed, rec.state); assertEquals(SagaFailure.FOLDER_MISSING, rec.failure); assertEquals(SagaStep.Folder, rec.step)
+        assertEquals(listOf("available claude", "folder /srv/nothing"), host.calls)
+        assertFalse(rec.createdSomething)
+        assertTrue(journal.records.value.isEmpty())
+        assertTrue("/srv/nothing is not a folder on the host" in rec.message && "Nothing was created" in rec.message)
+    }
+
+    @Test fun aHostThatCannotBeAskedAboutTheFolderStopsBeforeAnythingIsCreated() = runBlocking<Unit> {
+        host.folder = { throw IOException("reset") }
+        val rec = saga().run(req(folder = "/srv/api"))
+        assertEquals(SagaFailure.HOST_UNREACHABLE, rec.failure)
+        assertTrue(host.calls.none { it.startsWith("tab") })
+        assertTrue(journal.records.value.isEmpty())
+    }
+
+    /** What 0.9.1 really does with a folder it cannot use: it opens the tab in its own default folder and says so only in the pane's cwd. */
+    @Test fun aTabThatOpenedSomewhereElseStopsBeforeAnAgentStartsAndKeepsItsIds() = runBlocking<Unit> {
+        host.folder = { "/srv/api" }
+        host.tab = { Created(null, "w1:t7", "w1:p7", "term_tab", "/home/dev") }
+        val rec = saga().run(req(folder = "/srv/api"))
+        assertEquals(SagaFailure.WRONG_CWD, rec.failure)
+        assertEquals("w1:t7", rec.createdTabId)
+        assertTrue(host.calls.none { it.startsWith("start") || it.startsWith("inspect") })
+        assertTrue("/home/dev" in rec.message && "/srv/api" in rec.message)
+        assertTrue(rec.needsRecovery)
+    }
+
+    @Test fun withoutAFolderTheHostIsNeverAskedAndTheTabHasNoCwd() = runBlocking<Unit> {
+        saga().run(req())
+        assertTrue(host.calls.none { it.startsWith("folder") })
+        assertTrue("tab w1" in host.calls)
+    }
+
+    @Test fun aFolderIsKeptForStartingAgainFromTheCard() = runBlocking<Unit> {
+        host.available = { false }
+        val s = saga()
+        val rec = s.run(req(folder = "/srv/api", kind = "maki"))
+        assertEquals("/srv/api", s.requestOf(rec.id)!!.folder)
+        // After a restart the request is rebuilt from the record, and the folder is still in it.
+        assertEquals("/srv/api", saga().requestOf(rec.id)!!.folder)
+    }
+
+    @Test fun theFolderRulesAreTheFormsAndTheSagasAlike() {
+        assertNull(SagaRules.folderProblem("/srv/api")); assertNull(SagaRules.folderProblem("~")); assertNull(SagaRules.folderProblem("~/my project"))
+        for (bad in listOf("", "  ", "api", "./api", "~user/x", "/a\nb", "/" + "x".repeat(1100))) assertNotNull("[$bad]", SagaRules.folderProblem(bad))
+        assertNotNull(SagaRules.problem(req(folder = "/srv/api", branch = "feat")))
+        assertNull(SagaRules.problem(req(folder = "/srv/api")))
+        assertFailsWith<IllegalArgumentException> { runBlocking { saga().run(req(folder = "relative")) } }
+    }
+
     // ---- step 1: availability -------------------------------------------------------------------------------------------------
 
     @Test fun aMissingExecutableStopsBeforeAnythingIsCreated() = runBlocking<Unit> {
@@ -122,6 +192,18 @@ class StartAgentSagaTest {
         val card = SagaCard.of(rec)
         assertTrue(card.actions.contains(CardAction.StartAnyway))
         assertTrue(card.lines.any { "Nothing was created" in it })
+    }
+
+    /** The app showed no card at all for a start that stopped before creating anything, so "not installed" and "no such folder" were silent. */
+    @Test fun aStartThatCreatedNothingShowsACardOnlyForTheAttemptJustMade() = runBlocking<Unit> {
+        host.available = { false }
+        val rec = saga().run(req(kind = "maki"))
+        assertFalse(rec.needsRecovery)
+        assertTrue(rec.showsCard(attemptSince = rec.startedAt))
+        assertFalse(rec.showsCard(attemptSince = null))
+        assertFalse(rec.showsCard(attemptSince = rec.updatedAt + 1), "an older failure stays in Activity")
+        saga().leave(rec.id)
+        assertFalse(store.load().records.single().showsCard(attemptSince = rec.startedAt), "dismissed")
     }
 
     @Test fun startAnywaySkipsOnlyTheAvailabilityCheck() = runBlocking<Unit> {

@@ -2,6 +2,7 @@ package io.github.tuthan.paddock.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -59,6 +60,7 @@ import io.github.tuthan.paddock.ui.components.Note
 import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.ScreenHeader
 import io.github.tuthan.paddock.ui.components.Toggle
+import io.github.tuthan.paddock.ui.components.proSpoken
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 
 /** A workspace the start-agent form can start in: herdr's id and the label the herd shows for it. */
@@ -66,15 +68,16 @@ data class WorkspaceChoice(val id: String, val label: String)
 
 /** Whether an agent can be started from here right now, and where. */
 sealed interface StartAvailability {
-    data class Available(val workspaces: List<WorkspaceChoice>) : StartAvailability
+    /** [folders] are the folders panes are already in on the machine, offered as suggestions when the user chooses a folder of their own. */
+    data class Available(val workspaces: List<WorkspaceChoice>, val folders: List<String> = emptyList()) : StartAvailability
     data class Unavailable(val reason: String) : StartAvailability
 }
 
 /** The start-agent saga as the screen shows it while it runs and just after it succeeds; a failed one is a recovery card instead. */
 data class SagaProgress(val sagaId: String, val agentName: String, val kind: String, val step: String, val done: Boolean, val terminalId: String?, val note: String?)
 
-/** What the user filled in on the start-agent form. [branch] is null for "no worktree". */
-data class StartForm(val workspaceId: String, val kind: String, val name: String, val branch: String?, val prompt: String?)
+/** What the user filled in on the start-agent form. [branch] is null for "no worktree"; [folder] is null for the workspace's own folder (and is always null with a branch). */
+data class StartForm(val workspaceId: String, val kind: String, val name: String, val branch: String?, val prompt: String?, val folder: String? = null)
 
 data class SpacesScreenState(
     val hostName: String,
@@ -92,8 +95,11 @@ data class SpacesScreenState(
     val locked: Set<String> = emptySet(),
 )
 
-/** A control for a locked Pro capability says so in its own label, so the lock is read by TalkBack and seen without a colour. */
-internal fun proLabel(text: String, locked: Boolean) = if (locked) "$text · Pro" else text
+/**
+ * A text row for a locked Pro capability says so in its own words ("Guarded answers · Pro"), so the lock is read by TalkBack and seen without a
+ * colour. Text rows only: a button passes `pro = true` to `PaddockButton`, which draws the lock glyph and the "Pro" tag and is read the same way.
+ */
+internal fun proLabel(text: String, locked: Boolean) = if (locked) proSpoken(text) else text
 
 class SpacesActions(
     /** The user chose a Pro capability: true when it may run now. False means the gate has been asked for (or deferred), and nothing runs. Free capabilities never reach it. */
@@ -157,7 +163,7 @@ fun SpacesScreen(state: SpacesScreenState, actions: SpacesActions, modifier: Mod
 
     val available = state.start as? StartAvailability.Available
     if (form && available != null) {
-        StartAgentForm(available.workspaces, onCancel = { form = false }, onStart = { form = false; actions.onStart(it) }, modifier = modifier)
+        StartAgentForm(available.workspaces, available.folders, onCancel = { form = false }, onStart = { form = false; actions.onStart(it) }, modifier = modifier)
         return
     }
 
@@ -181,8 +187,8 @@ fun SpacesScreen(state: SpacesScreenState, actions: SpacesActions, modifier: Mod
 
                 when (val s = state.start) {
                     is StartAvailability.Available -> PaddockButton(
-                        proLabel("Start an agent…", ProCapabilities.START_AGENT.id in state.locked), { if (actions.onChoose(ProCapabilities.START_AGENT.id)) form = true },
-                        icon = io.github.tuthan.paddock.ui.theme.PaddockIcons.Plus,
+                        "Start an agent…", { if (actions.onChoose(ProCapabilities.START_AGENT.id)) form = true },
+                        icon = io.github.tuthan.paddock.ui.theme.PaddockIcons.Plus, pro = ProCapabilities.START_AGENT.id in state.locked,
                     )
                     is StartAvailability.Unavailable -> Note(s.reason)
                 }
@@ -238,12 +244,12 @@ private fun SessionCard(row: SessionRow, watched: Boolean, clock: (Long) -> Stri
             Text("The last operation on this session has an unknown outcome. Read the list again before doing anything else with it.", style = PaddockTokens.type.secondary, color = c.needsYou)
             PaddockButton("Re-read", { onReread(e.name) }, kind = ButtonKind.Ghost, small = true)
         } else if (e.running) {
-            PaddockButton(proLabel("Stop…", locked), { ask(SpacesAsk.Stop(e)) }, kind = ButtonKind.Danger, small = true, enabled = !row.busy)
+            PaddockButton("Stop…", { ask(SpacesAsk.Stop(e)) }, kind = ButtonKind.Danger, small = true, enabled = !row.busy, pro = locked)
         } else {
             val refusal = SessionRules.deleteRefusal(e)
             ButtonPair(
                 { m -> PaddockButton("Restart", {}, m, kind = ButtonKind.Secondary, small = true, enabled = false) },
-                { m -> PaddockButton(proLabel("Delete…", locked), { ask(SpacesAsk.Delete(e)) }, m, kind = ButtonKind.Danger, small = true, enabled = refusal == null && !row.busy) },
+                { m -> PaddockButton("Delete…", { ask(SpacesAsk.Delete(e)) }, m, kind = ButtonKind.Danger, small = true, enabled = refusal == null && !row.busy, pro = locked) },
             )
             if (refusal != null) Text(refusal, style = PaddockTokens.type.secondary, color = c.dim)
         }
@@ -300,20 +306,28 @@ fun RecoveryCard(card: SagaCardModel, hostName: String, onAction: (CardAction) -
     }
 }
 
-/** The start-agent form: a workspace, a kind, a name, an optional worktree branch and an optional first prompt. Back and Cancel change nothing. */
+/**
+ * The start-agent form: a workspace, a kind, a name, then either a new worktree branch or the folder the shell starts in (the workspace's own, or a path of the
+ * user's), and an optional first prompt. Back and Cancel change nothing. [folders] are suggestions for the path field.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun StartAgentForm(workspaces: List<WorkspaceChoice>, onCancel: () -> Unit, onStart: (StartForm) -> Unit, modifier: Modifier = Modifier) {
+fun StartAgentForm(workspaces: List<WorkspaceChoice>, folders: List<String>, onCancel: () -> Unit, onStart: (StartForm) -> Unit, modifier: Modifier = Modifier) {
     val c = PaddockTokens.colors
     var workspace by rememberSaveable { mutableStateOf(workspaces.firstOrNull()?.id) }
     var kind by rememberSaveable { mutableStateOf("claude") }
     var name by rememberSaveable { mutableStateOf("") }
     var worktree by rememberSaveable { mutableStateOf(false) }
     var branch by rememberSaveable { mutableStateOf("") }
+    var ownFolder by rememberSaveable { mutableStateOf(false) }
+    var folder by rememberSaveable { mutableStateOf("") }
     var prompt by rememberSaveable { mutableStateOf("") }
     val nameProblem = name.takeIf { it.isNotEmpty() }?.let { SagaRules.nameProblem(it) }
     val branchProblem = if (worktree) branch.takeIf { it.isNotEmpty() }?.let { SagaRules.branchProblem(it) } else null
-    val ready = workspace != null && name.isNotEmpty() && nameProblem == null && (!worktree || (branch.isNotEmpty() && branchProblem == null))
+    val typedFolder = folder.trim()
+    val folderProblem = if (!worktree && ownFolder) typedFolder.takeIf { it.isNotEmpty() }?.let { SagaRules.folderProblem(it) } else null
+    val ready = workspace != null && name.isNotEmpty() && nameProblem == null && (!worktree || (branch.isNotEmpty() && branchProblem == null)) &&
+        (worktree || !ownFolder || (typedFolder.isNotEmpty() && folderProblem == null))
 
     Column(modifier.fillMaxSize()) {
         ScreenHeader("Start an agent", onBack = onCancel)
@@ -350,12 +364,39 @@ fun StartAgentForm(workspaces: List<WorkspaceChoice>, onCancel: () -> Unit, onSt
             Field("Name", name, { name = it }, error = nameProblem, placeholder = "worker-1")
             Toggle("Start in a new worktree", worktree, { worktree = it }, detail = "herdr checks out a branch into a folder of its own and opens it as a new workspace.")
             if (worktree) Field("Branch", branch, { branch = it }, error = branchProblem, placeholder = "feature-x", mono = true)
+            else {
+                Kicker("Folder")
+                listOf(false to "The workspace's folder", true to "Another folder on the machine").forEach { (own, text) ->
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = PaddockTokens.spacing.touchTarget).clip(RoundedCornerShape(PaddockTokens.radii.row))
+                            .border(1.dp, if (ownFolder == own) c.accent.copy(alpha = 0.6f) else c.control(), RoundedCornerShape(PaddockTokens.radii.row))
+                            .selectable(selected = ownFolder == own, role = Role.RadioButton, onClick = { ownFolder = own }).padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) { Text(text, style = PaddockTokens.type.rowTitle, color = c.title) }
+                }
+                if (ownFolder) {
+                    Field("Folder path", folder, { folder = it }, error = folderProblem, placeholder = "~/projects/api", mono = true)
+                    val suggestions = folders.filter { it != typedFolder }.take(6)
+                    if (suggestions.isNotEmpty()) {
+                        Text("Folders open on this machine", style = PaddockTokens.type.secondary, color = c.dim)
+                        suggestions.forEach { f ->
+                            Text(
+                                f, style = PaddockTokens.type.monoFact, color = c.text,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = PaddockTokens.spacing.touchTarget).clip(RoundedCornerShape(PaddockTokens.radii.row))
+                                    .background(c.surface).clickable(role = Role.Button, onClickLabel = "Use this folder") { folder = f }
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                            )
+                        }
+                    }
+                    Note("The path is on the machine, not on this phone. It must exist there: herdr would otherwise open the tab in its own default folder, so Paddock checks first and stops if it is not a folder.")
+                }
+            }
             Field("First prompt (optional)", prompt, { prompt = it }, singleLine = false, imeAction = androidx.compose.ui.text.input.ImeAction.Default,
                 placeholder = "Sent once, only if the agent is ready")
             Note("Paddock checks that ${SagaRules.executables(kind).joinToString(" or ")} is installed on the machine, creates the place, checks the new pane, then starts the agent in it. If a step fails, what was created is listed and nothing is repeated.")
             ButtonPair(
                 { m -> PaddockButton("Cancel", onCancel, m, kind = ButtonKind.Secondary) },
-                { m -> PaddockButton("Start agent", { onStart(StartForm(workspace!!, kind, name, branch.takeIf { worktree }, prompt.takeIf { it.isNotBlank() })) }, m, kind = ButtonKind.Primary, enabled = ready) },
+                { m -> PaddockButton("Start agent", { onStart(StartForm(workspace!!, kind, name, branch.takeIf { worktree }, prompt.takeIf { it.isNotBlank() }, typedFolder.takeIf { !worktree && ownFolder })) }, m, kind = ButtonKind.Primary, enabled = ready) },
             )
         }
     }

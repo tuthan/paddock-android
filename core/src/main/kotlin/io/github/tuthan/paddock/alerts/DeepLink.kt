@@ -117,6 +117,13 @@ object DeepLink {
         return DeepLinkResult.Valid(AlertHint(TargetRef(HostProfileId(h), s, t), p, st, at, n))
     }
 
+    /** The machine (profile id) a valid alert or machine link is for; null for anything else. */
+    fun profileOf(link: String?): String? = when (val r = parse(link)) {
+        is DeepLinkResult.Valid -> r.hint.target.host.value
+        is DeepLinkResult.Machine -> r.hint.host.value
+        else -> null
+    }
+
     /** The link for [hint], as the relay writes it. Used for the intents of notifications Paddock raises itself. */
     fun build(hint: AlertHint): String {
         fun e(v: String) = buildString { for (b in v.toByteArray(Charsets.UTF_8)) { val c = b.toInt() and 0xff; if (c.toChar() in UNRESERVED) append(c.toChar()) else append('%').append("%02X".format(c)) } }

@@ -12,6 +12,11 @@
     <!-- Android 17 (target 37) gates LAN sockets behind this grant. Phase 02 requests and recovers it. -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
+    <!-- A normal permission, granted at install with no prompt: the platform's BiometricPrompt (Lock Paddock, Android 11 and later) refuses to open without it
+         ("Must have USE_BIOMETRIC permission"; DeviceAuthTest shows the refusal). It is a declaration only: Paddock never reads a fingerprint or a face, the phone's
+         own prompt does and answers yes or no. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
     <!-- Phase 14 (decision D2): the in-app scanner reads the code a desktop shows. Asked for only when the scanner is opened, never at launch;
          the scanner is optional (paste a pairing link, or the system camera app, do the same), so no camera is not a reason to hide the app from a store.
          CAMERA implies the camera feature and autofocus both, so both are declared optional: a store filters on what is required, and a fixed-focus
@@ -25,6 +30,8 @@
         <intent>
             <action android:name="org.unifiedpush.android.distributor.REGISTER" />
         </intent>
+        <!-- The ntfy app, so "Open in the ntfy app" can address it explicitly (the subscribe link holds the topic, so no other app that handles ntfy:// may get it). -->
+        <package android:name="io.heckel.ntfy" />
     </queries>
 
     <application

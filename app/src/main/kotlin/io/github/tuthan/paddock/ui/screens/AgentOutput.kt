@@ -26,8 +26,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.github.tuthan.paddock.attention.AgeText
 import io.github.tuthan.paddock.answers.DecisionEntryModel
+import io.github.tuthan.paddock.attention.AgeText
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.output.OutputState
 import io.github.tuthan.paddock.ui.components.FlexColumn
@@ -132,7 +132,7 @@ fun AgentOutput(
                 }
                 SegmentedTabs(AgentTab.entries.map { it.label }, tab.ordinal, { onTab(AgentTab.entries[it]) })
             }
-            if (tab == AgentTab.Output && decision != null && onOpenDecision != null && header.state == StateWord.Blocked) {
+            if (tab == AgentTab.Output && decision != null && onOpenDecision != null) {
                 DecisionEntry(decision, onOpenDecision)
             }
             when (tab) {

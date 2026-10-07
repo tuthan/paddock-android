@@ -62,11 +62,13 @@ def hook_input(tool="Bash", tool_input=None, session=CLAUDE, event="PermissionRe
 
 
 class FakeHerdr:
-    """A unix socket server that answers agent.get with a status the test sets and then closes the connection, like herdr 0.9.1."""
+    """A unix socket server that answers agent.get with a status the test sets (agent.list with `agents`, the two pane report calls with ok)
+    and then closes the connection, like herdr 0.9.1."""
 
     def __init__(self, directory):
         self.path = os.path.join(directory, "herdr.sock")
         self.status = "working"
+        self.agents = []                     # what agent.list answers
         self.requests = []
         owner = self
 
@@ -76,6 +78,9 @@ class FakeHerdr:
                     request = json.loads(line)
                     owner.requests.append(request)
                     status = owner.status
+                    if request["method"] == "agent.list":
+                        self.wfile.write((json.dumps({"id": request["id"], "result": {"type": "agent_list", "agents": owner.agents}}) + "\n").encode())
+                        return
                     if status is None:
                         reply = {"id": request["id"], "error": {"code": "agent_not_found", "message": "no agent"}}
                     else:
@@ -298,7 +303,8 @@ class PublicationTests(SandboxCase):
         self.assertEqual(body["tool_input"], {"command": "rm -rf build", "description": "clean"})
         self.assertEqual(body["expires_at"] - body["created_at"], 2000)
         self.assertLess(abs(body["created_at"] - time.time() * 1000), 5000)
-        self.assertEqual(set(body), {"v", "request_id", "claude_session_id", "herdr_session", "pane_id", "tool_name", "tool_input", "permission_mode", "created_at", "expires_at", "truncated", "pid"})
+        self.assertEqual(set(body), {"v", "request_id", "claude_session_id", "herdr_session", "pane_id", "tool_name", "tool_input", "permission_mode", "created_at", "expires_at", "truncated", "pid", "agent"})
+        self.assertEqual(body["agent"], "claude")
         # AC-08.5: a 0600 file in a 0700 directory, at every level below the runtime root
         self.assertEqual(stat.S_IMODE(os.stat(os.path.join(sb.requests_dir, request_id + ".pending.json")).st_mode), 0o600)
         path = sb.run
@@ -1162,6 +1168,262 @@ class RaceTests(SandboxCase):
                 os.unlink(os.path.join(sb.requests_dir, name))
         self.assertGreater(honoured, 0)
         self.assertGreater(refused, 0)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# The hook for Codex and opencode (--agent)
+
+# Runs the hook as the child of a process whose command line has the word `app-server` in it, as Codex's shared daemon does.
+DAEMON_PARENT = (
+    "import subprocess, sys\n"
+    "p = subprocess.run([sys.executable, *sys.argv[2:]], input=sys.stdin.buffer.read(), capture_output=True)\n"
+    "sys.stdout.buffer.write(p.stdout); sys.exit(p.returncode)\n"
+)
+
+
+class AgentTests(SandboxCase):
+    def hook_as(self, sb, *agent_args, data=None, **over):
+        proc = subprocess.Popen([sys.executable, HOOK, *agent_args], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=sb.env(**over), cwd=sb.dir)
+        proc.stdin.write(json.dumps(data if data is not None else hook_input()).encode())
+        proc.stdin.close()
+        return proc
+
+    def under_daemon(self, sb, data):
+        """The hook started by a process called `app-server`, with the environment of another pane (the one that started the daemon)."""
+        proc = subprocess.Popen([sys.executable, "-c", DAEMON_PARENT, "app-server", HOOK, "--agent", "codex"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=sb.env(HERDR_PANE_ID="w1:p1"), cwd=sb.dir)
+        proc.stdin.write(json.dumps(data).encode())
+        proc.stdin.close()
+        return proc
+
+    def methods(self, sb):
+        return [r["method"] for r in sb.herdr.requests]
+
+    # -- which agent, and its window
+
+    def test_any_other_argument_makes_the_hook_do_nothing(self):
+        sb = self.sandbox(window=1)
+        for args in (("--agent", "gemini"), ("--agent",), ("--agent", "codex", "extra"), ("codex",), ("--bogus", "x")):
+            proc = self.hook_as(sb, *args)
+            out, _ = proc.communicate(timeout=10)
+            self.assertEqual((proc.returncode, out), (0, b""), args)
+        self.assertEqual(sb.names(), [])
+
+    def test_the_request_names_its_agent(self):
+        for args, agent in (((), "claude"), (("--agent", "claude"), "claude"), (("--agent", "opencode"), "opencode"), (("--agent", "codex"), "codex")):
+            sb = self.sandbox(window=1)
+            proc = self.hook_as(sb, *args)
+            rid = sb.wait_for("pending")
+            self.assertEqual(sb.read(rid + ".pending.json")["agent"], agent)
+            proc.communicate(timeout=10)
+
+    def test_codex_has_a_window_of_its_own_and_the_default_is_short(self):
+        for config, want in (("window_seconds = 60\n", 20), ("window_seconds = 8\n", 8), ("window_seconds = 60\ncodex_window_seconds = 12\n", 12),
+                             ("window_seconds = 5\ncodex_window_seconds = 30\n", 30)):
+            sb = self.sandbox(config=False)
+            sb.write_config(config)
+            proc = self.hook_as(sb, "--agent", "codex")
+            body = sb.read(sb.wait_for("pending") + ".pending.json")
+            self.assertEqual(body["expires_at"] - body["created_at"], want * 1000, config)
+            proc.terminate()
+            proc.communicate(timeout=10)
+        # Claude Code and opencode keep window_seconds, whatever Codex is set to.
+        sb = self.sandbox(config=False)
+        sb.write_config("window_seconds = 60\ncodex_window_seconds = 12\n")
+        for agent in ("claude", "opencode"):
+            proc = self.hook_as(sb, "--agent", agent)
+            body = sb.read(sb.wait_for("pending") + ".pending.json")
+            self.assertEqual(body["expires_at"] - body["created_at"], 60000)
+            proc.terminate()
+            proc.communicate(timeout=10)
+            for name in sb.names():
+                os.unlink(os.path.join(sb.requests_dir, name))
+
+    def test_window_zero_turns_every_agent_off_and_a_bad_codex_window_means_off(self):
+        for config in ("window_seconds = 0\ncodex_window_seconds = 30\n", "window_seconds = 60\ncodex_window_seconds = 301\n",
+                       "window_seconds = 60\ncodex_window_seconds = -1\n", "window_seconds = 60\ncodex_window_seconds = true\n",
+                       'window_seconds = 60\ncodex_window_seconds = "20"\n'):
+            for agent in ("claude", "codex", "opencode"):
+                sb = self.sandbox(config=False)
+                sb.write_config(config)
+                proc = self.hook_as(sb, "--agent", agent)
+                out, _ = proc.communicate(timeout=10)
+                self.assertEqual((proc.returncode, out, sb.names()), (0, b"", []), (config, agent))
+
+    def test_codex_window_zero_turns_codex_off_only(self):
+        sb = self.sandbox(config=False)
+        sb.write_config("window_seconds = 60\ncodex_window_seconds = 0\n")
+        proc = self.hook_as(sb, "--agent", "codex")
+        self.assertEqual(proc.communicate(timeout=10)[0], b"")
+        self.assertEqual(sb.names(), [])
+        proc = self.hook_as(sb, "--agent", "claude")
+        sb.wait_for("pending")
+        proc.terminate()
+        proc.communicate(timeout=10)
+
+    # -- Codex: no dialog while the hook waits
+
+    def test_a_question_or_a_plan_is_never_published_for_any_agent(self):
+        # Seen on a real machine: Claude Code raised AskUserQuestion ("Allow / Deny" options) through this hook, the phone offered Yes, the hook printed
+        # allow, and the question stayed on the desktop: an allow cannot choose an option.
+        for agent in ("claude", "codex", "opencode"):
+            for tool in ("AskUserQuestion", "ExitPlanMode"):
+                sb = self.sandbox(window=10)
+                proc = self.hook_as(sb, "--agent", agent, data=hook_input(tool=tool, tool_input={"questions": [{"question": "Allow it?", "options": [{"label": "Allow"}, {"label": "Deny"}]}]}))
+                out, _ = proc.communicate(timeout=10)
+                self.assertEqual((proc.returncode, out), (0, b""), (agent, tool))
+                self.assertFalse(os.path.exists(sb.requests_dir) and os.listdir(sb.requests_dir), (agent, tool, "nothing published"))
+        sb = self.sandbox(window=10)                      # a normal tool next to them is still published
+        proc = self.hook_as(sb, "--agent", "claude")
+        sb.wait_for("pending")
+        proc.terminate()
+        proc.communicate(timeout=10)
+
+    def test_codex_never_writes_to_herdr_and_asks_it_nothing_outside_the_daemon(self):
+        # An earlier version reported the pane `blocked` for as long as it waited. Measured against a real Codex that was not reliable (herdr's own
+        # Codex integration refuses the report, and a hook killed with SIGKILL left the pane stuck), so the hook now never writes to herdr.
+        sb = self.sandbox(window=10)
+        proc = self.hook_as(sb, "--agent", "codex")
+        rid = sb.wait_for("pending")
+        rc, out, err = sb.run_decide(["decide", SESSION, PANE, CLAUDE, rid])
+        self.assertEqual(rc, 0, err)
+        stdout, _ = proc.communicate(timeout=10)
+        self.assertEqual(json.loads(stdout), {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}})
+        self.assertEqual(self.methods(sb), [], "the pane comes from the environment, the status is not watched, nothing is written")
+
+    def test_codex_leaves_a_request_that_is_expired_when_the_window_lapses_and_when_it_is_terminated(self):
+        sb = self.sandbox(config=False)
+        sb.write_config("window_seconds = 60\ncodex_window_seconds = 1\n")
+        proc = self.hook_as(sb, "--agent", "codex")
+        out, _ = proc.communicate(timeout=15)
+        self.assertEqual(out, b"")
+        self.assertTrue(any(n.endswith(".expired.json") for n in sb.names()), sb.names())
+        self.assertEqual(self.methods(sb), [])
+        sb2 = self.sandbox(window=30)
+        proc = self.hook_as(sb2, "--agent", "codex")
+        sb2.wait_for("pending")
+        proc.send_signal(signal.SIGTERM)
+        out, _ = proc.communicate(timeout=10)
+        self.assertEqual((proc.returncode, out), (0, b""))
+        self.assertTrue(any(n.endswith(".expired.json") for n in sb2.names()), sb2.names())
+        self.assertEqual(self.methods(sb2), [])
+
+    def test_a_codex_hook_ignores_the_pane_status_because_it_has_no_desktop_dialog_to_answer(self):
+        sb = self.sandbox(config=False)
+        sb.write_config("window_seconds = 60\ncodex_window_seconds = 3\n")
+        sb.herdr.status = "blocked"
+        proc = self.hook_as(sb, "--agent", "codex")
+        rid = sb.wait_for("pending")
+        time.sleep(0.6)
+        sb.herdr.status = "working"          # claude would take this for the desktop answering; codex has no desktop dialog to answer
+        time.sleep(1.5)
+        self.assertTrue(os.path.exists(os.path.join(sb.requests_dir, rid + ".pending.json")), sb.names())
+        proc.communicate(timeout=10)
+        self.assertNotIn("agent.get", self.methods(sb))
+
+    def test_in_process_wait_without_the_desktop_watch_ignores_status(self):
+        clock = FakeTime()
+        real = H.time
+        H.time = clock
+        self.addCleanup(setattr, H, "time", real)
+        d = tempfile.mkdtemp(prefix="paddock-hook-fake-")
+        self.addCleanup(shutil.rmtree, d, True)
+        request = H.Request(d, "55555555-5555-4555-8555-555555555555")
+        put(request.pending, json.dumps({"v": 1}))
+        herdr = ScriptedHerdr(clock, ("blocked", "working", "working", "working"))
+        self.assertIsNone(H.wait(request, herdr, 5, watch_desktop=False))
+        self.assertEqual(herdr.calls, [])
+        self.assertTrue(os.path.exists(request.expired))
+
+    def test_codex_and_opencode_deny_says_who_denied_and_claude_deny_is_unchanged(self):
+        for agent, extra in (("codex", {"message": "Denied from the Paddock phone"}), ("opencode", {"message": "Denied from the Paddock phone"}), ("claude", {})):
+            sb = self.sandbox(window=10)
+            proc = self.hook_as(sb, "--agent", agent)
+            rid = sb.wait_for("pending")
+            rc, out, err = sb.run_decide(["decide", SESSION, PANE, CLAUDE, rid], stdin=json.dumps({"behavior": "deny", "phone": "pixel", "at": "2026-10-07T00:00:00Z"}))
+            self.assertEqual(rc, 0, err)
+            stdout, _ = proc.communicate(timeout=10)
+            self.assertEqual(json.loads(stdout), {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny", **extra}}}, agent)
+
+    def test_claude_and_opencode_never_write_to_herdr(self):
+        for agent in ("claude", "opencode"):
+            sb = self.sandbox(window=1)
+            self.hook_as(sb, "--agent", agent).communicate(timeout=10)
+            self.assertTrue(set(self.methods(sb)) <= {"agent.get"}, (agent, self.methods(sb)))
+
+    # -- Codex's shared daemon: the environment is another pane's
+
+    def codex_agent(self, pane, cwd="/tmp", status="working", agent="codex"):
+        return {"agent": agent, "agent_status": status, "pane_id": pane, "cwd": cwd}
+
+    def test_under_the_shared_daemon_the_one_codex_in_the_folder_is_the_pane(self):
+        sb = self.sandbox(window=10)
+        sb.herdr.agents = [self.codex_agent("w1:p1", cwd="/other", status="idle"), self.codex_agent("w1:p7"), self.codex_agent("w1:p8", cwd="/elsewhere"),
+                           self.codex_agent("w1:p9", agent="claude")]
+        proc = self.under_daemon(sb, hook_input())
+        deadline = time.time() + 10
+        directory = os.path.join(sb.run, "paddock", SESSION, "w1:p7")
+        while time.time() < deadline and not (os.path.isdir(directory) and os.listdir(directory)):
+            time.sleep(0.02)
+        names = os.listdir(directory)
+        self.assertEqual(len(names), 1, names)
+        self.assertFalse(os.path.exists(os.path.join(sb.run, "paddock", SESSION, "w1:p1")), "the daemon's own pane is never used")
+        with open(os.path.join(directory, names[0])) as f:
+            body = json.load(f)
+        self.assertEqual((body["pane_id"], body["agent"]), ("w1:p7", "codex"))
+        self.assertEqual(set(self.methods(sb)), {"agent.list"}, "it asks which pane and writes nothing")
+        rc, out, err = sb.run_decide(["decide", SESSION, "w1:p7", CLAUDE, names[0].split(".")[0]])
+        self.assertEqual(rc, 0, err)
+        stdout, _ = proc.communicate(timeout=10)
+        self.assertEqual(json.loads(stdout)["hookSpecificOutput"]["decision"]["behavior"], "allow")
+
+    def test_under_the_shared_daemon_no_single_match_means_nothing_is_published_and_no_delay(self):
+        # Two Codex agents in the folder are never told apart by status: herdr's status for Codex is not reliable while a hook runs.
+        for agents in ([], [self.codex_agent("w1:p7"), self.codex_agent("w1:p8")], [self.codex_agent("w1:p7"), self.codex_agent("w1:p8", status="idle")],
+                       [self.codex_agent("w1:p7", cwd="/x")]):
+            sb = self.sandbox(window=30)
+            sb.herdr.agents = agents
+            start = time.time()
+            proc = self.under_daemon(sb, hook_input())
+            out, _ = proc.communicate(timeout=10)
+            self.assertEqual((proc.returncode, out), (0, b""), agents)
+            self.assertLess(time.time() - start, 5, "it must not hold Codex's prompt")
+            self.assertFalse(os.path.exists(os.path.join(sb.run, "paddock")), "nothing published")
+            self.assertTrue(set(self.methods(sb)) <= {"agent.list"}, self.methods(sb))
+
+    def test_under_the_shared_daemon_a_codex_that_is_not_working_still_resolves(self):
+        for status in ("idle", "done", "blocked", "unknown"):
+            sb = self.sandbox(window=10)
+            sb.herdr.agents = [self.codex_agent("w1:p7", status=status)]
+            proc = self.under_daemon(sb, hook_input())
+            directory = os.path.join(sb.run, "paddock", SESSION, "w1:p7")
+            deadline = time.time() + 10
+            while time.time() < deadline and not (os.path.isdir(directory) and os.listdir(directory)):
+                time.sleep(0.02)
+            self.assertTrue(os.path.isdir(directory) and os.listdir(directory), status)
+            proc.terminate()
+            proc.communicate(timeout=10)
+
+    def test_without_the_daemon_the_environments_pane_is_used_and_other_agents_never_resolve(self):
+        sb = self.sandbox(window=1)
+        sb.herdr.agents = [self.codex_agent("w1:p7")]
+        self.hook_as(sb, "--agent", "codex").communicate(timeout=10)
+        self.assertNotIn("agent.list", self.methods(sb))
+        self.assertTrue(os.path.isdir(sb.requests_dir))
+        # Claude Code under a parent that happens to be called app-server keeps using its own environment.
+        sb = self.sandbox(window=1)
+        sb.herdr.agents = [self.codex_agent("w1:p7")]
+        proc = subprocess.Popen([sys.executable, "-c", DAEMON_PARENT, "app-server", HOOK], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=sb.env(), cwd=sb.dir)
+        proc.communicate(json.dumps(hook_input()).encode(), timeout=10)
+        self.assertNotIn("agent.list", self.methods(sb))
+        self.assertTrue(os.path.isdir(sb.requests_dir))
+
+    def test_a_herdr_that_does_not_answer_means_nothing_under_the_daemon(self):
+        sb = self.sandbox(window=30, herdr=False)
+        proc = self.under_daemon(sb, hook_input())
+        out, _ = proc.communicate(timeout=10)
+        self.assertEqual((proc.returncode, out), (0, b""))
 
 
 # ---------------------------------------------------------------------------------------------------------------------------

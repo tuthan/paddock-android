@@ -15,6 +15,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
+import io.github.tuthan.paddock.answers.DecisionEntryModel
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.output.Ansi
 import io.github.tuthan.paddock.output.OutputState
@@ -268,6 +270,23 @@ class AgentOutputTest {
         rule.onNodeWithText("Ask claude…").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         rule.onNode(hasContentDescription("Write a prompt for claude")).performClick()
         assertEquals(1, composed)
+    }
+
+    /**
+     * A request is offered the moment its file shows, whatever herdr says about the agent: Codex is `working` or `idle` while its hook waits, and opencode and
+     * Claude Code are `blocked` for their questions too. What the entry shows is decided from the host's files (live, unexpired, hook running), not from the state chip.
+     */
+    @Test fun theDecisionEntryShowsForAnAgentInAnyStateWhileARequestIsLive() {
+        val entry = DecisionEntryModel("Bash", "Answer within 20 s", "Codex")
+        val shownHeader = androidx.compose.runtime.mutableStateOf(header)
+        val withEntry = androidx.compose.runtime.mutableStateOf<DecisionEntryModel?>(entry)
+        rule.setContent { PaddockTheme(darkTheme = true) { AgentOutput(shownHeader.value, showing(), true, now, AgentTab.Output, {}, {}, {}, {}, decision = withEntry.value, onOpenDecision = {}) } }
+        for ((state, kind) in listOf(StateWord.Blocked to "claude", StateWord.Working to "codex", StateWord.Done to "codex", StateWord.Working to "opencode", StateWord.Done to "claude", StateWord.Unknown to null)) {
+            rule.runOnIdle { shownHeader.value = header.copy(state = state, agentKind = kind) }
+            rule.onNodeWithTag("decision-entry").assertIsDisplayed()
+        }
+        rule.runOnIdle { withEntry.value = null }
+        rule.onNodeWithTag("decision-entry").assertDoesNotExist()
     }
 
     @Test fun withoutAJournalThereIsNoComposerEntry() {

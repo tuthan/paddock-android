@@ -57,7 +57,9 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.error
@@ -66,6 +68,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -74,11 +77,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.github.tuthan.paddock.hostkey.HostKeyPrompt
 import io.github.tuthan.paddock.qr.QrCode
+import io.github.tuthan.paddock.ui.theme.PaddockColors
 import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import java.time.Instant
@@ -228,6 +233,42 @@ fun Fact(label: String, value: String, modifier: Modifier = Modifier) {
  */
 enum class ButtonKind { Primary, Secondary, Ghost, Danger }
 
+/** A kind's fill, label colour and edge. One function, so the Pro tag ([proTagColors]) and `ProTagTest` see the same colours the button draws. */
+internal data class ButtonColors(val fill: Color, val text: Color, val edge: Color)
+
+internal fun buttonColors(kind: ButtonKind, c: PaddockColors, tint: Color? = null): ButtonColors {
+    val ghost = tint ?: c.accent
+    return when (kind) {
+        ButtonKind.Primary -> ButtonColors(c.accent, c.ground, Color.Transparent)
+        ButtonKind.Secondary -> ButtonColors(c.field, c.title, c.control())
+        ButtonKind.Ghost -> ButtonColors(Color.Transparent, ghost, ghost.copy(alpha = if (tint != null) 0.5f else 0.35f))
+        ButtonKind.Danger -> ButtonColors(Color.Transparent, c.needsYou, c.needsYou.copy(alpha = 0.4f))
+    }
+}
+
+/** The word on a locked button's tag. A word, not a colour or a glyph alone, so the lock is seen without colour and read without the picture. */
+internal const val PRO_TAG = "Pro"
+
+/** What TalkBack says for a locked control: its label, then "Pro" ("Stop… · Pro"). One place, so a button and a text row ([proLabel][io.github.tuthan.paddock.ui.screens.proLabel]) say it alike. */
+internal fun proSpoken(label: String): String = "$label · $PRO_TAG"
+
+/**
+ * The "Pro" tag's pill and word on a locked button. The tag sits on the button's own fill, so its colours follow the kind: Secondary and Ghost get
+ * the 14% accent wash with a 50% accent edge and the word in `title`, as the design draws it. On Primary the fill is the accent itself, where that
+ * wash and edge vanish and `title` reads at about 2:1, so the word and the edge take the button's own label colour. On Danger the word takes the
+ * button's colour too, so a locked Stop still reads as Danger. `ProTagTest` holds every kind at 4.5:1 in both palettes on the ground and on a
+ * surface, where every Danger button is drawn; on a banner's wash (only Ghost actions sit there) a Danger tag's word would fall to about 3.9:1.
+ */
+internal fun proTagColors(kind: ButtonKind, c: PaddockColors, tint: Color? = null): ButtonColors {
+    val own = buttonColors(kind, c, tint).text
+    val wash = c.accent.copy(alpha = 0.14f)
+    return when (kind) {
+        ButtonKind.Primary -> ButtonColors(wash, own, own.copy(alpha = 0.5f))
+        ButtonKind.Danger -> ButtonColors(wash, own, c.accent.copy(alpha = 0.5f))
+        ButtonKind.Secondary, ButtonKind.Ghost -> ButtonColors(wash, c.title, c.accent.copy(alpha = 0.5f))
+    }
+}
+
 /**
  * A button at least 48 dp tall. [autoFocus] puts initial focus on it once it is on screen: a dialog's safe choice.
  * Focus is drawn as a 2 dp ring in the text colour just outside the button, whatever its kind. [tint] recolours a
@@ -239,6 +280,15 @@ fun PaddockButton(
     autoFocus: Boolean = false, small: Boolean = false, icon: ImageVector? = null, fillWidth: Boolean = true, tint: Color? = null,
     /** A 36 dp bar for a row that has to stay one line (the Terminal tab's controls while the Android keyboard is up). */
     dense: Boolean = false,
+    /**
+     * A locked Pro capability (decision D6): a 16 dp lock glyph before the label, in place of [icon], and a small "Pro" tag after it; TalkBack reads
+     * "<label> · Pro". The kind does not change (a locked Stop stays Danger), the button stays tappable (the tap asks the gate), and the height does
+     * not change: the glyph and the tag are shorter than the label's line at every font scale (when the tag has no room beside the label it moves
+     * under it, as a wrapped label would; see `LockedLabel`). A caller's own `semantics { contentDescription = … }` in [modifier] still wins, because
+     * the caller's modifier is outside this one. The label carries no " · Pro" of its own any more: that suffix is for text rows
+     * ([io.github.tuthan.paddock.ui.screens.proLabel]).
+     */
+    pro: Boolean = false,
 ) {
     val c = PaddockTokens.colors
     val radius = PaddockTokens.radii.button
@@ -248,16 +298,13 @@ fun PaddockButton(
     // `clickable` is not focusable by request in touch mode, so a dialog's safe choice carries its own always-focusable
     // target and handles taps itself: a second (clickable) focus stop inside it would also overwrite its Focused semantics.
     if (autoFocus) LaunchedEffect(Unit) { focus.requestFocus() }
-    val ghost = tint ?: c.accent
-    val (bg, fg, border) = when (kind) {
-        ButtonKind.Primary -> Triple(c.accent, c.ground, Color.Transparent)
-        ButtonKind.Secondary -> Triple(c.field, c.title, c.control())
-        ButtonKind.Ghost -> Triple(Color.Transparent, ghost, ghost.copy(alpha = if (tint != null) 0.5f else 0.35f))
-        ButtonKind.Danger -> Triple(Color.Transparent, c.needsYou, c.needsYou.copy(alpha = 0.4f))
-    }
+    val (bg, fg, border) = buttonColors(kind, c, tint)
     val ring = c.text
     Row(
-        modifier.then(if (fillWidth) Modifier.fillMaxWidth() else Modifier).alpha(if (enabled) 1f else 0.5f)
+        modifier
+            // Inside the caller's modifier, so a contentDescription the caller set (a label that names the machine, say) is the one read.
+            .then(if (pro) Modifier.semantics { contentDescription = proSpoken(text) } else Modifier)
+            .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier).alpha(if (enabled) 1f else 0.5f)
             .onFocusChanged { focused = it.hasFocus }
             .drawWithContent {
                 drawContent()
@@ -288,11 +335,82 @@ fun PaddockButton(
             .padding(horizontal = if (small) 12.dp else 16.dp, vertical = if (dense) 4.dp else 10.dp),
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (icon != null) {
-            Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(20.dp))
-            Box(Modifier.size(8.dp))
+        val style = if (small) PaddockTokens.type.buttonSmall else PaddockTokens.type.button
+        if (pro) LockedLabel(text, style, fg, proTagColors(kind, c, tint))
+        else {
+            if (icon != null) {
+                Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(20.dp))
+                Box(Modifier.size(8.dp))
+            }
+            Text(text, style = style, color = fg, textAlign = TextAlign.Center)
         }
-        Text(text, style = if (small) PaddockTokens.type.buttonSmall else PaddockTokens.type.button, color = fg, textAlign = TextAlign.Center)
+    }
+}
+
+/**
+ * A locked button's content: the 16 dp lock and the label, then the "Pro" tag. One leading glyph at a time, so the lock replaces the button's own
+ * icon (the "+" of Start an agent…): while locked, the lock is what the button has to say first. Glyph, label and tag share one line while it has
+ * room ([proTagBeside]); when it has none (a half-width button at a large font) the tag moves, whole, to a line of its own under the label, the way a
+ * wrapped label grows a button. It is never clipped and never squeezes a word of the label apart.
+ *
+ * Not a `FlowRow`, which this was: a FlowRow measures the tag into whatever the label leaves on its line, and a word that is not wrapped can always be
+ * drawn narrower by clipping it, so nothing in the tag itself can refuse a squeeze. Here the tag is measured once, with the whole button's room, and
+ * that width alone decides its line (`proTagBeside`, a pure rule `ProTagTest` holds). The 2026-10-06 emulator failure that prompted the change was a
+ * false signal (`ButtonStyleTest` read `hasVisualOverflow` off the semantics result, which reports overflow for any plain Text narrower than its room);
+ * the Layout stays because it makes the rule explicit and testable.
+ */
+@Composable
+private fun LockedLabel(text: String, style: TextStyle, color: Color, tag: ButtonColors) {
+    Layout(
+        content = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(PaddockIcons.Lock, contentDescription = null, tint = color, modifier = Modifier.size(16.dp).testTag(PRO_LOCK_TAG))
+                Box(Modifier.size(8.dp))
+                Text(text, style = style, color = color, textAlign = TextAlign.Center)
+            }
+            ProTag(tag)
+        },
+    ) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val label = measurables[0].measure(loose)
+        val pro = measurables[1].measure(loose)
+        val gap = 8.dp.roundToPx()
+        val lineGap = 4.dp.roundToPx()
+        val beside = proTagBeside(label.width, pro.width, gap, constraints.maxWidth)
+        val width = (if (beside) label.width + gap + pro.width else maxOf(label.width, pro.width)).coerceIn(constraints.minWidth, constraints.maxWidth)
+        val height = (if (beside) maxOf(label.height, pro.height) else label.height + lineGap + pro.height).coerceIn(constraints.minHeight, constraints.maxHeight)
+        layout(width, height) {
+            if (beside) {
+                // One centred line, each part centred on it (the tag is shorter than the label's line, so the button keeps its height).
+                val start = (width - (label.width + gap + pro.width)) / 2
+                label.place(start, (height - label.height) / 2)
+                pro.place(start + label.width + gap, (height - pro.height) / 2)
+            } else {
+                label.place((width - label.width) / 2, 0)
+                pro.place((width - pro.width) / 2, label.height + lineGap)
+            }
+        }
+    }
+}
+
+/**
+ * Whether a locked button's "Pro" tag goes beside its label: the lock and the label ([labelWidth]), the [gap] and the tag at its own full width
+ * ([tagWidth]) fit in [maxWidth]. Otherwise it goes on a line of its own under the label. The widths are what each measures with the whole button's
+ * room, never the tag squeezed into whatever the label leaves.
+ */
+internal fun proTagBeside(labelWidth: Int, tagWidth: Int, gap: Int, maxWidth: Int): Boolean = labelWidth + gap + tagWidth <= maxWidth
+
+/**
+ * The "Pro" pill after a locked button's label. Its word is the smallest type role (11 sp, `stateWord`) on a line of 1.2 em, the label's own ratio,
+ * so the pill (that line plus 1 dp above and below, which keeps the edge outside the word's box) stays shorter than the 14 or 15 sp label's line at
+ * every font scale, linear or not, and beside the label never makes the button taller. One line, never wrapped: when it does not fit beside the
+ * label, [LockedLabel] moves it under.
+ */
+@Composable
+private fun ProTag(colors: ButtonColors) {
+    val pill = RoundedCornerShape(50)
+    Box(Modifier.clip(pill).background(colors.fill).border(1.dp, colors.edge, pill).padding(horizontal = 6.dp, vertical = 1.dp)) {
+        Text(PRO_TAG, style = PaddockTokens.type.stateWord.copy(lineHeight = 1.2.em), color = colors.text, maxLines = 1, softWrap = false)
     }
 }
 

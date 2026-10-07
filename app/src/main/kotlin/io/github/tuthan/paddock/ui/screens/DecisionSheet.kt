@@ -67,11 +67,11 @@ const val DECISION_FACT =
     "Yes or No answers this one request and nothing else. Paddock never sends \"always allow\". The dialog on the desktop stays open until somebody answers: whoever answers first wins."
 
 /**
- * A Claude Code permission request that the host's hook published, shown whole. The tool input is the slab, scrolling inside its box,
- * exactly what Claude Code would run: it is never summarised into a button or shortened here. Yes and No are on only for a request
+ * An agent's permission request that the host's hook published, shown whole. The tool input is the slab, scrolling inside its box,
+ * exactly what the agent would run: it is never summarised into a button or shortened here. Yes and No are on only for a request
  * that was read completely, has time left and is still the newest ([DecisionModel.canAnswer]); otherwise both are off and one sentence
  * says which condition failed. An answer is a record of what was written and what the host's files show of it; the sheet never claims
- * that Claude Code applied it.
+ * that the agent applied it.
  *
  * [awaitsSettle]: an earlier answer from this phone ended unknown; the sheet offers a re-read of the host's files and nothing else.
  */
@@ -168,14 +168,14 @@ private fun RequestBody(model: DecisionModel, awaitsSettle: Boolean, actions: De
 }
 
 /**
- * The Output tab's way in: one line saying Claude Code is waiting for a Yes or No and for which tool, and a button to the sheet.
+ * The Output tab's way in: one line saying the agent (Claude Code, Codex, opencode) is waiting for a Yes or No and for which tool, and a button to the sheet.
  * It carries no answer itself; the request is read in full on the sheet.
  */
 @Composable
 fun DecisionEntry(model: DecisionEntryModel, onOpen: () -> Unit, modifier: Modifier = Modifier) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.row)
-    val what = "Claude Code is waiting for a Yes or No · ${model.toolName ?: "too large to show here"}" + (model.timeLeft?.let { " · $it" }.orEmpty())
+    val what = "${model.agent ?: "The agent"} is waiting for a Yes or No · ${model.toolName ?: "too large to show here"}" + (model.timeLeft?.let { " · $it" }.orEmpty())
     Row(
         modifier.fillMaxWidth().clip(shape).background(c.needsYou.copy(alpha = 0.09f)).border(1.dp, c.needsYou.copy(alpha = 0.30f), shape)
             .clickable(role = Role.Button, onClickLabel = "Review the request and answer", onClick = onOpen)

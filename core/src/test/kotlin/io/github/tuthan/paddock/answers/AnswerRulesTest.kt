@@ -1,8 +1,10 @@
 package io.github.tuthan.paddock.answers
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.junit.Test
 
 /** A listing for the rules, built directly: [hostNow] is the host's clock, [received] and [rtt] are the phone's. */
@@ -12,8 +14,8 @@ fun listingOf(
     candidate: PendingRequest? = request(ID_A), complete: Boolean = true,
 ) = RequestListing(hostNow, entries, candidate?.let { Candidate(it.requestId, complete, it) } ?: if (!complete) Candidate(ID_A, false, null) else null, received, rtt)
 
-fun request(id: String = ID_A, session: String = "claude-1", created: Long = 1_000, expires: Long = 61_000, truncated: Boolean = false) =
-    PendingRequest(id, session, "paddock-test", "w1:p1", "Bash", "command:\n  ls", "default", created, expires, truncated)
+fun request(id: String = ID_A, session: String = "claude-1", created: Long = 1_000, expires: Long = 61_000, truncated: Boolean = false, tool: String = "Bash") =
+    PendingRequest(id, session, "paddock-test", "w1:p1", tool, "command:\n  ls", "default", created, expires, truncated)
 
 fun entry(id: String, state: RequestState, created: Long? = 1_000, expires: Long? = 61_000, session: String? = "claude-1", decision: Behavior? = null, alive: Boolean? = null) =
     RequestEntry(id, state, 400, created, expires, session, false, decision, "Bash", true, alive)
@@ -25,6 +27,25 @@ class AnswerRulesTest {
         val yes = assertIs<Answerability.Yes>(a(listingOf()))
         assertEquals(ID_A, yes.request.requestId)
         assertEquals(61_000 - (2_000 + 100), yes.millisLeft)
+    }
+
+    /** Seen on a real machine: Claude Code's AskUserQuestion ("Allow" / "Deny" options) came through the hook, the phone offered Yes, and the question stayed. */
+    @Test fun aQuestionOrAPlanIsNeverAnswerableWhateverTheTimeLeft() {
+        for (tool in listOf("AskUserQuestion", "ExitPlanMode")) {
+            assertEquals(NotAnswerable.NotAPermission, assertIs<Answerability.No>(a(listingOf(candidate = request(tool = tool)))).why, tool)
+            assertTrue(AnswerRules.isQuestion(tool))
+        }
+        for (tool in listOf("Bash", "Edit", "Write", "WebFetch", "mcp__x__y", "askuserquestion", null)) assertFalse(AnswerRules.isQuestion(tool), "$tool")
+        assertTrue("question" in NotAnswerable.NotAPermission.sentence && NotAnswerable.NotAPermission.sentence.endsWith("Answer on the desktop."))
+    }
+
+    @Test fun reviewLandsOnTheOutputTabOnlyForAnAgentThePhoneCanAnswerAndOnlyWhenAnswersAreWiredAndNotLocked() {
+        for (kind in listOf("claude", "codex", "opencode", " Codex ")) {
+            assertTrue(AnswerRules.canAnswerFromPhone(kind, wired = true, locked = false), kind)
+            assertFalse(AnswerRules.canAnswerFromPhone(kind, wired = false, locked = false), "$kind without answers")
+            assertFalse(AnswerRules.canAnswerFromPhone(kind, wired = true, locked = true), "$kind locked by Pro")
+        }
+        for (kind in listOf("fake", "gemini", "", null)) assertFalse(AnswerRules.canAnswerFromPhone(kind, wired = true, locked = false), "$kind")
     }
 
     @Test fun nothingPendingIsSaidSoNotGuessedAround() {

@@ -34,6 +34,10 @@ data class HostProfile(
     val session: String? = null,
     /** What the phone knows about waking this machine (Phase 14), or null before it has been read. Old files without it load. */
     val wake: WakeTarget? = null,
+    /** The icon the user picked for this machine (Linux, macOS, Windows), or null to follow [detectedOs]. Old files without it load. */
+    val os: HostOs? = null,
+    /** What the machine said it is (`uname -s`) on the last bring-up that could ask, or null before that. Never the user's choice, so a pick is never overwritten. */
+    val detectedOs: HostOs? = null,
 ) {
     init {
         require(ID.matches(id)) { "invalid profile id" }
@@ -49,6 +53,9 @@ data class HostProfile(
     }
 
     val hostId: HostProfileId get() = HostProfileId(id)
+
+    /** The OS whose glyph the machine's card draws: the user's pick, else what the machine said, else none (no glyph is better than a wrong one). */
+    val shownOs: HostOs? get() = os ?: detectedOs
 
     fun toTarget() = SshTarget(id, host, port, user)
 

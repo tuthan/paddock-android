@@ -1,8 +1,10 @@
 # Wake a sleeping machine (Phase 14)
 
-Paddock can send a Wake-on-LAN magic packet to the machine it watches, from Home's banner when the machine cannot be reached and from Settings. It is Free. This page says what is read from the machine, what is sent, how a Wake that failed is told apart from one that did not wake the machine, and what the phone never does.
+Paddock can send a Wake-on-LAN magic packet to any saved machine, watched or not: from each machine's page (Machines, then the machine) and, for the machine it watches, from Home's banner when the machine cannot be reached. It is Free. This page says what is read from the machine, what is sent, how a Wake that failed is told apart from one that did not wake the machine, and what the phone never does.
 
 **It wakes a machine from sleep (suspend, `s2idle`), not from shutdown.** The Settings row says so every time it shows what was read.
+
+2026-10-06: Wake moved from Settings to each machine's page (Machines, then the machine; `docs/machines.md`), and it works for every saved machine, watched or not. Where this page says Settings, read the machine's page; see "The machine's page" and "Waking a machine that is not watched".
 
 ## What is read, and when
 
@@ -12,7 +14,15 @@ What is stored with the machine's profile (`HostProfile.wake`, validated when it
 
 What a later connection may change of it: a run that **failed** (the exec was refused or timed out, `sshd` had no free session, nothing or garbage came back, the output was cut off, or `ip` said nothing) is no news about the machine and **never replaces a hardware address already read**; with nothing stored yet it only records why, so Settings can say so. Only a run that succeeded and says the machine has no physical interface on that route (a VPN-only route, no usable hardware address) replaces it. The profile is read and written in one step, so an edit or a relay save made at the same moment is not overwritten with an old copy, and a reading that says what is already stored is not written again (its time is refreshed once it is a day old).
 
-## Settings > the machine's row
+### A Mac host
+
+`uname -s` says `Darwin`, and the command then reads with `route -n get <phone's address>` (the word after `interface:` is the interface, the word after `gateway:` the gateway), `ifconfig <interface>` (the word after `ether` is the hardware address, the first `inet` the address) and `pmset -g` (the `womp` line, Wake for network access: `1` on, `0` off). An interface counts as physical when it is named `en` and a number; a tunnel (`utun`), a bridge and Apple's peer-to-peer links (`awdl`, `llw`) never do, so a phone on Tailscale gets the default route's `en` interface as on Linux. The blocks have the same form as on Linux with a `womp=` line in place of `wakeup`, `phy` and `wowlan` or `wol`, so the parser, the storage and the Wake tap are shared. One setting covers Wi-Fi and Ethernet, and one command is shown when it is not on or could not be read: `sudo pmset -a womp 1` (pmset keeps it across reboots, so there is no second "keep it" command). A Mac that printed nothing readable is "Not available: The machine did not say which network interface…", as before.
+
+**Not run on a Mac.** `WakeMacosTest` runs the command for real under `sh` and `bash --posix` against stand-ins for `uname`, `route`, `ifconfig` and `pmset` that print what those programs print, with an `ip` that fails the test if it is reached. Nothing was captured from a real Mac, so a different `route` or `ifconfig` layout, a `womp` line that `pmset -g` leaves out, or a Wi-Fi private address that differs from the hardware address would show up only on one. Whether a given Mac wakes from sleep on a magic packet over Wi-Fi depends on the model, and a laptop may wake only on the power adapter (the Energy or Battery setting "Wake for network access"); "Ready" means the setting says so.
+
+## The machine's page
+
+Wake-on-LAN moved here from Settings on 2026-10-06 (Machines, then the machine): every saved machine has the section on its own page, with its own reading, relay and Wake, whether Paddock watches it or not. What it says is unchanged:
 
 It says what was read in words, with when: *Ready · 3c:… on wlp0s20f3 · wakes from sleep, not from shutdown · as of 18:04*, or *Not ready: Wi-Fi wake (WoWLAN) is disabled*, or *Not known: …*, or *Not available: …*. When something has to change on the machine, the row shows the commands and a **Copy** for each. **Paddock never runs them**; the machine needs `sudo` and the decision is yours:
 
@@ -35,6 +45,17 @@ From Home's degraded banner (offered for *cannot reach the host*, *did not answe
 - **From away** (over a VPN such as Tailscale, where no LAN subnet holds the machine; the relay is used on a VPN path only): the same packet as a **unicast to the relay you saved**, an IPv4 literal and a port (default 9). The relay is a device on the machine's network that re-broadcasts it: a router with a forwarder, or UpSnap or a similar service on another machine. Without a saved relay nothing is sent and the field is offered; a suggestion (the machine's gateway) is never used unsaved; a name, an IPv6 literal, loopback, multicast, broadcast and a wildcard are refused.
 - Android 17 asks for the local-network grant first, as it does for Connect; without it nothing is sent and the sentence says so. If the grant is revoked while the sheet is open, the system itself refuses every send with `EPERM` (measured on API 37: an `IOException`, not a `SecurityException`, for unicast and broadcast alike, spike S3); a send where nothing left the phone and the refusal was `EPERM` is reported as the grant being off, while one destination refused with `EPERM` beside another that went out stays "the network refused it".
 
+## Waking a machine that is not watched
+
+Free, like every Wake (decision D2, 2026-10-06). The page of a saved machine Paddock is not watching has the same Wake-on-LAN section and the same **Wake the machine**. The tap sends what a tap for the watched machine sends: the same packet, three times, on the same paths (the machine's LAN, or a VPN with that machine's saved relay), from the hardware address and relay stored with that machine. Nothing is read over SSH and nothing connects: the tap **does not reconnect** and **does not follow** a connection, because the only connection Paddock holds is the watched machine's, and it coming up says nothing about this packet. So the tap reports the packet fact and one sentence instead of the two later facts: "Paddock is not watching this machine, so whether it answered is not observed here. Watch it to find out." (`WakeFacts.NOT_WATCHED`). A tap that sent nothing shows only why, as for the watched machine.
+
+The guard is the same, per machine: after a send that transmitted, another Wake for that machine is offered after 30 seconds; a tap while one is still sending for it is ignored; one machine's guard does not hold another's. The facts are kept per machine (`MachineWake`, behind `AppGraph.wake(profileId)` and `AppGraph.wakeFacts(profileId)`; the watched machine keeps `AppGraph.wake()` and `wakeFacts`, which Home's banner uses). Watching another machine changes the facts of exactly two machines, at the switch (`watchProfile`, in the foreground or not), and leaves every other machine's send-only facts as they are:
+
+- **The machine being left** loses the watched tap's facts and its 30 second guard (`WakeTap.forget`). Those facts were about its connection, the only one Paddock holds, which the switch closes: "the machine answered" and "herdr reachable" would never be filled in, and a follow still running would read the new machine's connection as this one's answer. A Wake for it from its page afterwards is a send-only tap, with its own guard. A packet still being sent for it when the switch happens records nothing and asks nothing of the new machine's connection.
+- **The machine that becomes the watched one** loses its send-only facts, because "Paddock is not watching this machine" is then no longer true, and its guard restarts with the watched tap.
+
+Removing a machine forgets its facts, and a send still running for it records nothing.
+
 ## Three facts, never one
 
 A Wake tap is reported as three separate facts, and "sent" is never read as "awake":
@@ -53,4 +74,5 @@ No wake from shutdown, no wake over the internet without your relay, nothing run
 
 - Unit (`:core`): the packet bytes against a known vector and the destinations and counts (`WakeTest`), the capture command's quoting for `argvToCommand`, what can and cannot enter it, and a run through a real `sh` with fake tools, the parser over a real Wi-Fi capture and the hostile cases, failed run against genuine "not available" and what is stored after each (`WakeCaptureTest`), the relay parser, the path order (a name with a VPN up, an IPv4 address on none of the networks) and when Wake is offered (`WakeTest`), the three facts and the guard (`WakeFactsTest`), one tap, two quick taps, and what counts as a fact after the tap (`WakeTapTest`), the atomic profile update (`HostProfileStoreTest`), profile validation, the Home row and its words (`HomeUiMapperTest`, `WakeWordsMapperTest`), and the capture being best effort (`HostSessionControllerTest`).
 - The capture command was run for real on the author's laptop and matched the stored Wi-Fi fixture byte for byte.
+- A machine that is not watched (2026-10-06): `MachineWakeTest` (a send-only tap records the packet line and the not-watched line, never reconnects and never runs the watched tap, the guard per machine, two quick taps, a tap that sent nothing, switching the watched machine keeps the others' facts and drops the new watched one's, a send still running for a forgotten machine records nothing, and neither does one whose machine was forgotten between the tap and the send), `WakeTapTest` (a switch while the watched machine's packet is being sent records nothing, reconnects nothing and follows nothing), `WakeFactsTest` (the two lines), `MachinesTest` instrumented (Wake on an unwatched machine's page and its lines) and `MachineRemovalGraphTest` (through the real graph, with an address no network of the emulator holds, so nothing is broadcast). Not run on a real sleeping machine.
 - Not run here, and said so in the evidence report: S2 (a magic packet waking this laptop from `s2idle` over Wi-Fi: it would suspend the machine the work runs on), AC-14.9 (a real phone waking it three times with `tcpdump` on the host), and the relay run over Tailscale from cellular.

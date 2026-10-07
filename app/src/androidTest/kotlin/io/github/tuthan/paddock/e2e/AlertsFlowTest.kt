@@ -50,7 +50,7 @@ import org.junit.Test
  * key and submission outside the pane, a second pane, the link-cut proxy), checks what only the host can see at each
  * checkpoint, and releases the test with a file.
  *
- * Stage 1, one process: a live blocker opens its Terminal tab; an agent that moved on is reported as changed; a pane that is
+ * Stage 1, one process: a live blocker opens its Output tab (Terminal for an agent the phone cannot answer); an agent that moved on is reported as changed; a pane that is
  * gone is "no longer observed"; a tap that arrives while the link is down shows the herd and nothing else until a fresh read
  * made after it, on the reconnected link, resolves it; a link naming another machine and a link that is not valid change
  * nothing. Stage 2, a new process started by the tap itself: the app resolves it once the herd is read. Stage 3, connector mode: the
@@ -111,8 +111,8 @@ class AlertsFlowTest {
 
     private fun waitForNotice(words: String, ms: Long = 40_000) = waitFor("the notice \"$words\"", ms) { noticeShown(words) }
 
-    /** The host chip reads "<machine>, live, <status>" or "<machine>, not live, <status>"; "live" alone also matches the second. */
-    private fun live() = hasNode(desc(", live,"))
+    /** The host chip reads "<machine>, watching, live · <age>" or "<machine>, watching, not live, <status>" (`MachineCopy.chipWatched`). */
+    private fun live() = hasNode(desc(", watching, live ·"))
     private fun notLive() = hasNode(desc(", not live,"))
 
     /** The herd, live. A host that has not had the relay installed yet (a fresh home) asks first, as it does on first use. */
@@ -161,11 +161,12 @@ class AlertsFlowTest {
         waitFor("the herd, live", 90_000) { hasNode(desc("Ready")) && live() }
         shoot("home")
 
-        // --- AC-07.3 (a): a live blocker opens its Terminal tab, observing, and says so ---
+        // --- AC-07.3 (a): a live blocker opens the agent, observing, and says so. The agent here is Claude Code, which this phone can answer (Pro unlocked in a
+        // debug build, guarded answers wired), so it opens the Output tab, which carries the request entry; an agent it cannot answer opens the Terminal tab (LiveFlowTest) ---
         checkpoint("case-a")
         waitForNotice("Opened from an alert. This agent is still blocked.")
-        waitFor("the Terminal tab") { tabSelected("Terminal") }
-        assertFalse("a tap on an alert does not open the Output tab", tabSelected("Output"))
+        waitFor("the Output tab, where the request entry is") { tabSelected("Output") }
+        assertFalse("an answerable agent does not land on the observing Terminal tab", tabSelected("Terminal"))
         assertFalse("nothing here is in control of the terminal", hasNode(desc("Terminal: in control")))
         shoot("a-live-blocker")
         dismissNotice(); back()
@@ -199,7 +200,7 @@ class AlertsFlowTest {
         shoot("d-opening")
         checkpoint("thawed")
         waitForNotice("Opened from an alert. This agent is still blocked.", 60_000)
-        waitFor("the Terminal tab") { tabSelected("Terminal") }
+        waitFor("the Output tab, where the request entry is") { tabSelected("Output") }
         shoot("d-after-reconnect")
         dismissNotice(); back()
         waitFor("Home") { hasNode(text("Activity")) }
@@ -222,7 +223,7 @@ class AlertsFlowTest {
         val link = File(ctx.getExternalFilesDir(null), "link.txt").readText().trim()
         launch(Intent(Intent.ACTION_VIEW, Uri.parse(link)).setClassName(ctx.packageName, MainActivity::class.java.name))
         waitForNotice("Opened from an alert. This agent is still blocked.", 90_000)
-        waitFor("the Terminal tab") { tabSelected("Terminal") }
+        waitFor("the Output tab, where the request entry is") { tabSelected("Output") }
         assertFalse("no first-trust question after a restart", hasNode(text("Trust and connect")))
         shoot("g-cold-start")
         checkpoint("cold-start")
@@ -256,7 +257,7 @@ class AlertsFlowTest {
         rule.onNode(desc("Settings", substring = false)).performClick()
         waitFor("Settings") { hasNode(text("Keep prompt text")) }
         rule.onNode(desc("Locked-phone alerts")).performScrollTo().performClick()
-        waitFor("the relay screen") { hasNode(text("Alert relay")) }
+        waitFor("the relay screen") { hasNode(text("Locked-phone alerts")) && !hasNode(text("Keep prompt text")) }
         waitFor("the address ready to send") { hasNode(text("It is not on $host yet.", substring = true)) }
         // The button is open once the relay screen has read the machine (inspect asks the host a few things over SSH).
         waitFor("the send button to open", 60_000) { hasNode(text("Send the address to $host…") and isEnabled()) }
@@ -301,7 +302,7 @@ class AlertsFlowTest {
         rule.onNode(desc("Settings", substring = false)).performClick()
         waitFor("Settings") { hasNode(text("Keep prompt text")) }
         rule.onNode(desc("Locked-phone alerts")).performScrollTo().performClick()
-        waitFor("the relay screen") { hasNode(text("Alert relay")) }
+        waitFor("the relay screen") { hasNode(text("Locked-phone alerts")) && !hasNode(text("Keep prompt text")) }
         rule.onNodeWithText("Unregister").performScrollTo().performClick()
         waitFor("the registration to go") { graph.push.registrations.value.isEmpty() }
         checkpoint("push-removed")

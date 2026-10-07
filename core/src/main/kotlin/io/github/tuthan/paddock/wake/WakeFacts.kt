@@ -18,12 +18,17 @@ data class WakeFacts(
      * say nothing about this packet, so they are not recorded and the screen says what it saw instead.
      */
     val alreadyLive: Boolean = false,
+    /**
+     * The tap was for a saved machine Paddock is not watching ([MachineWake], decision D2). Nothing connects to it, so the two later facts can
+     * never be observed: the lines say so ([NOT_WATCHED]) instead of showing "not yet" forever.
+     */
+    val notWatched: Boolean = false,
 ) {
     /** True once something left the phone, so the other two facts mean something. */
     val transmitted: Boolean get() = result is WakeSendResult.Sent || result is WakeSendResult.Partial
 
     /** Both later facts are known, or there is nothing to wait for: the connection need not be followed any more. */
-    val settled: Boolean get() = alreadyLive || (answeredAtMillis != null && reachableAtMillis != null)
+    val settled: Boolean get() = alreadyLive || notWatched || (answeredAtMillis != null && reachableAtMillis != null)
 
     /** What a later look at the connection adds: a fact once seen is kept, a fact not yet seen is recorded at [nowMillis]. */
     fun observed(link: WakeLink, nowMillis: Long): WakeFacts = copy(
@@ -34,6 +39,7 @@ data class WakeFacts(
     fun lines(clockLabel: (Long) -> String): List<String> {
         val first = sentence(result)
         if (!transmitted) return listOf(first)
+        if (notWatched) return listOf(first, NOT_WATCHED)
         if (alreadyLive) return listOf(first, "The machine was already connected, and herdr already live, when you tapped.")
         return listOf(
             first,
@@ -57,6 +63,9 @@ data class WakeFacts(
     companion object {
         const val GUARD_MILLIS = 30_000L
 
+        /** The second line of a Wake sent to a machine that is not watched: the packet went out, and nothing here can see whether it woke the machine. */
+        const val NOT_WATCHED = "Paddock is not watching this machine, so whether it answered is not observed here. Watch it to find out."
+
         fun sentence(result: WakeSendResult): String = when (result) {
             is WakeSendResult.Sent ->
                 if (result.viaRelay) "Wake packet sent to the relay ${list(result.destinations)}. The relay must re-broadcast it; nothing reached the machine's network from here."
@@ -71,7 +80,7 @@ data class WakeFacts(
             WakeSendFailure.NetworkMissing -> "this phone is on no network that can reach the machine"
             WakeSendFailure.Permission -> "local-network access is off. Turn it on in the app's settings"
             WakeSendFailure.SendFailed -> "the network refused it" + (detail?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "")
-            WakeSendFailure.RelayRequired -> "waking from away needs a relay on the machine's network. Save one in Settings"
+            WakeSendFailure.RelayRequired -> "waking from away needs a relay on the machine's network. Save one on the machine's page in Machines"
         }
 
         private fun list(a: List<InetAddress>): String {

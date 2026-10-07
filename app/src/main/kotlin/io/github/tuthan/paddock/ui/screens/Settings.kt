@@ -38,7 +38,13 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.alerts.AccessRecovery
 import io.github.tuthan.paddock.alerts.AlertDelivery
+import io.github.tuthan.paddock.applock.AppLockCopy
+import io.github.tuthan.paddock.applock.DeviceLock
+import io.github.tuthan.paddock.applock.LockTimeout
+import io.github.tuthan.paddock.billing.ProCopy
+import io.github.tuthan.paddock.hostprofile.MachineCopy
 import io.github.tuthan.paddock.ui.components.Banner
+import io.github.tuthan.paddock.ui.components.FilterChips
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.Kicker
 import io.github.tuthan.paddock.ui.components.PaddockButton
@@ -51,14 +57,14 @@ import io.github.tuthan.paddock.ui.theme.PaddockTokens
 /** Whether the Android 17 local-network grant matters on this device and build, and if so whether it is given. */
 enum class LocalAccess { NotRequired, Granted, Denied }
 
-/** The watched machine as Settings shows it: its name, `user@host:port`, and the herdr session (null for the default). */
-data class MachineSummary(val name: String, val endpoint: String, val session: String?, val wake: WakeWords? = null)
-
 data class SettingsState(
     val protectSensitiveScreens: Boolean,
     val localAccess: LocalAccess,
     val versionName: String,
-    val machine: MachineSummary? = null,
+    /** How many machines are saved, for the Machines row; everything else about them lives on the Machines screen. */
+    val machineCount: Int = 0,
+    /** The watched machine's name, for the Machines row; null when none is watched. */
+    val watchedMachine: String? = null,
     /** The herdr version the watched host reported in its last read, when there is one. */
     val herdrVersion: String? = null,
     val protocol: Int = 22,
@@ -72,8 +78,10 @@ data class SettingsState(
     val agentGlyphs: Boolean = true,
     /** The Pro card; a blank headline hides it. */
     val pro: ProCardState = ProCardState(),
-    /** Setting up guarded answers is a Pro capability and is locked on this phone: the row says Pro, and a tap asks the gate before it opens the setup. */
-    val guardedAnswersLocked: Boolean = false,
+    /** Lock Paddock (Privacy): on or off, how long it may be out of sight before it asks again, and whether this phone has a screen lock to ask. */
+    val appLock: Boolean = false,
+    val appLockAfterSeconds: Int = LockTimeout.DEFAULT_SECONDS,
+    val deviceLock: DeviceLock = DeviceLock.Ready,
 )
 
 /** What Settings says about Pro (Phase 13). [tips] is empty unless this build sells and the store listed prices. */
@@ -85,7 +93,13 @@ data class ProCardState(
     val busy: Boolean = false,
     /** What the last action on this card (Restore, a tip, a verification) said; never what a purchase from the gate sheet said. */
     val message: String? = null,
+    /** While Pro is held: what it covers, as one sentence ([io.github.tuthan.paddock.billing.ProCopy.coverage]) in a note. Blank leaves the note out. */
     val coverage: String = "",
+    /**
+     * While Pro is not held and the build does not unlock everything: the "What Pro covers" row's second line
+     * ([io.github.tuthan.paddock.billing.ProCopy.coverageShort]); a tap opens the overview sheet (decision D5). Blank leaves the row out.
+     */
+    val overview: String = "",
     val refunds: String? = null,
     val tips: List<TipOption> = emptyList(),
 )
@@ -108,7 +122,22 @@ const val RECONNECT_POLICY =
     "If the connection drops, Paddock tries again after 1, 2 and 4 seconds, then waits longer between tries, up to two minutes. " +
         "Problems only you can fix, such as a refused key or a changed host key, wait for you instead of retrying."
 
-/** Settings, as grouped cards. Everything not yet built is shown disabled and says so, never hidden. */
+/**
+ * When Paddock checks the agents at all. It was an inert "Monitor while the app is open · On" row that could not be changed (decision D5); the fact
+ * belongs with the reconnect policy, since both say when Paddock talks to the machine.
+ */
+const val RECONNECT_MONITORING = "Paddock checks your agents only while this app is open and stops a few seconds after you leave it."
+
+/** The Reconnect row's text when it is expanded: the policy, then when Paddock checks at all. */
+const val RECONNECT_EXPANDED = "$RECONNECT_POLICY $RECONNECT_MONITORING"
+
+/** The theme as a fact of this build, on the About version row. It was an inert "Theme · Paddock palette" row under Appearance (decision D5). */
+const val ABOUT_THEME = "Paddock palette follows the system light or dark setting"
+
+/**
+ * Settings, as grouped cards, in this order (decision D5): the send record when it cannot be read, Machines, Alerts, Sending (snippets), Appearance, Privacy, Pro, Connection (with the local-network grant when it applies), About. Everything not yet built is shown disabled
+ * and says so, never hidden; a fact that cannot be changed is said where it belongs (Reconnect, About), not as a row of its own.
+ */
 @Composable
 fun Settings(
     state: SettingsState,
@@ -116,7 +145,8 @@ fun Settings(
     onOpenSystemSettings: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    onAddMachine: () -> Unit = {},
+    /** The Machines row: the saved machines, each with its page (watch, Wake-on-LAN, alerts, remove), and Add another machine. */
+    onMachines: () -> Unit = {},
     onKeepPromptText: (Boolean) -> Unit = {},
     onEditSnippets: () -> Unit = {},
     onRetryJournal: () -> Unit = {},
@@ -125,13 +155,15 @@ fun Settings(
     onHideOnLockScreen: (Boolean) -> Unit = {},
     onAlertRecovery: (AccessRecovery.Action) -> Unit = {},
     onAlertRelay: () -> Unit = {},
-    onGuardedAnswers: () -> Unit = {},
     onAgentGlyphs: (Boolean) -> Unit = {},
     onRestorePurchase: () -> Unit = {},
     onBuyTip: (String) -> Unit = {},
-    onCopyWakeCommand: (String) -> Unit = {},
-    onSaveWakeRelay: (io.github.tuthan.paddock.wake.WakeRelay?) -> Unit = {},
-    onWake: () -> Unit = {},
+    /** The "What Pro covers" row ([ProCardState.overview]): asks for the overview sheet; the sheet, not Settings, is where Pro is bought. */
+    onProOverview: () -> Unit = {},
+    /** Lock Paddock: the user wants it on or off (the caller asks the phone to confirm it is them first), a new timeout, and the way to Android's security settings. */
+    onAppLock: (Boolean) -> Unit = {},
+    onAppLockAfter: (Int) -> Unit = {},
+    onOpenSecuritySettings: () -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     var reconnectOpen by rememberSaveable { mutableStateOf(false) }
@@ -160,40 +192,21 @@ fun Settings(
                 PaddockButton("Reset the record…", { resetOpen = true }, kind = ButtonKind.Danger)
             }
 
-            Section("Machine")
-            if (state.machine != null) {
-                Fixed(state.machine.name, null, listOfNotNull(state.machine.endpoint, state.machine.session?.let { "session $it" } ?: "default session").joinToString(" · "), mono = true)
-            }
-            state.machine?.wake?.let { WakeOnLanSection(it, onCopyWakeCommand, onSaveWakeRelay, onWake) }
-            PaddockButton(if (state.machine == null) "Add a machine" else "Add another machine", onAddMachine, kind = ButtonKind.Ghost, icon = PaddockIcons.Plus)
-            if (state.machine != null) Note2("Paddock watches one machine at a time; adding another makes it the watched one. Adding a machine you already have (the same address, port and user) updates it instead of adding a second one. The machine chip on Home lists the saved machines: watching another one is Pro, removing one is free.")
-
-            Section("Connection")
-            Fixed("Monitor while the app is open", "On", "Paddock checks your agents while this app is open and stops a few seconds after you leave it.")
+            // Settings is never shown without a machine (the app opens Welcome, then Add a machine), so the row is always about at least one.
+            Section(MachineCopy.TITLE)
+            val machines = MachineCopy.settingsRow(state.machineCount, state.watchedMachine)
             Row(
                 Modifier.card(c, padded = false)
-                    .clickable(role = Role.Button, onClickLabel = if (reconnectOpen) "Hide the reconnect policy" else "Show the reconnect policy") { reconnectOpen = !reconnectOpen }
+                    .clickable(role = Role.Button, onClickLabel = "Open the machines", onClick = onMachines)
                     .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
-                    .semantics(mergeDescendants = true) { stateDescription = if (reconnectOpen) "Expanded" else "Collapsed" },
+                    .semantics(mergeDescendants = true) { contentDescription = "${MachineCopy.TITLE}, $machines" },
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("Reconnect", style = PaddockTokens.type.rowTitle, color = c.title)
-                    Text(if (reconnectOpen) RECONNECT_POLICY else RECONNECT_SHORT, style = PaddockTokens.type.secondary, color = c.dim)
+                    Text(MachineCopy.TITLE, style = PaddockTokens.type.rowTitle, color = c.title)
+                    Text(machines, style = PaddockTokens.type.secondary, color = c.dim)
                 }
-                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp).rotate(if (reconnectOpen) 90f else 0f))
-            }
-
-            if (state.localAccess != LocalAccess.NotRequired) {
-                Section("Local network")
-                when (state.localAccess) {
-                    LocalAccess.Granted -> Fixed("Local-network access", "Allowed", "Needed to reach machines by a LAN address.")
-                    LocalAccess.Denied -> Banner(
-                        "Local-network access is off, so Paddock cannot reach machines by a LAN address. Turn it on in the app's settings, or use the machine's VPN address.",
-                        actionLabel = "Open settings", onAction = onOpenSystemSettings,
-                    )
-                    LocalAccess.NotRequired -> Unit
-                }
+                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
             }
 
             Section("Alerts")
@@ -226,30 +239,7 @@ fun Settings(
             }
             Note2("Every notification has two buttons, Open and Review. Both only open Paddock; nothing is ever sent to an agent from a notification.")
 
-            Section("Answers")
-            Row(
-                Modifier.card(c, padded = false)
-                    .clickable(role = Role.Button, onClickLabel = "Set up guarded answers", onClick = onGuardedAnswers)
-                    .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
-                    .semantics(mergeDescendants = true) { contentDescription = "Guarded answers${if (state.guardedAnswersLocked) ", Pro" else ""}. $GUARDED_ROW" },
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(proLabel("Guarded answers", state.guardedAnswersLocked), style = PaddockTokens.type.rowTitle, color = c.title)
-                    Text(GUARDED_ROW, style = PaddockTokens.type.secondary, color = c.dim)
-                }
-                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
-            }
-
-            Section("Appearance")
-            Fixed("Theme", "Paddock palette", "Follows the system light or dark setting.")
-            Toggle(
-                "Agent icons", state.agentGlyphs, onAgentGlyphs, Modifier.card(c, padded = false),
-                inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                detail = if (state.agentGlyphs) "Pictures for the common agents, letters for the rest." else "Two letters for every agent.",
-            )
-
-            Section("Prompts")
+            Section("Sending")
             Row(
                 Modifier.card(c, padded = false)
                     .clickable(role = Role.Button, onClickLabel = "Edit snippets", onClick = onEditSnippets)
@@ -263,8 +253,31 @@ fun Settings(
                 }
                 Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
             }
+            Note2("Guarded answers (Yes or No for an agent's permission prompt) are set up per machine: Machines, then the machine's page.")
+
+            Section("Appearance")
+            Toggle(
+                "Agent icons", state.agentGlyphs, onAgentGlyphs, Modifier.card(c, padded = false),
+                inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                detail = if (state.agentGlyphs) "Pictures for the common agents, letters for the rest." else "Two letters for every agent.",
+            )
 
             Section("Privacy")
+            Toggle(
+                AppLockCopy.TITLE, state.appLock, onAppLock, Modifier.card(c, padded = false),
+                inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                detail = AppLockCopy.DETAIL, enabled = state.appLock || state.deviceLock == DeviceLock.Ready,
+            )
+            if (!state.appLock && state.deviceLock == DeviceLock.NotSet) {
+                Banner(AppLockCopy.NOT_SET, actionLabel = AppLockCopy.OPEN_SECURITY, onAction = onOpenSecuritySettings)
+            }
+            if (state.appLock) {
+                val options = LockTimeout.entries
+                Kicker(AppLockCopy.AFTER, Modifier.padding(top = 4.dp))
+                FilterChips(options.map { it.label }, options.indexOf(LockTimeout.of(state.appLockAfterSeconds)), { onAppLockAfter(options[it].seconds) })
+                Note2(AppLockCopy.AFTER_DETAIL)
+                Note2(AppLockCopy.SCOPE)
+            }
             Toggle(
                 "Protect sensitive screens", state.protectSensitiveScreens, onProtectSensitive, Modifier.card(c, padded = false),
                 inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
@@ -282,6 +295,22 @@ fun Settings(
                     state.pro.headline, null,
                     state.pro.detail + if (state.pro.stale) " That answer is more than a week old." else "",
                 )
+                if (state.pro.overview.isNotBlank()) {
+                    // The front door to what Pro is (D5): it opens the gate sheet as an overview, which stays the only place Pro is bought.
+                    Row(
+                        Modifier.card(c, padded = false)
+                            .clickable(role = Role.Button, onClickLabel = "Show what Pro covers", onClick = onProOverview)
+                            .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
+                            .semantics(mergeDescendants = true) { contentDescription = "${ProCopy.OVERVIEW_ROW}, ${state.pro.overview}" },
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(ProCopy.OVERVIEW_ROW, style = PaddockTokens.type.rowTitle, color = c.title)
+                            Text(state.pro.overview, style = PaddockTokens.type.secondary, color = c.dim)
+                        }
+                        Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
+                    }
+                }
                 if (state.pro.coverage.isNotBlank()) Note2(state.pro.coverage)
                 if (state.pro.sellsPro) PaddockButton("Restore purchase", onRestorePurchase, kind = ButtonKind.Secondary, enabled = !state.pro.busy)
                 state.pro.message?.let { Note2(it) }
@@ -293,10 +322,37 @@ fun Settings(
                 }
             }
 
+            Section("Connection")
+            Row(
+                Modifier.card(c, padded = false)
+                    .clickable(role = Role.Button, onClickLabel = if (reconnectOpen) "Hide the reconnect policy" else "Show the reconnect policy") { reconnectOpen = !reconnectOpen }
+                    .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
+                    .semantics(mergeDescendants = true) { stateDescription = if (reconnectOpen) "Expanded" else "Collapsed" },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Reconnect", style = PaddockTokens.type.rowTitle, color = c.title)
+                    Text(if (reconnectOpen) RECONNECT_EXPANDED else RECONNECT_SHORT, style = PaddockTokens.type.secondary, color = c.dim)
+                }
+                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp).rotate(if (reconnectOpen) 90f else 0f))
+            }
+
+            if (state.localAccess != LocalAccess.NotRequired) {
+                Section("Local network")
+                when (state.localAccess) {
+                    LocalAccess.Granted -> Fixed("Local-network access", "Allowed", "Needed to reach machines by a LAN address.")
+                    LocalAccess.Denied -> Banner(
+                        "Local-network access is off, so Paddock cannot reach machines by a LAN address. Turn it on in the app's settings, or use the machine's VPN address.",
+                        actionLabel = "Open settings", onAction = onOpenSystemSettings,
+                    )
+                    LocalAccess.NotRequired -> Unit
+                }
+            }
+
             Section("About")
             Fixed(
                 "Paddock ${state.versionName}", null,
-                listOfNotNull("herdr protocol ${state.protocol}", state.herdrVersion?.let { "host on $it" }, "no analytics, no crash uploads").joinToString(" · "),
+                listOfNotNull("herdr protocol ${state.protocol}", state.herdrVersion?.let { "host on $it" }, ABOUT_THEME, "no analytics, no crash uploads").joinToString(" · "),
                 description = "Version, ${state.versionName}",
             )
             Row(
@@ -359,7 +415,7 @@ private fun Note2(text: String) = io.github.tuthan.paddock.ui.components.Note(te
 
 /** A card the user cannot change. Read as "label, value, detail"; a disabled one is announced as unavailable. */
 @Composable
-private fun Fixed(label: String, value: String?, detail: String?, enabled: Boolean = true, mono: Boolean = false, description: String? = null) {
+private fun Fixed(label: String, value: String?, detail: String?, enabled: Boolean = true, description: String? = null) {
     val c = PaddockTokens.colors
     val said = description ?: (listOfNotNull(label, value, detail).joinToString(", ") + if (enabled) "" else ", unavailable")
     Row(
@@ -369,7 +425,7 @@ private fun Fixed(label: String, value: String?, detail: String?, enabled: Boole
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(label, style = PaddockTokens.type.rowTitle, color = c.title)
-            if (detail != null) Text(detail, style = if (mono) PaddockTokens.type.monoFact else PaddockTokens.type.secondary, color = c.dim)
+            if (detail != null) Text(detail, style = PaddockTokens.type.secondary, color = c.dim)
         }
         if (value != null) Text(value, style = PaddockTokens.type.secondary, color = if (enabled) c.text else c.dim)
     }

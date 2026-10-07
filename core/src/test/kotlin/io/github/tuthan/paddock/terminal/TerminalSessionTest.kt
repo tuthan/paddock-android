@@ -171,6 +171,22 @@ class TerminalSessionTest {
         assertTrue(unknown.observers.first().closed, "the old observer was closed first")
     }
 
+    @Test fun aViewportThatWandersAndComesBackDoesNotReconnectTheObserver() {
+        // A Mac host has no /proc, so its terminal size is unknown and the observer is drawn for the phone. The row above the grid
+        // changes height while the observer connects, which changes the viewport: 25 rows, 26 while connecting, 25 again. Each
+        // such wobble used to reconnect the observer, and the reconnect made the next wobble, about every 0.6 s without end.
+        val host = TestHost(stty = null); val s = session(host); s.open(40, 25)
+        waitUntil("first observer") { host.observers.size == 1 }
+        host.observers.last().feed(full(text = "x", seq = 1).replace("\"width\":60", "\"width\":40").replace("\"height\":20", "\"height\":25"))
+        s.waitMode(TerminalMode.Observing)
+        repeat(3) { s.setViewport(40, 26); s.setViewport(40, 25); Thread.sleep(250) }
+        assertEquals(1, host.observers.size, "the observer already has the size the phone settled on")
+        assertEquals(TerminalMode.Observing, s.mode())
+        s.setViewport(40, 24)
+        waitUntil("reopened for a viewport that really changed") { host.observers.size == 2 }
+        assertEquals(listOf("--cols", "40", "--rows", "24"), host.observers.last().argv.takeLast(4))
+    }
+
     // --- control ---
 
     @Test fun requestingControlOpensTheHelperWithoutTakeoverAtTheTerminalsOwnSize() {

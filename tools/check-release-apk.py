@@ -10,7 +10,7 @@ Google's datatransport included. --flavor play checks the Play build against the
 is extended by a person reading the diff, not by the script.
 
 Checks, each printed as PASS or FAIL with what was found; the exit status is 1 if any FAIL:
-  - the permission set is exactly the five the design names (the four of Phase 02 to 07 and CAMERA, added by the in-app scanner, Phase 14; nothing else, no READ_LOGS, no storage, no contacts, no location),
+  - the permission set is exactly the six the design names (the four of Phase 02 to 07, CAMERA, added by the in-app scanner, Phase 14, and USE_BIOMETRIC, which the app lock's system prompt needs; nothing else, no READ_LOGS, no storage, no contacts, no location),
     and the camera and its autofocus are optional features (android.hardware.camera and android.hardware.camera.autofocus, required=false);
     play adds com.android.vending.BILLING and nothing else;
   - not debuggable; allowBackup false; usesCleartextTraffic false; a network security config and both backup rule files are present;
@@ -72,10 +72,10 @@ names = z.namelist()
 # ---- manifest ----
 tree = aapt("dump", "xmltree", "--file", "AndroidManifest.xml", APK)
 perms = sorted(set(re.findall(r'uses-permission[^\n]*\n\s+A: http://schemas.android.com/apk/res/android:name\(0x01010003\)="([^"]+)"', tree)))
-EXPECTED = sorted(["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_LOCAL_NETWORK", "android.permission.CAMERA"] + (PLAY_PERMISSIONS if PLAY else []))
+EXPECTED = sorted(["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_LOCAL_NETWORK", "android.permission.CAMERA", "android.permission.USE_BIOMETRIC"] + (PLAY_PERMISSIONS if PLAY else []))
 # AGP adds a signature-level DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION for the app's own receivers; it is the app's, not a grant.
 perms = [p for p in perms if not p.endswith(".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")]
-say(perms == EXPECTED, "permission set is exactly the five named" if not PLAY else "permission set is exactly the five named plus BILLING", ", ".join(p.rsplit(".", 1)[1] for p in perms))
+say(perms == EXPECTED, "permission set is exactly the six named" if not PLAY else "permission set is exactly the six named plus BILLING", ", ".join(p.rsplit(".", 1)[1] for p in perms))
 # The scanner is optional: a phone or a store listing without a camera must not be shut out of the app (paste and the camera app do the same).
 # CAMERA implies the camera and autofocus features both, and a store filters on every feature that is required: both are named, both optional.
 for feature, label in (("android.hardware.camera", "the camera"), ("android.hardware.camera.autofocus", "camera autofocus")):
@@ -128,11 +128,11 @@ if PLAY:
         "library components are exactly the six named, none exported", ", ".join(n.rsplit(".", 1)[1] for n in lib_components))
 else:
     say(not lib_components, "no billing, Play-services or datatransport component", ", ".join(lib_components))
-# <queries>: UnifiedPush's distributor lookup; play adds the two billing intents.
+# <queries>: UnifiedPush's distributor lookup and the ntfy app's package (so "Open in the ntfy app" addresses it explicitly); play adds the two billing intents.
 qm = re.search(r"\n(\s*)E: queries[^\n]*\n(.*?)(?=\n\1E: |\n\1?\s*E: application)", tree, re.S)
 qactions = sorted(set(re.findall(r'android:name\(0x01010003\)="([^"]+)"', qm.group(2)))) if qm else []
-WANT_Q = sorted(["org.unifiedpush.android.distributor.REGISTER"] + (PLAY_QUERY_ACTIONS if PLAY else []))
-say(qactions == WANT_Q, "<queries> intents are exactly the named ones", ", ".join(qactions))
+WANT_Q = sorted(["org.unifiedpush.android.distributor.REGISTER", "io.heckel.ntfy"] + (PLAY_QUERY_ACTIONS if PLAY else []))
+say(qactions == WANT_Q, "<queries> entries are exactly the named ones", ", ".join(qactions))
 implicit = sorted(c["name"] for c in exported if c["exported"] is None)
 say(not implicit, "every component says explicitly whether it is exported", ", ".join(implicit) or f"{len(exported)} components")
 
@@ -179,7 +179,8 @@ for u in urls:
     h = re.match(rb"https?://([^/:?#]+)", u).group(1).decode()
     hosts.setdefault(h, []).append(u.decode())
 # Documentation links that libraries carry in their error messages (Tink, Kotlin, AndroidX), and this project's own example configuration: strings, not endpoints the app calls.
-ALLOWED = {"developers.google.com", "cloud.google.com", "goo.gle", "r.android.com", "youtrack.jetbrains.com", "ntfy.example.org", "schemas.android.com", "www.w3.org", "www.apache.org", "scripts.sil.org", "openfontlicense.org", "github.com", "raw.githubusercontent.com", "tools.ietf.org", "www.ietf.org", "datatracker.ietf.org", "ntfy.sh", "unifiedpush.org", "developer.android.com", "www.unicode.org", "xmlpull.org", "www.xmlpull.org", "xml.org", "apache.org", "www.opensource.org", "opensource.org", "example.com", "localhost", "127.0.0.1", "www.android.com", "android.com", "creativecommons.org", "www.gnu.org", "spdx.org", "www.eclipse.org", "kotlinlang.org"}
+# www.apple.com is the DOCTYPE identifier in the LaunchAgent text the Mac alert setup writes (a property list names its DTD there; nothing fetches it).
+ALLOWED = {"www.apple.com", "developers.google.com", "cloud.google.com", "goo.gle", "r.android.com", "youtrack.jetbrains.com", "ntfy.example.org", "schemas.android.com", "www.w3.org", "www.apache.org", "scripts.sil.org", "openfontlicense.org", "github.com", "raw.githubusercontent.com", "tools.ietf.org", "www.ietf.org", "datatracker.ietf.org", "ntfy.sh", "unifiedpush.org", "developer.android.com", "www.unicode.org", "xmlpull.org", "www.xmlpull.org", "xml.org", "apache.org", "www.opensource.org", "opensource.org", "example.com", "localhost", "127.0.0.1", "www.android.com", "android.com", "creativecommons.org", "www.gnu.org", "spdx.org", "www.eclipse.org", "kotlinlang.org"}
 unknown = {h: u for h, u in hosts.items() if h not in ALLOWED}
 say(not unknown, f"{len(urls)} URL strings in the dex and assets, all on the allow-list", "; ".join(f"{h}: {u[0]}" for h, u in sorted(unknown.items())))
 lines.append("URL hosts seen: " + ", ".join(f"{h} ({len(u)})" for h, u in sorted(hosts.items())))

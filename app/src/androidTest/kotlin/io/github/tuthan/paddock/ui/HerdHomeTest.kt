@@ -144,7 +144,7 @@ class HerdHomeTest {
         val asOf = io.github.tuthan.paddock.ui.screens.clockLabel(now - 125_000)
         byDesc("Last seen blocked, claude, approve edit to build.gradle, api, observed 40 s ago").assertHasNoClickAction()
         rule.onNodeWithText("was blocked", substring = true).assertExists()
-        rule.onNode(hasContentDescription("laptop, not live, as of $asOf")).assertIsDisplayed()
+        rule.onNode(hasContentDescription("laptop, watching, not live, as of $asOf")).assertIsDisplayed()
         rule.onNodeWithText("LAPTOP · AS OF $asOf").assertExists()
         shoot("home-degraded-dark-100")
     }

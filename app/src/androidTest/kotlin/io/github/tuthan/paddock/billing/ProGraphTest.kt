@@ -142,6 +142,36 @@ class ProGraphTest {
         assertNull("cleared after $GateNotice.SHOW_MILLIS ms", graph.gateNotice.value)
     }
 
+    // ---- D5: Settings' "What Pro covers" row asks for the overview ------------------------------------------------------------------
+
+    @Test fun theOverviewIsAskedForFromAnIdleAppAndSaysNothingElse() {
+        // Either build: the graph asks for the sheet when idle; whether Pro is held is the host's to check when it draws (SettingsTest holds both).
+        assertEquals("what the gate sees as busy: ${graph.journal.records.value.filter { it.inFlight }}", GateContext.IDLE, graph.gateContext(false))
+        graph.openProOverview()
+        assertEquals(ProCopy.OVERVIEW_ID, graph.gateRequest.value)
+        assertNull(graph.gateNotice.value)
+    }
+
+    @Test fun theOverviewDuringManualInputSaysWhyAndOpensNoSheet() {
+        graph.manualInput.enter("term_gate_test", System.currentTimeMillis(), epoch = 1)
+        graph.openProOverview()
+        assertNull("no sheet during Manual input", graph.gateRequest.value)
+        assertEquals("Pro is offered once Manual input is closed.", graph.gateNotice.value)
+    }
+
+    @Test fun theOverviewDuringAnOperationInFlightSaysWhyAndOpensOnceItSettles() {
+        val key = TerminalKey(TargetRef(HostProfileId("gate-test"), "gate-test", "term_gate_test"), epoch = 1)
+        val row = (graph.journal.begin(key, OperationKind.Prompt, "x") as Begin.Started).record
+        try {
+            graph.openProOverview()
+            assertNull("no sheet over a running operation", graph.gateRequest.value)
+            assertEquals("Pro is offered once the operation in progress finishes.", graph.gateNotice.value)
+        } finally { graph.journal.notSent(row.id, "test_cleanup") }
+        graph.openProOverview()
+        assertEquals(ProCopy.OVERVIEW_ID, graph.gateRequest.value)
+        assertNull("the sheet replaces the sentence", graph.gateNotice.value)
+    }
+
     @Test fun whatIsNotGatedAlwaysRunsInEitherBuild() {
         for (id in listOf("alerts", "snippets", "hosts.add", "input.manual")) assertTrue(id, graph.requestCapability(id, pendingAnswerOnScreen = true))
         assertNull(graph.gateRequest.value)

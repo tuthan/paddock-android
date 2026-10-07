@@ -12,8 +12,45 @@ object ProCopy {
         return "Pro covers ${join(named)}. $STAYS_FREE"
     }
 
-    /** The sheet's title for the capability the user chose; a gate asked for an id nobody named still says the true thing. */
-    fun gateTitle(capabilityId: String): String = ProCapabilities.byId(capabilityId)?.let { "${it.label} is a Pro capability" } ?: "This is a Pro capability"
+    /**
+     * What Pro covers as a list, for the gate sheet (decision D6): the built, gated labels in [ProCapabilities.ALL] order, except that the
+     * capability with id [first] (the one the user just chose) leads, so the sheet starts with what the tap was about and the rest reads as what
+     * else the purchase brings. Labels keep their capital, because each is a line of its own. Empty when nothing built is gated; [coverage]
+     * stays the one-sentence form Settings uses while Pro is held, and [coverageShort] the row Settings shows while it is not.
+     */
+    fun coverageLines(gated: Set<String>, first: String? = null): List<String> =
+        ProCapabilities.ALL.filter { it.id in gated && it.built }.sortedBy { it.id != first }.map { it.label }
+
+    /**
+     * What Pro covers as one short line, for the "What Pro covers" row on Settings' Pro card (decision D5): the built, gated labels in
+     * [ProCapabilities.ALL] order, joined with ", ", the first keeping its capital and the rest lower-cased as [coverage] does. No "and" and no
+     * full stop, because it is a row's secondary text, not a sentence; the sheet the row opens says the rest. Empty when nothing built is gated.
+     */
+    fun coverageShort(gated: Set<String>): String =
+        ProCapabilities.ALL.filter { it.id in gated && it.built }
+            .mapIndexed { i, c -> if (i == 0) c.label else c.label.replaceFirstChar { ch -> ch.lowercase() } }
+            .joinToString(", ")
+
+    /**
+     * The gate request that opens the sheet as an overview of Pro (Settings' "What Pro covers" row, decision D5), not for a capability. It is never
+     * in [ProGate.GATED] and [ProCapabilities.byId] does not know it, so [ProGate.decide] says PROCEED for it: whoever shows the sheet asks for it by
+     * this id and decides by idle and Pro held itself (the app's gate host does).
+     */
+    const val OVERVIEW_ID = "pro.overview"
+
+    /** The title of the Settings row that opens the overview, and the overview sheet's title ([gateTitle] of [OVERVIEW_ID]). */
+    const val OVERVIEW_ROW = "What Pro covers"
+
+    /** The words in front of [coverageLines] on the gate sheet, and the start of what TalkBack reads for the list as one block. */
+    const val COVERS = "Pro covers:"
+
+    /**
+     * The sheet's title for the capability the user chose; for [OVERVIEW_ID] the overview's title, since nothing was chosen; a gate asked for an id
+     * nobody named still says the true thing.
+     */
+    fun gateTitle(capabilityId: String): String =
+        if (capabilityId == OVERVIEW_ID) OVERVIEW_ROW
+        else ProCapabilities.byId(capabilityId)?.let { "${it.label} is a Pro capability" } ?: "This is a Pro capability"
 
     /** What stays free, said beside every offer so Free is a path and not a hidden option. */
     const val STAYS_FREE = "Everything else stays free: every view of your agents, readable output, typing into any terminal, snippets, every alert, and adding or removing a machine."

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import io.github.tuthan.paddock.alerts.AlertContent
+import io.github.tuthan.paddock.alerts.AlertScreen
 import io.github.tuthan.paddock.alerts.MachineHint
 import io.github.tuthan.paddock.alerts.NotificationContent
 import io.github.tuthan.paddock.alerts.PushAck
@@ -41,8 +42,10 @@ class UnifiedPushConnector(
     /** The phone's name for a machine, or null for one it no longer has. */
     private val machineName: suspend (profileId: String) -> String?,
     private val show: (NotificationContent) -> Unit,
-    /** True while the herd is in front: the screen is the alert, so no notification is raised. */
+    /** True while a herd is in front: the app is resumed and the app lock does not cover it. */
     private val herdInFront: () -> Boolean,
+    /** The machine whose herd that is (the watched one), or null. The screen is the alert only for that machine ([AlertScreen.showsIt]). */
+    private val watchedProfile: () -> String?,
     private val hideOnLockScreen: suspend () -> Boolean,
 ) {
     data class Distributor(val packageName: String, val label: String)
@@ -133,7 +136,7 @@ class UnifiedPushConnector(
     }
 
     private suspend fun raise(alert: PushEffect.Alert) {
-        if (herdInFront()) return
+        if (AlertScreen.showsIt(herdInFront(), watchedProfile(), alert.profile)) return
         val machine = machineName(alert.profile) ?: return
         // The nonce is for dedupe only; a push without one still alerts, under a nonce of the phone's own.
         val nonce = alert.nonce ?: ("t" + clock.nowMillis())

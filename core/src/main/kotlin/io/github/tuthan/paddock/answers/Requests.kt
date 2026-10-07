@@ -10,7 +10,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 
-/** What a Claude Code permission request is doing, read from the name of its file on the host (see `host/paddock-decide.py`). */
+/** What an agent's permission request is doing, read from the name of its file on the host (see `host/paddock-decide.py`). */
 enum class RequestState(val wire: String) {
     Pending("pending"), Claimed("claimed"), Consumed("consumed"), Expired("expired");
     companion object { fun of(wire: String?) = entries.firstOrNull { it.wire == wire } }
@@ -128,7 +128,7 @@ data class RequestListing(
 
 /**
  * The tool input as the sheet shows it, whole and unsummarised: each field of an input object on its own, the text of a string
- * field as it is (line breaks and all), anything else as compact JSON. What Claude Code would run is therefore readable where the
+ * field as it is (line breaks and all), anything else as compact JSON. What the agent would run is therefore readable where the
  * JSON text would hide it behind `\n` escapes. Characters that could make the text lie are shown, not obeyed: control characters,
  * the bidirectional overrides and isolates, and zero-width characters appear as `\u{...}` escapes, so a command cannot reorder or
  * hide what it says.

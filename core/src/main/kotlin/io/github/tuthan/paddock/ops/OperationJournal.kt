@@ -16,7 +16,7 @@ enum class OperationKind(val wire: String) {
     Esc("Esc"),
     CtrlC("Ctrl+C"),
     Focus("desktop focus"),
-    /** Phase 08: the phone's Yes or No for one Claude Code permission request, written by `paddock-decide.py`; never a key. */
+    /** Phase 08: the phone's Yes or No for one agent permission request, written by `paddock-decide.py`; never a key. */
     Allow("Yes"),
     Deny("No"),
     /** Phase 09: operations on a session, a workspace, a tab or a saga rather than on one terminal; see [Subject]. */

@@ -12,9 +12,10 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Maps two platform signals onto [ConnectionOwner]: the app becoming visible (any activity started after none were)
- * and the default network changing. Leases, not this class, decide which connections exist; this only nudges them.
+ * and the default network changing. Leases, not this class, decide which connections exist; this only nudges them. [onNetworkChanged] is for
+ * whoever else holds connections the owner does not know (the chips' probe).
  */
-class AndroidTriggers(private val app: Application, private val owner: ConnectionOwner) {
+class AndroidTriggers(private val app: Application, private val owner: ConnectionOwner, private val onNetworkChanged: () -> Unit = {}) {
     private var started = 0
     private var current: Network? = null
     private var seen = false
@@ -44,7 +45,7 @@ class AndroidTriggers(private val app: Application, private val owner: Connectio
             // same one back after a loss, means sockets opened earlier may be dead.
             val changed = seen && network != current
             current = network; seen = true
-            if (changed) owner.onNetworkChanged()
+            if (changed) { owner.onNetworkChanged(); onNetworkChanged() }
         }
 
         override fun onLost(network: Network) { if (network == current) current = null }

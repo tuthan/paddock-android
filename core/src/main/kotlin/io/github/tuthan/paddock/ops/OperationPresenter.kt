@@ -70,7 +70,7 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
             }
             OperationKind.Esc, OperationKind.CtrlC -> "Paddock cannot tell whether the key reached the agent. Look at the terminal."
             OperationKind.Focus -> "Paddock cannot tell whether the desktop focused the agent. Look at the desktop."
-            OperationKind.Allow, OperationKind.Deny -> "Paddock cannot tell whether Claude Code applied the answer. The request's files on the host say what the hook did with it; look at the agent."
+            OperationKind.Allow, OperationKind.Deny -> "Paddock cannot tell whether the agent applied the answer. The request's files on the host say what the hook did with it; look at the agent."
             OperationKind.Rename -> "Paddock cannot tell whether the agent was renamed. Its row shows the name herdr holds now."
             OperationKind.SessionStop, OperationKind.SessionDelete -> "Paddock cannot tell whether herdr did it. The session list, read just now, says what exists."
             OperationKind.FocusWorkspace, OperationKind.FocusTab -> "Paddock cannot tell whether the desktop moved its focus. Look at the desktop."
@@ -110,7 +110,7 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
             OperationKind.Prompt -> "Prompt sent$time · accepted by herdr, which is not a receipt for any turn"
             OperationKind.Esc, OperationKind.CtrlC -> "${kind.wire} sent$time · accepted by herdr"
             OperationKind.Focus -> "The desktop now has this agent focused${record.sentAt?.let { " · ${at(it)}" }.orEmpty()}"
-            OperationKind.Allow, OperationKind.Deny -> "${kind.wire} written$time · for the hook to hand to Claude Code, which this does not prove"
+            OperationKind.Allow, OperationKind.Deny -> "${kind.wire} written$time · for the hook to hand to the agent, which this does not prove"
             OperationKind.Rename -> "Renamed$time · accepted by herdr"
             OperationKind.SessionStop -> "Session stop sent$time · herdr says it stopped"
             OperationKind.SessionDelete -> "Session delete sent$time · herdr says it deleted"

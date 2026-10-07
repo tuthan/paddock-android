@@ -13,7 +13,7 @@ A phone with no saved machine opens on Welcome. It says what Paddock is, what mu
 | Paste a pairing link | Ghost | reads the clipboard once, then Add machine filled from the link |
 | Scan the code on the desktop | Ghost | the scanner, below |
 
-Back from Add machine returns to Welcome while there is still no machine. Settings > Add machine opens the form directly.
+Back from Add machine returns to Welcome while there is still no machine. Once there is one, **Add another machine** on the Machines screen (Home's machine chip, or Settings > Machines) opens the form directly (`docs/machines.md`).
 
 ## Connect stays on the form
 

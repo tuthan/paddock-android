@@ -10,6 +10,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.Fact
@@ -21,13 +24,13 @@ import io.github.tuthan.paddock.ui.theme.PaddockIcons
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import io.github.tuthan.paddock.wake.WakeRelay
 
-/** One command Settings shows for the user to run on the machine; Paddock never runs it. */
+/** One command a machine's page shows for the user to run on that machine; Paddock never runs it. */
 data class WakeCommandRow(val label: String, val text: String)
 
 /**
- * What Settings says about waking the watched machine: [status] in words, the [commands] that would change what is not ready, the saved
- * [relay] (an IPv4 address with an optional port), [suggestions] to put in the relay field (never saved by themselves), whether a Wake
- * tap is possible now, and the [lines] the last tap came to.
+ * What a machine's page says about waking that machine, for any saved machine, watched or not (decision D2; the section moved here from Settings on
+ * 2026-10-06): [status] in words, the [commands] that would change what is not ready, the saved [relay] (an IPv4 address with an optional port),
+ * [suggestions] to put in the relay field (never saved by themselves), whether a Wake tap is possible now, and the [lines] the last tap came to.
  */
 data class WakeWords(
     val status: String,
@@ -81,6 +84,12 @@ fun WakeOnLanSection(words: WakeWords, onCopy: (String) -> Unit, onSaveRelay: (W
             PaddockButton("Use $s", { relayText = s; error = null }, kind = ButtonKind.Ghost, small = true, fillWidth = false)
         }
         if (words.canWake) PaddockButton("Wake the machine", onWake, kind = ButtonKind.Ghost)
-        for (line in words.lines) Text(line, style = PaddockTokens.type.secondary, color = PaddockTokens.colors.dim)
+        // A polite live region: the lines appear after the tap and fill in as the machine answers, and Wake itself goes during the guard, so
+        // without it a TalkBack user would hear nothing come of the tap.
+        if (words.lines.isNotEmpty()) {
+            Column(Modifier.semantics { liveRegion = LiveRegionMode.Polite }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (line in words.lines) Text(line, style = PaddockTokens.type.secondary, color = PaddockTokens.colors.dim)
+            }
+        }
     }
 }

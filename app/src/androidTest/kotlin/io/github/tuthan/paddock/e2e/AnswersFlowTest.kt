@@ -35,7 +35,7 @@ import org.junit.Test
  * the real hook script run the way Claude Code runs it (a PermissionRequest on stdin, herdr's environment for the pane). It checks
  * at each checkpoint what only the host can see: the request files, what the hook printed, the journal on the phone.
  *
- * One process: Add machine; Settings > Guarded answers installs the two pinned scripts after a confirmation; then, for a blocked
+ * One process: Add machine; Settings > Machines > the machine > Guarded answers installs the two pinned scripts after a confirmation; then, for a blocked
  * agent, a request is answered Yes (bound to that request), another No, a newer request is offered but never swapped in under the
  * user, a cut input and an expired request leave both buttons off, and an answer whose reply is lost is shown as unknown and settled
  * by reading the host's files, with nothing sent again.
@@ -133,12 +133,16 @@ class AnswersFlowTest {
         if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()
         openAgentFromHome()
 
-        // --- Settings > Guarded answers: the hashes first, then the install, which asks ---
+        // --- Settings > Machines > the machine > Guarded answers: the hashes first, then the install, which asks ---
         back()
         waitFor("Home") { hasNode(desc("Settings", substring = false)) }
         rule.onNode(desc("Settings", substring = false)).performClick()
         waitFor("Settings") { hasNode(text("Keep prompt text")) }
-        rule.onNode(desc("Guarded answers")).performScrollTo().performClick()
+        rule.onNode(desc("Machines, ")).performScrollTo().performClick()
+        waitFor("the Machines screen") { hasNode(text("Add another machine")) }
+        rule.onNode(hasText("$user@$host:$port", substring = true) and hasClickAction()).performClick()
+        waitFor("the machine's page") { hasNode(text("Set up guarded answers…")) }
+        rule.onNode(text("Set up guarded answers…")).performScrollTo().performClick()
         waitFor("the guarded answers screen") { hasNode(text("Yes or No from the phone")) }
         waitFor("the host read: nothing installed", 30_000) { hasNode(text("Not installed on", substring = true)) }
         assertTrue("both hashes are shown before anything is installed", hasNode(desc("SHA-256 of paddock-decide.py")) && hasNode(desc("SHA-256 of paddock-claude-permission-hook.py")))
@@ -154,7 +158,8 @@ class AnswersFlowTest {
         shoot("setup-installed")
         log("SETUP registration shown: " + nodeText(text("\"PermissionRequest\"", substring = true)).replace("\n", " "))
         checkpoint("installed")
-        back(); back()
+        // The setup, the machine's page, the Machines list, Settings: four steps back to Home.
+        back(); back(); back(); back()
         openAgentFromHome()
 
         // --- Yes: the sheet shows the request whole, and the Yes is bound to that request ---
@@ -169,7 +174,7 @@ class AnswersFlowTest {
         shoot("sheet-request")
         tapYes()
         waitFor("the answer recorded", 30_000) { hasNode(text("Yes written", substring = true)) }
-        waitFor("what the host's files show", 30_000) { hasNode(text("Handed to Claude Code as Yes", substring = true)) }
+        waitFor("what the host's files show", 30_000) { hasNode(text("Handed to the agent as Yes", substring = true)) }
         assertTrue("the desktop caveat is on screen", hasNode(text("kept the desktop's answer", substring = true)))
         assertFalse("both buttons are off after an answer", enabled("Yes") || enabled("No"))
         shoot("sheet-yes")
@@ -178,10 +183,18 @@ class AnswersFlowTest {
 
         // --- No ---
         checkpoint("ready-for-no")
+        // Review prompt on Home lands on the Output tab, where the request entry is, for an agent the phone can answer (not on the Terminal, which only
+        // observes): reported by a user who tapped Review and found the terminal instead of the Yes/No page.
+        back()
+        waitFor("Review prompt for the blocked agent on Home", 60_000) { hasNode(text("Review prompt")) }
+        rule.onNodeWithText("Review prompt").performClick()
+        waitFor("the Output tab") { hasNode(desc("Terminal output")) }
+        assertFalse("Review prompt did not land on the Terminal tab", hasNode(text("Request control")))
+        shoot("review-lands-on-output")
         openSheetFromEntry("e2e-two")
         tapNo()
         waitFor("the No recorded", 30_000) { hasNode(text("No written", substring = true)) }
-        waitFor("what the host's files show", 30_000) { hasNode(text("Handed to Claude Code as No", substring = true)) }
+        waitFor("what the host's files show", 30_000) { hasNode(text("Handed to the agent as No", substring = true)) }
         shoot("sheet-no")
         checkpoint("no-tapped")
         back()
@@ -243,7 +256,7 @@ class AnswersFlowTest {
         }
         val settled = nodeText(text("Read from the host's files:", substring = true)).lines().first { "Read from the host's files:" in it }
         log("SETTLED $settled")
-        assertTrue("it says the hook took the answer and keeps the caveat: $settled", settled.contains("Handed to Claude Code as Yes") && settled.contains("kept the desktop's answer"))
+        assertTrue("it says the hook took the answer and keeps the caveat: $settled", settled.contains("Handed to the agent as Yes") && settled.contains("kept the desktop's answer"))
         assertFalse("still nothing to answer", enabled("Yes") || enabled("No"))
         shoot("sheet-settled")
         checkpoint("settled")

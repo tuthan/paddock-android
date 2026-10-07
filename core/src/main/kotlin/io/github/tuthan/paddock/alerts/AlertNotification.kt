@@ -130,4 +130,6 @@ class LocalAlertRules(private val capacity: Int = 256) {
 interface AlertNotifier {
     fun show(content: NotificationContent)
     fun cancelAll()
+    /** Cancels the notifications that are for [profileId]'s machine and no other's. */
+    fun cancelFor(profileId: String)
 }

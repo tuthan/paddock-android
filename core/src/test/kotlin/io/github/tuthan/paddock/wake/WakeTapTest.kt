@@ -143,6 +143,26 @@ class WakeTapTest {
         assertNull(t.facts.value, "a connection coming up later must not bring the old machine's facts back")
     }
 
+    @Test fun aSwitchWhileThePacketIsBeingSentRecordsNothingAndReconnectsNothing() = runBlocking<Unit> {
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val t = tap { sends.incrementAndGet(); release.await(); sent }
+        t.tap()
+        until("the send started") { sends.get() == 1 }
+        // Another machine becomes the watched one (AppGraph.watch, MachineWake.watching) while this packet is on its way.
+        t.forget()
+        release.complete(Unit)
+        delay(150)
+        assertNull(t.facts.value, "the new machine is not told a packet was sent to it")
+        assertEquals(0, reconnects.get(), "and its connection is not asked to reconnect for the old machine's packet")
+        link.value = live
+        delay(150)
+        assertNull(t.facts.value, "nor followed")
+        // The tap is released: the next one, for the machine watched now, sends.
+        t.tap()
+        until("the next tap's facts") { t.facts.value != null }
+        assertEquals(2, sends.get())
+    }
+
     @Test fun followingEndsAfterItsTime() = runBlocking<Unit> {
         val t = tap(followMillis = 100)
         t.tap()

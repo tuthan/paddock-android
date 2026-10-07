@@ -15,6 +15,16 @@ class AppSettingsTest {
         assertTrue(FileAppSettingsStore(file).load().protectSensitiveScreens)
     }
 
+    @Test fun theLockIsOffByDefaultAndItsChoicesSurviveARestartAndAnOlderFileHasNone() = runBlocking {
+        assertEquals(false, AppSettings().appLock)
+        assertEquals(60, AppSettings().appLockAfterSeconds)
+        FileAppSettingsStore(file).save(AppSettings(appLock = true, appLockAfterSeconds = 300))
+        val back = FileAppSettingsStore(file).load()
+        assertEquals(true, back.appLock); assertEquals(300, back.appLockAfterSeconds)
+        file.writeText("""{"protectSensitiveScreens": true}""")
+        assertEquals(false, FileAppSettingsStore(file).load().appLock, "a file written before the lock existed")
+    }
+
     @Test fun aSavedChoiceSurvivesANewStore() = runBlocking {
         FileAppSettingsStore(file).save(AppSettings(protectSensitiveScreens = false))
         assertEquals(AppSettings(false), FileAppSettingsStore(file).load())
@@ -39,6 +49,15 @@ class AppSettingsTest {
         assertEquals(AppSettings(false, watchedProfileId = null), FileAppSettingsStore(file).load())
         file.writeText("""{"watchedProfileId": [1]}""")
         assertEquals(AppSettings(), FileAppSettingsStore(file).load())
+    }
+
+    @Test fun theChosenMachineIsRememberedApartFromTheWatchedOneAndAnOlderFileHasNone() = runBlocking {
+        FileAppSettingsStore(file).save(AppSettings(watchedProfileId = "desk", chosenProfileId = "laptop"))
+        assertEquals(AppSettings(watchedProfileId = "desk", chosenProfileId = "laptop"), FileAppSettingsStore(file).load(), "a round trip keeps both")
+        file.writeText("""{"protectSensitiveScreens": false, "watchedProfileId": "laptop"}""")
+        val older = FileAppSettingsStore(file).load()
+        assertEquals(null, older.chosenProfileId, "a file from before the choice loads with none; the app fills it at start")
+        assertEquals(AppSettings(protectSensitiveScreens = false, watchedProfileId = "laptop"), older, "and keeps everything else")
     }
 
     @Test fun saveLeavesNoTempFileBehind() = runBlocking {

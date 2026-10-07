@@ -97,11 +97,14 @@ class HostSessionController(
     /** The pinned `paddock-alert-relay.py` and its hash (Phase 07); installed only when the user asks on the alert relay screen. */
     private val alertScript: ByteArray? = null,
     private val alertSha256: String? = null,
-    /** The pinned `paddock-decide.py` and `paddock-claude-permission-hook.py` with their hashes (Phase 08); installed only when the user asks on the answers screen. */
+    /** The pinned `paddock-decide.py`, `paddock-claude-permission-hook.py` and (beside them) the opencode plugin with their hashes (Phase 08); installed only when the user asks on the answers screen. */
     private val decideScript: ByteArray? = null,
     private val decideSha256: String? = null,
     private val hookScript: ByteArray? = null,
     private val hookSha256: String? = null,
+    /** The pinned opencode plugin (the answers screen installs it beside the hook); null on a build that ships none. */
+    private val opencodeScript: ByteArray? = null,
+    private val opencodeSha256: String? = null,
     /** Where start-agent sagas are kept (Phase 09); null leaves the monitored host without the start-agent flow. */
     private val sagaStore: io.github.tuthan.paddock.ops.SagaStore? = null,
     /**
@@ -111,7 +114,17 @@ class HostSessionController(
      */
     private val wakeCapture: (suspend (SshSession) -> io.github.tuthan.paddock.wake.WakeReading)? = null,
     private val wakeCaptureTimeoutMillis: Long = 5_000,
+    /**
+     * Asks the machine which OS it is, for the icon on its card (`uname -s`); null skips it. Run once per bring-up beside the first read, not
+     * before it, so it never delays the herd. Best effort: a machine that cannot answer is "not known", never a failed connection.
+     */
+    private val osProbe: (suspend (SshSession) -> io.github.tuthan.paddock.hostprofile.HostOs?)? = null,
+    private val osProbeTimeoutMillis: Long = 5_000,
 ) {
+    private val _os = MutableStateFlow<io.github.tuthan.paddock.hostprofile.HostOs?>(null)
+    /** What the last bring-up learned about the machine's OS; null until a probe has answered (a machine that cannot tell leaves it null). */
+    val os: StateFlow<io.github.tuthan.paddock.hostprofile.HostOs?> = _os.asStateFlow()
+
     private val _wake = MutableStateFlow<io.github.tuthan.paddock.wake.WakeReading?>(null)
     /** What the last bring-up read about waking this machine; null until a capture has finished (a capture cut off at the timeout leaves it as it was). */
     val wake: StateFlow<io.github.tuthan.paddock.wake.WakeReading?> = _wake.asStateFlow()
@@ -250,8 +263,22 @@ class HostSessionController(
         }
     }
 
+    private fun probeOs(session: SshSession) {
+        val probe = osProbe ?: return
+        scope.launch {
+            try {
+                kotlinx.coroutines.withTimeoutOrNull(osProbeTimeoutMillis) { probe(session) }?.let { _os.value = it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // An icon is a convenience: a failed probe is "not known", never a failed connection.
+            }
+        }
+    }
+
     private suspend fun proceed(session: SshSession, installer: RelayInstaller, home: String, herdr: String?, plugin: PluginLocation?) {
         val path = installer.verifiedPath(home)
+        probeOs(session)
         captureWake(session)
         if (herdr == null) {
             _phase.value = HostPhase.Problem(io.github.tuthan.paddock.cli.HerdrLocator.notFoundMessage())
@@ -281,6 +308,7 @@ class HostSessionController(
                 session, RelayInstaller(session, decideScript, decideSha256!!, fileName = "paddock-decide.py"),
                 RelayInstaller(session, hookScript, hookSha256!!, fileName = "paddock-claude-permission-hook.py"), clock,
                 herdrSession = chosen.name, phoneLabel = profile.name.take(64),
+                plugin = opencodeScript?.let { RelayInstaller(session, it, opencodeSha256!!, fileName = "paddock-opencode-permission.js") },
             ) else null,
             sagaStore = sagaStore,
         )

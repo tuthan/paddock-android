@@ -201,6 +201,8 @@ class TerminalSession(
     private var closedRecordSeen = false
     private val sequencer = FrameSequencer()
     private var viewport = Pair(80, 24)
+    /** The viewport the open observer was sized for, so a viewport that wandered and came back does not reconnect it. */
+    private var observedViewport = viewport
     private var paused = false
     private var protocolErrors = 0
     private var arrivedNanos = 0L
@@ -281,7 +283,8 @@ class TerminalSession(
             when (cmd) {
                 is Cmd.Open -> { viewport = cmd.cols to cmd.rows; if (kind == null && !paused) connect(Kind.Observe, probe = true) }
                 is Cmd.Viewport -> viewportChanged(cmd.cols, cmd.rows)
-                is Cmd.ViewportSettled -> if (cmd.token == settleToken && kind == Kind.Observe && _view.value.pty == null) connect(Kind.Observe, probe = false)
+                is Cmd.ViewportSettled ->
+                    if (cmd.token == settleToken && kind == Kind.Observe && _view.value.pty == null && viewport != observedViewport) connect(Kind.Observe, probe = false)
                 is Cmd.Control -> requestControl(cmd.takeover)
                 Cmd.InstallThenControl -> installThenControl()
                 Cmd.Release -> release0()
@@ -382,6 +385,7 @@ class TerminalSession(
             // the better guess than none. A fresh success replaces it.
             if (size != null) _view.update { it.copy(pty = size) }
         }
+        observedViewport = viewport
         val size = _view.value.pty ?: PtySize(viewport.first, viewport.second)
         val cols = size.cols.coerceIn(1, TerminalLimits.MAX_COLS)
         val rows = size.rows.coerceIn(1, TerminalLimits.MAX_ROWS)

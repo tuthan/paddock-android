@@ -139,6 +139,7 @@ class MonitoredHost(
     val answers: io.github.tuthan.paddock.answers.AnswerController? = if (journal != null && answerHost != null) io.github.tuthan.paddock.answers.AnswerController(
         scope, answerHost, journal, { reconciler.installed.value },
         { id -> reconciler.installed.value?.snapshot?.agents?.firstOrNull { it.terminalId == id }?.agentStatus }, clock,
+        agentKind = { id -> reconciler.installed.value?.snapshot?.agents?.firstOrNull { it.terminalId == id }?.agent },
     ) else null
 
     /** Every row of the operation journal, oldest first: the composer's gate and Activity read it. Empty without a journal. */

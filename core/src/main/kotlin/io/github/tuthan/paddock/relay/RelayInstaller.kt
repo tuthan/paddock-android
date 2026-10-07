@@ -47,7 +47,7 @@ class RelayInstaller(
 ) {
     init {
         require(sha256Hex(script) == expectedSha256) { "bundled $fileName does not match its pinned hash" }
-        require(Regex("paddock-[a-z]+(-[a-z]+)*\\.py").matches(fileName)) { "unexpected script name" }
+        require(Regex("paddock-[a-z]+(-[a-z]+)*\\.(py|js)").matches(fileName)) { "unexpected script name" }
     }
 
     @Volatile private var viaPlugin = false
@@ -70,7 +70,9 @@ class RelayInstaller(
     fun destination(home: String) = if (viaPlugin && plugin != null) "${plugin.dir}/host/$fileName" else pushDestination(home)
 
     private suspend fun hashAt(path: String): String? {
-        val r = session.exec(listOf("sha256sum", "--", path), limits = SMALL)
+        var r = session.exec(listOf("sha256sum", "--", path), limits = SMALL)
+        // A Mac has no `sha256sum` (the shell says "not found", exit 127) but has `shasum`, which prints the same "hash  path" line.
+        if (r.exit == 127) r = session.exec(listOf("shasum", "-a", "256", "--", path), limits = SMALL)
         return if (r.exit != 0) null else r.stdout.toString(Charsets.UTF_8).trim().substringBefore(' ')
     }
 

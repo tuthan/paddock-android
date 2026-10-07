@@ -7,8 +7,12 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -17,6 +21,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.Density
+import io.github.tuthan.paddock.billing.ProCapabilities
 import io.github.tuthan.paddock.herdr.SessionEntry
 import io.github.tuthan.paddock.live.SessionRow
 import io.github.tuthan.paddock.live.SpacesState
@@ -33,6 +38,7 @@ import io.github.tuthan.paddock.ops.SavedLayoutResult
 import io.github.tuthan.paddock.ops.SessionCopy
 import io.github.tuthan.paddock.ops.SessionRules
 import io.github.tuthan.paddock.ui.components.HostHealth
+import io.github.tuthan.paddock.ui.components.PRO_LOCK_TAG
 import io.github.tuthan.paddock.ui.screens.RecoveryCard
 import io.github.tuthan.paddock.ui.screens.RenameDialog
 import io.github.tuthan.paddock.ui.screens.RowActionsDialog
@@ -74,8 +80,11 @@ class SpacesTest {
     private fun state(
         rows: List<SessionRow>, cards: List<SagaCardModel> = emptyList(), progress: SagaProgress? = null, notice: String? = null,
         start: StartAvailability = StartAvailability.Available(listOf(WorkspaceChoice("w_1", "paddock"), WorkspaceChoice("w_2", "notes"))),
-        list: SpacesState = SpacesState.Ready(rows, 1_790_000_000_000),
-    ) = SpacesScreenState("Laptop", "Connected", HostHealth.Live, list, notice, "main", cards, progress, start)
+        list: SpacesState = SpacesState.Ready(rows, 1_790_000_000_000), locked: Set<String> = emptySet(),
+    ) = SpacesScreenState("Laptop", "Connected", HostHealth.Live, list, notice, "main", cards, progress, start, locked = locked)
+
+    /** Every Pro capability this screen offers, locked: Start an agent, Stop and Delete draw the lock and the tag (D6). */
+    private val allLocked = setOf(ProCapabilities.START_AGENT.id, ProCapabilities.MANAGE_SESSIONS.id)
 
     private fun show(s: SpacesScreenState, fontScale: Float? = null, dark: Boolean = true): Calls {
         val calls = Calls()
@@ -246,6 +255,28 @@ class SpacesTest {
         button("Restart").performScrollTo().assertIsDisplayed()
     }
 
+    @Test fun lockedControlsShowTheirPlainLabelWithTheProTagAndAreReadAsLabelThenPro() {
+        show(state(listOf(main, stopped), locked = allLocked))
+        for (label in listOf("Start an agent…", "Stop…", "Delete…")) {
+            rule.onNode(hasContentDescription("$label · Pro") and hasClickAction()).performScrollTo().assertIsDisplayed()
+            rule.onNode(hasText(label) and hasText("Pro") and hasClickAction()).assertExists()
+            // AC-4: the glyph as well as the tag, inside this button.
+            rule.onNode(hasTestTag(PRO_LOCK_TAG) and hasAnyAncestor(hasContentDescription("$label · Pro")), useUnmergedTree = true).assertExists()
+        }
+        // The " · Pro" suffix is for text rows; no button shows it.
+        assertEquals(0, rule.onAllNodes(hasText(" · Pro", substring = true)).fetchSemanticsNodes().size)
+    }
+
+    @Test fun at200PercentFontLockedControlsStayReachableWithTheirTag() {
+        show(state(listOf(main, stopped), locked = allLocked), fontScale = 2f)
+        for (label in listOf("Start an agent…", "Stop…", "Delete…")) {
+            rule.onNode(hasContentDescription("$label · Pro") and hasClickAction()).performScrollTo().assertIsDisplayed()
+            // The tag is never clipped or squeezed out: with no room beside the label it moves, whole, under it.
+            rule.onNode(hasText(label) and hasText("Pro") and hasClickAction()).assertExists()
+            rule.onNode(hasText("Pro") and hasAnyAncestor(hasContentDescription("$label · Pro")), useUnmergedTree = true).assertIsDisplayed()
+        }
+    }
+
     @Test fun theRowActionsDialogOpensOnCancelAndEachChoiceIsItsOwnButton() {
         var renamed = 0; var ws = 0; var tab = 0; var dismissed = 0
         rule.setContent { PaddockTheme(darkTheme = true) { RowActionsDialog("fix the build", { renamed++ }, { ws++ }, { tab++ }, { dismissed++ }) } }
@@ -277,11 +308,59 @@ class SpacesTest {
 
     @Test fun theStartFormReturnsExactlyWhatWasFilledIn() {
         var form: StartForm? = null
-        rule.setContent { PaddockTheme(darkTheme = true) { StartAgentForm(listOf(WorkspaceChoice("w_1", "paddock")), onCancel = {}, onStart = { form = it }) } }
+        rule.setContent { PaddockTheme(darkTheme = true) { StartAgentForm(listOf(WorkspaceChoice("w_1", "paddock")), emptyList(), onCancel = {}, onStart = { form = it }) } }
         rule.onNodeWithText("Name").performTextInput("worker-1")
         button("Start agent").performScrollTo().assertIsEnabled().performClick()
         assertEquals(StartForm("w_1", "claude", "worker-1", null, null), form)
         assertNull(form!!.branch)
+    }
+
+    private val openFolders = listOf("/home/u/paddock", "/home/u/notes")
+
+    @Test fun aFolderOfTheUsersOwnNeedsAFullPathAndIsReturnedTrimmed() {
+        var form: StartForm? = null
+        rule.setContent { PaddockTheme(darkTheme = true) { StartAgentForm(listOf(WorkspaceChoice("w_1", "paddock")), openFolders, onCancel = {}, onStart = { form = it }) } }
+        rule.onNodeWithText("Name").performTextInput("worker-1")
+        // The default is the workspace's own folder, and no path field is drawn for it.
+        rule.onNodeWithText("The workspace's folder").performScrollTo().assertIsSelected()
+        rule.onNodeWithText("Folder path").assertDoesNotExist()
+        rule.onNodeWithText("Another folder on the machine").performScrollTo().performClick().assertIsSelected()
+        button("Start agent").performScrollTo().assertIsNotEnabled()
+        // A relative path means nothing on the machine: said in words, and Start stays off.
+        rule.onNodeWithText("Folder path").performScrollTo().performTextInput("api")
+        rule.onNodeWithText("Type the full path, starting with / or ~/ (the home folder).").assertIsDisplayed()
+        button("Start agent").performScrollTo().assertIsNotEnabled()
+        rule.onNodeWithText("Folder path").performTextReplacement("  ~/projects/api  ")
+        button("Start agent").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(StartForm("w_1", "claude", "worker-1", null, null, "~/projects/api"), form)
+    }
+
+    @Test fun aFolderAlreadyOpenOnTheMachineFillsThePathWithOneTap() {
+        var form: StartForm? = null
+        rule.setContent { PaddockTheme(darkTheme = true) { StartAgentForm(listOf(WorkspaceChoice("w_1", "paddock")), openFolders, onCancel = {}, onStart = { form = it }) } }
+        rule.onNodeWithText("Name").performTextInput("worker-1")
+        rule.onNodeWithText("Another folder on the machine").performScrollTo().performClick()
+        rule.onNodeWithText("Folders open on this machine").performScrollTo().assertIsDisplayed()
+        rule.onNode(hasText("/home/u/notes") and hasClickAction() and !hasSetTextAction()).performScrollTo().performClick()
+        // Once it is the typed path it is no longer offered again, and the field holds it.
+        rule.onNode(hasText("/home/u/notes") and hasClickAction() and !hasSetTextAction()).assertDoesNotExist()
+        rule.onNode(hasText("/home/u/notes") and hasSetTextAction()).assertExists()
+        button("Start agent").performScrollTo().assertIsEnabled().performClick()
+        assertEquals("/home/u/notes", form!!.folder)
+    }
+
+    @Test fun aWorktreeHasNoFolderChoiceAndSendsNoFolder() {
+        var form: StartForm? = null
+        rule.setContent { PaddockTheme(darkTheme = true) { StartAgentForm(listOf(WorkspaceChoice("w_1", "paddock")), openFolders, onCancel = {}, onStart = { form = it }) } }
+        rule.onNodeWithText("Name").performTextInput("worker-1")
+        rule.onNodeWithText("Another folder on the machine").performScrollTo().performClick()
+        rule.onNodeWithText("Folder path").performScrollTo().performTextInput("/srv/api")
+        // A worktree is a folder of its own: choosing one drops the folder, and the choice is gone from the form.
+        rule.onNodeWithText("Start in a new worktree").performScrollTo().performClick()
+        rule.onNodeWithText("Another folder on the machine").assertDoesNotExist()
+        rule.onNodeWithText("Branch").performScrollTo().performTextInput("feature-x")
+        button("Start agent").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(StartForm("w_1", "claude", "worker-1", "feature-x", null, null), form)
     }
 
     private fun androidx.compose.ui.test.junit4.ComposeContentTestRule.onAllNodesWithTextCompat(t: String) =
@@ -301,6 +380,23 @@ class SpacesTest {
 
     @Test fun auditSpacesDark() { show(state(listOf(main, stopped, stoppedDefault))); SemanticsAudit.expectClean(rule, "Spaces, dark") }
     @Test fun auditSpacesLight() { show(state(listOf(main, stopped, stoppedDefault)), dark = false); SemanticsAudit.expectClean(rule, "Spaces, light") }
+    // Locked (D6): the tag's word is measured as drawn on the Primary and Danger buttons, and every locked button keeps its 48 dp and its spoken name.
+    @Test fun auditSpacesLockedDark() { show(state(listOf(main, stopped), locked = allLocked)); SemanticsAudit.expectClean(rule, "Spaces locked, dark") }
+    @Test fun auditSpacesLockedLight() { show(state(listOf(main, stopped), locked = allLocked), dark = false); SemanticsAudit.expectClean(rule, "Spaces locked, light") }
+    @Test fun auditStartFormWithAFolderDark() {
+        rule.setContent { PaddockTheme(darkTheme = true) { StartAgentForm(listOf(WorkspaceChoice("w_1", "paddock")), openFolders, onCancel = {}, onStart = {}) } }
+        rule.onNodeWithText("Another folder on the machine").performScrollTo().performClick()
+        rule.onNodeWithText("Folder path").performScrollTo().performTextInput("api")
+        // The keyboard is not part of the screen's own drawing, and the audit samples pixels of the window.
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        rule.waitForIdle()
+        SemanticsAudit.expectClean(rule, "Start form with a folder, dark")
+    }
+    @Test fun auditStartFormWithAFolderLight() {
+        rule.setContent { PaddockTheme(darkTheme = false) { StartAgentForm(listOf(WorkspaceChoice("w_1", "paddock")), openFolders, onCancel = {}, onStart = {}) } }
+        rule.onNodeWithText("Another folder on the machine").performScrollTo().performClick()
+        SemanticsAudit.expectClean(rule, "Start form with a folder, light")
+    }
     @Test fun auditRowActionsDialog() { rule.setContent { PaddockTheme(darkTheme = true) { RowActionsDialog("fix the build", {}, {}, {}, {}) } }; SemanticsAudit.expectClean(rule, "Row actions dialog, dark", SemanticsAudit.Options(heading = false)) }
     @Test fun auditRenameDialog() { rule.setContent { PaddockTheme(darkTheme = true) { RenameDialog("worker-1", {}, {}) } }; SemanticsAudit.expectClean(rule, "Rename dialog, dark", SemanticsAudit.Options(heading = false)) }
 

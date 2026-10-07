@@ -23,7 +23,7 @@ class HostScriptPinTest {
 
     @Test fun everyScriptInHostIsPinnedAndNothingElseIs() {
         val scripts = host.listFiles { f -> f.isFile && f.name != "SOURCE.json" }!!.map { it.name }.sorted()
-        assertEquals(listOf("alert-relay.example.toml", "paddock-alert-relay.py", "paddock-alert-relay.service", "paddock-claude-permission-hook.py", "paddock-control.py", "paddock-decide.py", "paddock-relay.py"), scripts)
+        assertEquals(listOf("alert-relay.example.toml", "paddock-alert-relay.py", "paddock-alert-relay.service", "paddock-claude-permission-hook.py", "paddock-control.py", "paddock-decide.py", "paddock-opencode-permission.js", "paddock-relay.py"), scripts)
         for (name in scripts) assertEquals(pinOf(name), sha256Hex(host.resolve(name).readBytes()), "$name differs from its pin in host/SOURCE.json")
         assertEquals(scripts.size, Regex("\"host/[^\"]+\"\\s*:").findAll(source).count(), "a pin for a file that is not there")
     }
@@ -56,18 +56,34 @@ class HostScriptPinTest {
 
     private fun modulesOf(text: String) = text.lines().mapNotNull { Regex("^\\s*(?:import|from)\\s+([a-zA-Z_.]+)").find(it)?.groupValues?.get(1) }.toSet()
 
-    @Test fun thePermissionHookUsesTheStandardLibraryOnlyAsksHerdrForOneStatusAndRunsNoShellNorHerdrBinary() {
+    @Test fun thePermissionHookUsesTheStandardLibraryOnlyAsksHerdrOnlyWhatItNeedsAndRunsNoShellNorHerdrBinary() {
         val text = codeOf(host.resolve("paddock-claude-permission-hook.py").readText())
         val stdlib = setOf("json", "os", "sys", "time", "re", "socket", "signal", "stat", "tomllib")
         assertEquals(emptySet(), modulesOf(text) - stdlib, "the hook imports only the standard library")
         for (banned in listOf("shell=True", "os.system", "eval(", "exec(", "os.popen", "subprocess", "pickle", "marshal", "urllib", "http")) assertFalse(banned in text, "$banned in the hook")
-        // The only thing it asks herdr is one agent's status; it never reports a state, reads pane text or sends a key.
-        assertEquals(setOf("agent.get"), Regex("\"method\": \"([a-z._]+)\"").findAll(text).map { it.groupValues[1] }.toSet())
-        for (banned in listOf("pane.read", "agent.read", "send_keys", "agent.prompt", "report_agent", "report-agent", "\"terminal.", "updatedInput", "updatedPermissions")) assertFalse(banned in text, "$banned in the hook")
+        // What it asks herdr: one agent's status (every agent); for Codex only, the list of agents (to find the pane under Codex's shared daemon).
+        // It never writes to herdr (no state report, no release: measured against a real Codex, a `blocked` report was refused by herdr's own Codex integration
+        // and left a pane stuck when the hook was killed), never reads pane text and never sends a key.
+        assertEquals(setOf("agent.get", "agent.list"), Regex("self\\.call\\(\"([a-z._]+)\"").findAll(text).map { it.groupValues[1] }.toSet())
+        for (banned in listOf("pane.read", "agent.read", "send_keys", "agent.prompt", "report-agent", "pane.report", "pane.release", "\"state\":", "\"terminal.", "updatedInput", "updatedPermissions")) assertFalse(banned in text, "$banned in the hook")
         assertTrue(host.resolve("paddock-claude-permission-hook.py").readText().startsWith("#!/usr/bin/env python3"))
         assertTrue("os._exit(0)" in text && "sys.exit(2)" !in text, "it never ends with Claude Code's blocking status")
         val version = Regex("\"permission_hook_version\"\\s*:\\s*(\\d+)").find(source)!!.groupValues[1]
         assertEquals(version, Regex("(?m)^VERSION = (\\d+)$").find(text)!!.groupValues[1], "the script's VERSION and host/SOURCE.json disagree")
+        assertEquals("1", Regex("(?m)^PROTOCOL = (\\d+)").find(text)!!.groupValues[1], "the request file's version is the one paddock-decide.py and the phone read")
+    }
+
+    /** The opencode plugin runs inside the user's opencode, so what it may touch is pinned down: one fixed script, one local reply route. */
+    @Test fun theOpencodePluginRunsOnlyThePinnedHookAndRepliesOnlyOnceOrReject() {
+        val raw = host.resolve("paddock-opencode-permission.js").readText()
+        val text = raw.lines().filterNot { it.trimStart().startsWith("//") }.joinToString("\n")
+        assertEquals(setOf("node:child_process"), Regex("(?m)^import .* from \"([^\"]+)\"").findAll(text).map { it.groupValues[1] }.toSet())
+        for (banned in listOf("eval(", "new Function", "fetch(", "http://", "https://", "require(", "process.env.PADDOCK", "writeFile", "unlink", "exec(", "execSync", "shell:")) assertFalse(banned in text, "$banned in the plugin")
+        assertEquals(1, Regex("spawn\\(").findAll(text).count())
+        assertTrue("spawn(\"python3\", [HOOK, \"--agent\", \"opencode\"]" in text && "/.local/share/paddock/paddock-claude-permission-hook.py" in text)
+        assertEquals(setOf("once", "reject"), Regex("answer\\(p\\.id, \"([a-z]+)\"").findAll(text).map { it.groupValues[1] }.toSet(), "never `always`")
+        assertFalse("always" in text.replace("never `always`", ""), "the plugin never answers with a rule")
+        assertTrue("/permission/" in text && "/reply" in text)
     }
 
     @Test fun theDecisionWriterUsesTheStandardLibraryOnlyAndTouchesNothingButRequestFiles() {
@@ -89,7 +105,7 @@ class HostScriptPinTest {
         val pin = pinOf("paddock-control.py")!!
         RelayInstaller(FakeSession(), control, pin, fileName = "paddock-control.py")
         assertFailsWith<IllegalArgumentException> { RelayInstaller(FakeSession(), control + "#".toByteArray(), pin, fileName = "paddock-control.py") }
-        for (bad in listOf("../x.py", "paddock-control.sh", "paddock-.py", "paddock--x.py", "paddock-x-.py", "other.py", "paddock-control.py ", "paddock-Control.py"))
+        for (bad in listOf("../x.py", "paddock-control.sh", "paddock-.py", "paddock--x.py", "paddock-x-.py", "other.py", "paddock-control.py ", "paddock-Control.py", "paddock-x.jsx", "paddock-x.js.py", "paddock-x.mjs"))
             assertFailsWith<IllegalArgumentException>(bad) { RelayInstaller(FakeSession(), control, pin, fileName = bad) }
     }
 

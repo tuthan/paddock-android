@@ -94,12 +94,12 @@ class DecisionPresenterTest {
         assertNull(model.whyNot)
     }
 
-    @Test fun aConsumedAnswerIsHandedToClaudeCodeWithTheDesktopCaveat() {
+    @Test fun aConsumedAnswerIsHandedToTheAgentWithTheDesktopCaveat() {
         val r = AnswerResult(ID_A, Behavior.Deny, OperationResult.Acknowledged(row(OperationKind.Deny, OperationOutcome.Acknowledged), Unit), now)
         val waiting = m(view(outcome = RequestOutcome.Consumed(Behavior.Deny), result = r))
-        assertEquals("Handed to Claude Code as No. Waiting for the agent to move on. ${DecisionPresenter.CAVEAT}", waiting.status)
+        assertEquals("Handed to the agent as No. Waiting for the agent to move on. ${DecisionPresenter.CAVEAT}", waiting.status)
         val moved = m(view(outcome = RequestOutcome.Consumed(Behavior.Deny), result = r, working = true))
-        assertEquals("Handed to Claude Code as No. The agent moved on. ${DecisionPresenter.CAVEAT}", moved.status)
+        assertEquals("Handed to the agent as No. The agent moved on. ${DecisionPresenter.CAVEAT}", moved.status)
         assertEquals(ResultTone.Ok, moved.statusTone)
     }
 
@@ -135,7 +135,7 @@ class DecisionPresenterTest {
 
     @Test fun settlingStatesWhatTheFilesShowAndNeverThatTheAnswerWasApplied() {
         assertTrue("never reached" in DecisionPresenter.settled(RequestOutcome.Waiting))
-        assertTrue(DecisionPresenter.settled(RequestOutcome.Consumed(Behavior.Allow)).startsWith("Read from the host's files: Handed to Claude Code as Yes."))
+        assertTrue(DecisionPresenter.settled(RequestOutcome.Consumed(Behavior.Allow)).startsWith("Read from the host's files: Handed to the agent as Yes."))
         assertTrue(DecisionPresenter.settled(RequestOutcome.Consumed(Behavior.Allow)).endsWith(DecisionPresenter.CAVEAT))
         assertTrue("Expired" in DecisionPresenter.settled(RequestOutcome.Expired))
         assertTrue("gone" in DecisionPresenter.settled(RequestOutcome.Gone))
@@ -152,6 +152,11 @@ class DecisionPresenterTest {
         assertNull(DecisionPresenter.entry(view(listing = listingOf(entries = emptyList(), candidate = null), shown = null, outcome = null), now))
         val expired = view(listing = listingOf(candidate = request(expires = 1_500)))
         assertNull(DecisionPresenter.entry(expired, now))
+    }
+
+    @Test fun aQuestionThatIsNotAPermissionGetsNoEntry() {
+        for (tool in listOf("AskUserQuestion", "ExitPlanMode")) assertNull(DecisionPresenter.entry(view(listing = listingOf(candidate = request(tool = tool))), now), tool)
+        assertNotNull(DecisionPresenter.entry(view(listing = listingOf(candidate = request(tool = "Bash"))), now))
     }
 
     @Test fun aRequestTooLargeToShowStillGetsAnEntryWithNoToolName() {

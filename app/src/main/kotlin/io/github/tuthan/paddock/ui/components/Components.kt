@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -32,10 +35,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -50,6 +55,7 @@ import io.github.tuthan.paddock.attention.AgentMarks
 import io.github.tuthan.paddock.attention.AgentRowModel
 import io.github.tuthan.paddock.attention.Section
 import io.github.tuthan.paddock.attention.StateWord
+import io.github.tuthan.paddock.hostprofile.MachineCopy
 import io.github.tuthan.paddock.live.PreviewState
 import io.github.tuthan.paddock.ui.theme.PaddockAgentGlyphs
 import io.github.tuthan.paddock.ui.theme.PaddockColors
@@ -344,48 +350,149 @@ fun HerdSummary(text: String, modifier: Modifier = Modifier, flag: String? = nul
     )
 }
 
-/** The host chip's health. */
-enum class HostHealth { Live, Degraded, Connecting }
+/** The host chip's health, with the word TalkBack and the machine list say for it (`MachineCopy`). */
+enum class HostHealth(val word: String) { Live(MachineCopy.LIVE), Degraded(MachineCopy.NOT_LIVE), Connecting(MachineCopy.CONNECTING) }
 
 /**
  * The watched machine as a chip with its reachability dot, then how fresh the screen is ("live · 3 s", "as of 14:02")
- * on a dashed chip. Read together by TalkBack. With [onClick] the whole chip opens the machine list (Home): a chevron says so, and the target is 48 dp.
+ * on a dashed chip. Read together by TalkBack, in the words of the chip row's watched chip (`MachineCopy.chipWatched`: "Alpha, watching, live · 3 s"),
+ * so adding a second machine does not change how the same chip sounds. With [onClick] the whole chip opens the Machines screen (Home): a small caret
+ * says it opens something, and the target is 48 dp. Home draws this while one machine is saved; with two or more it draws [MachineChipRow].
  */
 @Composable
 fun HostChip(name: String, status: String, modifier: Modifier = Modifier, health: HostHealth = HostHealth.Live, onClick: (() -> Unit)? = null) {
-    val c = PaddockTokens.colors
-    val pill = RoundedCornerShape(50)
-    val healthWord = when (health) { HostHealth.Live -> "live"; HostHealth.Degraded -> "not live"; HostHealth.Connecting -> "connecting" }
     Row(
-        modifier.then(if (onClick != null) Modifier.heightIn(min = 48.dp).clickable(onClickLabel = "Show saved machines", role = Role.Button, onClick = onClick) else Modifier)
-            .semantics(mergeDescendants = true) { contentDescription = "$name, $healthWord, $status" },
+        modifier.then(if (onClick != null) Modifier.heightIn(min = 48.dp).clickable(onClickLabel = SHOW_MACHINES, role = Role.Button, onClick = onClick) else Modifier)
+            .semantics(mergeDescendants = true) { contentDescription = MachineCopy.chipWatched(name, health.word, status) },
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
     ) {
-        val (bg, border, fg, dot) = when (health) {
-            HostHealth.Live -> listOf(c.accent.copy(alpha = 0.14f), c.accent.copy(alpha = 0.5f), c.title, c.done)
-            HostHealth.Degraded -> listOf(c.surface, c.attention.copy(alpha = 0.5f), c.attention, c.attention)
-            HostHealth.Connecting -> listOf(c.surface, c.control(), c.text, c.faint)
-        }
-        Row(
-            Modifier.heightIn(min = 34.dp).clip(pill).background(bg).border(1.dp, border, pill).padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Dot(dot)
-            Text(name, style = PaddockTokens.type.chip, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (onClick != null) Icon(PaddockIcons.Machine, contentDescription = null, tint = fg, modifier = Modifier.size(16.dp))
-        }
-        val dash = with(LocalDensity.current) { floatArrayOf(4.dp.toPx(), 3.dp.toPx()) }
-        val line = c.control()
-        Box(
-            Modifier.heightIn(min = 34.dp)
-                .drawBehind {
-                    drawRoundRect(line, cornerRadius = CornerRadius(size.height / 2), style = Stroke(width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(dash)))
-                }
-                .padding(horizontal = 12.dp),
-            contentAlignment = Alignment.Center,
-        ) { Text(status, style = PaddockTokens.type.chip, color = c.dim, maxLines = 1) }
+        WatchedPill(name, health, caret = onClick != null)
+        StatusPill(status)
     }
 }
+
+private const val SHOW_MACHINES = "Show saved machines"
+
+/** The watched machine's pill: its health dot and name, filled by health, and the caret when a tap opens the Machines screen. */
+@Composable
+private fun WatchedPill(name: String, health: HostHealth, caret: Boolean, os: io.github.tuthan.paddock.hostprofile.HostOs? = null) {
+    val c = PaddockTokens.colors
+    val pill = RoundedCornerShape(50)
+    val (bg, border, fg, dot) = when (health) {
+        HostHealth.Live -> listOf(c.accent.copy(alpha = 0.14f), c.accent.copy(alpha = 0.5f), c.title, c.done)
+        HostHealth.Degraded -> listOf(c.surface, c.attention.copy(alpha = 0.5f), c.attention, c.attention)
+        HostHealth.Connecting -> listOf(c.surface, c.control(), c.text, c.faint)
+    }
+    Row(
+        Modifier.heightIn(min = 34.dp).clip(pill).background(bg).border(1.dp, border, pill).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Dot(dot)
+        // The OS glyph only where several machines are told apart (the chip row); decorative, the name says the rest.
+        PaddockIcons.forOs(os)?.let { Icon(it, contentDescription = null, tint = fg, modifier = Modifier.size(14.dp)) }
+        Text(name, style = PaddockTokens.type.chip, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        // A caret, not the machine icon: the chip already names a machine, so the icon only repeated it; the caret says a tap opens the list.
+        if (caret) Icon(PaddockIcons.Chevron, contentDescription = null, tint = fg, modifier = Modifier.size(14.dp).rotate(90f))
+    }
+}
+
+/** How fresh the screen is, on a dashed chip. Its words are part of the watched chip's spoken name, so it says nothing by itself. */
+@Composable
+private fun StatusPill(status: String, modifier: Modifier = Modifier) {
+    val c = PaddockTokens.colors
+    val dash = with(LocalDensity.current) { floatArrayOf(4.dp.toPx(), 3.dp.toPx()) }
+    val line = c.control()
+    Box(
+        modifier.heightIn(min = 34.dp)
+            .drawBehind {
+                drawRoundRect(line, cornerRadius = CornerRadius(size.height / 2), style = Stroke(width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(dash)))
+            }
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(status, style = PaddockTokens.type.chip, color = c.dim, maxLines = 1) }
+}
+
+/**
+ * One saved machine on Home's chip row (decision D4): core's model ([io.github.tuthan.paddock.hostprofile.MachineChip]), whose lock is decided by
+ * `MachineRoster.chips` and tested there, named here so the screens and their tests keep one import.
+ */
+typealias MachineChip = io.github.tuthan.paddock.hostprofile.MachineChip
+
+/**
+ * Home's chips while two or more machines are saved (decision D4, the design's `.chips` row): the machine chips in a horizontally scrolling line,
+ * the watched machine first, drawn exactly as [HostChip] draws it (tap: [onMachines], the Machines screen), then every other saved machine in the
+ * store's order as a plain chip (a neutral dot, the name, and a 14 dp lock when [MachineChip.locked]; tap: [onWatch], which asks to watch it); then
+ * the dashed [status] chip, outside the scroll, so how fresh the screen is never scrolls off a narrow phone with three machines. A chip that carries
+ * a [MachineChip.glance] says after its name how many agents need you on that machine, and how old that look is (Pro). When the chips fit,
+ * the status sits right after them; when they do not, they scroll in the room the status leaves. Each chip is a button with a 48 dp target and a
+ * name TalkBack reads without the colours ("Beta, not watched, Pro").
+ */
+@Composable
+fun MachineChipRow(
+    chips: List<MachineChip>, status: String, health: HostHealth, onMachines: () -> Unit, onWatch: (MachineChip) -> Unit, modifier: Modifier = Modifier,
+) {
+    val ordered = chips.filter { it.watched } + chips.filterNot { it.watched }
+    Row(
+        modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // fill = false: as wide as the chips up to what the status leaves, so a short row keeps the status beside the last chip.
+        Row(
+            Modifier.weight(1f, fill = false).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (chip in ordered) {
+                if (chip.watched) {
+                    Box(
+                        Modifier.heightIn(min = 48.dp).clickable(onClickLabel = SHOW_MACHINES, role = Role.Button, onClick = onMachines)
+                            .semantics(mergeDescendants = true) { contentDescription = MachineCopy.chipWatched(chip.name, health.word, status) },
+                        contentAlignment = Alignment.Center,
+                    ) { WatchedPill(chip.name, health, caret = true, os = chip.os) }
+                } else {
+                    OtherPill(chip, onClick = { onWatch(chip) })
+                }
+            }
+        }
+        // Its words are already in the watched chip's name, so it says nothing by itself.
+        StatusPill(status, Modifier.clearAndSetSemantics { })
+    }
+}
+
+/** A machine that is not watched, on the chip row: the design's plain `.chip`, with a neutral dot (its health is not known here) and the lock when locked. */
+@Composable
+private fun OtherPill(chip: MachineChip, onClick: () -> Unit) {
+    val c = PaddockTokens.colors
+    val pill = RoundedCornerShape(50)
+    Box(
+        Modifier.heightIn(min = 48.dp).clickable(onClickLabel = MachineCopy.watchLabel(chip.name), role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = MachineCopy.chipOther(chip.name, chip.locked, chip.glance) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.heightIn(min = 34.dp).clip(pill).background(c.surface).border(1.dp, c.control(), pill).padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Dot(c.faint)
+            PaddockIcons.forOs(chip.os)?.let { Icon(it, contentDescription = null, tint = c.text, modifier = Modifier.size(14.dp)) }
+            Text(chip.name, style = PaddockTokens.type.chip, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // What the probe found (Pro): the words carry it; the attention colour only repeats a count above zero.
+            chip.glance?.let { Text(it.text, style = PaddockTokens.type.chip, color = if (it.attention) c.attention else c.dim, maxLines = 1, modifier = Modifier.testTag(GLANCE_TAG)) }
+            if (chip.locked) Icon(PaddockIcons.Lock, contentDescription = null, tint = c.text, modifier = Modifier.size(14.dp).testTag(LOCK_TAG))
+        }
+    }
+}
+
+/** The test tag on a locked chip's lock glyph, so a test can tell it is drawn without reading pixels. */
+const val LOCK_TAG = "machine-chip-lock"
+
+/** The test tag on the words a chip shows about what the probe found ("2 need you · 20 s ago"). */
+const val GLANCE_TAG = "machine-chip-glance"
+
+/**
+ * The test tag on a locked button's lock glyph (`PaddockButton(pro = true)`), so a test can tell the glyph is drawn, not only the "Pro" word. Its own
+ * tag, not [LOCK_TAG]: the button's lock leads the label at 16 dp, the chip's follows the name at 14 dp, and a screen may show both.
+ */
+const val PRO_LOCK_TAG = "pro-button-lock"
 
 /**
  * A host fact the user cannot miss: unreachable, stale, a changed key, a missing grant. A warning icon, the sentence,
@@ -397,6 +504,8 @@ fun Banner(
     tint: Color = PaddockTokens.colors.attention, icon: androidx.compose.ui.graphics.vector.ImageVector = PaddockIcons.Warning,
     /** A second action beside the first (Wake, then Try again); it makes the banner stack, so two buttons never squeeze the sentence. */
     secondaryLabel: String? = null, onSecondary: () -> Unit = {},
+    /** The sentence is a polite live region ([NoticeBar]): read out when it appears or changes. */
+    live: Boolean = false,
 ) {
     val c = PaddockTokens.colors
     val shape = RoundedCornerShape(PaddockTokens.radii.row)
@@ -407,7 +516,7 @@ fun Banner(
     val body: @Composable (Modifier) -> Unit = { m ->
         Row(m, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
-            Text(text, style = PaddockTokens.type.secondary, color = tint, modifier = Modifier.weight(1f))
+            Text(text, style = PaddockTokens.type.secondary, color = tint, modifier = Modifier.weight(1f).then(if (live) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier))
         }
     }
     // Two actions side by side only while both fit: at a large font each takes most of the row and the second is crushed, so they stack.
@@ -434,11 +543,12 @@ fun Banner(
 
 /**
  * What an alert's tap found, in the accent colour (information, not a fault): "State changed since the alert", "No longer
- * observed". Dismissed by the user; it stays across screens until then.
+ * observed". Dismissed by the user; it stays across screens until then. Also what a tap elsewhere came to ("Watching Beta.", "Removed Beta.", an
+ * operation still running): the sentence is a polite live region, so TalkBack reads it when it appears instead of leaving the tap silent.
  */
 @Composable
 fun NoticeBar(text: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) =
-    Banner(text, modifier, actionLabel = "Dismiss", onAction = onDismiss, tint = PaddockTokens.colors.accent, icon = PaddockIcons.Bell)
+    Banner(text, modifier, actionLabel = "Dismiss", onAction = onDismiss, tint = PaddockTokens.colors.accent, icon = PaddockIcons.Bell, live = true)
 
 /** A short explanatory note under a control, 12 sp dim, with an optional leading icon. */
 @Composable

@@ -280,7 +280,7 @@ def main():
     check("the sshd saw this phone's key accepted", "Accepted publickey" in sshd, [l for l in sshd.splitlines() if "Accepted publickey" in l][:1].__repr__()[:100])
     wanted = {"android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"}
     granted = set(re.findall(r"(android\.permission\.[A-Z_]+): granted=true", adb("shell", "dumpsys", "package", PKG)))
-    check("what the phone granted is within the manifest's four", granted <= wanted | {"android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_LOCAL_NETWORK"}, ", ".join(sorted(g.rsplit(".", 1)[1] for g in granted)))
+    check("what the phone granted is within the manifest's five (CAMERA is asked for only in the scanner)", granted <= wanted | {"android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_LOCAL_NETWORK", "android.permission.USE_BIOMETRIC"}, ", ".join(sorted(g.rsplit(".", 1)[1] for g in granted)))
 
 def window_secure():
     """Whether the app's window carries FLAG_SECURE, from the window manager's own dump; None when it cannot be read."""

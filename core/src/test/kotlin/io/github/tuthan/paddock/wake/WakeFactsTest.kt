@@ -50,6 +50,17 @@ class WakeFactsTest {
         val f = WakeFacts(0, WakeSendResult.Failed(WakeSendFailure.RelayRequired))
         assertTrue(f.needsRelay)
         assertTrue("needs a relay on the machine's network" in f.lines(clock).single())
+        assertTrue("on the machine's page in Machines" in f.lines(clock).single(), "the relay field lives on the machine's page now, not in Settings")
+    }
+
+    @Test fun aWakeForAMachineThatIsNotWatchedSaysThePacketThenThatNoAnswerIsObserved() {
+        val f = WakeFacts(1_000, sent, notWatched = true)
+        assertEquals(listOf("Wake packet sent to 192.168.42.255 and 255.255.255.255.", WakeFacts.NOT_WATCHED), f.lines(clock))
+        assertEquals("Paddock is not watching this machine, so whether it answered is not observed here. Watch it to find out.", WakeFacts.NOT_WATCHED)
+        assertTrue(f.settled, "nothing is followed for a machine that is not watched")
+        assertFalse(f.canWakeAgain(1_000), "the guard is the same")
+        val failed = WakeFacts(1_000, WakeSendResult.Failed(WakeSendFailure.NetworkMissing), notWatched = true)
+        assertEquals(1, failed.lines(clock).size, "nothing was sent, so there is nothing to observe either way")
     }
 
     @Test fun anotherWakeIsOfferedOnlyAfterThirtySeconds() {

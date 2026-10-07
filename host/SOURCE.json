@@ -7,9 +7,10 @@
     "host/alert-relay.example.toml": "sha256:117e556046b1b752c78eac35fa192186c12984fffd55ba42931c905803ef8b2f",
     "host/paddock-alert-relay.py": "sha256:9fd18cadd27861cafa8a83a55acb8d975c2f367215178cedc3c8d1a603612285",
     "host/paddock-alert-relay.service": "sha256:227c624bc91e3a5c466936694ac58b1ccc4c804adb0a01f7b37e813fb74bc7ba",
-    "host/paddock-claude-permission-hook.py": "sha256:964ea1a48e605e15d0d10c187cee401edca69604cf4f19d7eddab674ec41e478",
+    "host/paddock-claude-permission-hook.py": "sha256:dd0351a38c08cc5ab1f9d213d6cbdb586ebcdd9780112ba85cd2c2ed2f99175a",
     "host/paddock-control.py": "sha256:d95e0a155a4e7a9addcc0018c3c267448a45e0611bfb24cad5b88df43a23ceff",
     "host/paddock-decide.py": "sha256:f039d8fb5b194fdea08db3c576225d6fb199b5774996b81e835d692698ae7747",
+    "host/paddock-opencode-permission.js": "sha256:cb9e1ad3931551e177ba7e929188759d9267a3a6f7774f5b8f5feaaa0e10fe3b",
     "host/paddock-relay.py": "sha256:8effb4b5aa733fccf72b5ca31545bc24f05046d000d463d6939b3486b3339695"
   },
   "alert_relay": "paddock-alert-relay.py",
@@ -17,5 +18,6 @@
   "decide": "paddock-decide.py",
   "decide_version": 1,
   "permission_hook": "paddock-claude-permission-hook.py",
-  "permission_hook_version": 1
+  "opencode_plugin": "paddock-opencode-permission.js",
+  "permission_hook_version": 4
 }

@@ -114,6 +114,24 @@ class NotifyTest {
         assertEquals(0, mine(0).size)
     }
 
+    /** Coming to the front clears the notifications of the machine now on screen, never another machine's (the screen shows one machine's herd). */
+    @Test fun cancelForClearsOnlyThatMachinesNotificationsAndLeavesNoOrphanedDoneSummary() {
+        fun on(machine: String, terminal: String, state: AlertState) =
+            LocalAlert(TargetRef(HostProfileId(machine), "default", terminal), "w1:p1", state, 7, System.currentTimeMillis() / 1000, machine, "A title that must not matter")
+        val n = AndroidAlertNotifier(ctx)
+        n.show(AlertContent.of(on("workstation", "term_a", AlertState.Blocked), true))
+        n.show(AlertContent.of(on("server", "term_b", AlertState.Blocked), true))
+        n.show(AlertContent.of(on("server", "term_c", AlertState.Done), true))        // a Done child and its stack summary
+        assertEquals(4, mine(4).size)
+        n.cancelFor("workstation")
+        assertEquals("only the workstation's Needs-you notification went", 3, mine(3).size)
+        assertTrue(mine(3).all { it.notification.extras.getString("paddock.link").orEmpty().isEmpty() || "h=server" in it.notification.extras.getString("paddock.link").orEmpty() })
+        n.cancelFor("nobody")
+        assertEquals(3, mine(3).size)
+        n.cancelFor("server")
+        assertEquals("the server's notifications and its Done summary are gone", 0, mine(0).size)
+    }
+
     @Test fun theAccessReaderSeesAllowedWhenTheGrantIsGiven() {
         assertEquals(NotificationAccess.Allowed, NotificationAccessReader(ctx).read(null, askedBefore = true))
     }

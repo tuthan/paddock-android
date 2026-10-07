@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -43,6 +45,8 @@ import io.github.tuthan.paddock.ui.components.HerdSummary
 import io.github.tuthan.paddock.ui.components.HostChip
 import io.github.tuthan.paddock.ui.components.HostHealth
 import io.github.tuthan.paddock.ui.components.HostKicker
+import io.github.tuthan.paddock.ui.components.MachineChip
+import io.github.tuthan.paddock.ui.components.MachineChipRow
 import io.github.tuthan.paddock.ui.components.Note
 import io.github.tuthan.paddock.ui.components.PaddockIconButton
 import io.github.tuthan.paddock.ui.components.ReadySummaryRow
@@ -81,6 +85,16 @@ private val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm").with
 fun clockLabel(millis: Long): String = CLOCK.format(Instant.ofEpochMilli(millis))
 
 /**
+ * The watched machine's chip from Home's state: its health and how fresh the screen is ("live · 3 s", "as of 14:02", "connecting"). One rule for the
+ * chip, the chip row and the Machines screen's "Watching · live", so they never disagree.
+ */
+fun chipHealth(state: HomeUiState, nowMillis: Long, clock: (Long) -> String = ::clockLabel): Pair<HostHealth, String> = when (state) {
+    is HomeUiState.Loading -> HostHealth.Connecting to HostHealth.Connecting.word
+    is HomeUiState.Live -> HostHealth.Live to "${HostHealth.Live.word} · " + AgeText.span(state.ageMillis).removeSuffix(" ago")
+    is HomeUiState.Degraded -> HostHealth.Degraded to (state.ageMillis?.let { "as of " + clock(nowMillis - it) } ?: "no data yet")
+}
+
+/**
  * Home: the summary and the host, then the herd in attention order. Blocked and done rows carry the colour; working,
  * ready and unknown stay quiet. While something needs the user, several ready agents fold into one row. A degraded
  * host keeps its last rows, dimmed and dated, with no actions. The order never changes under a finger: while the list
@@ -103,8 +117,15 @@ fun HerdHome(
     preview: BlockedPreview? = null,
     onReview: (AgentRowModel) -> Unit = {},
     onSettings: () -> Unit = {},
-    /** The machine chip opens the list of saved machines (switch, remove, add); null leaves the chip a plain label. */
+    /** The watched machine's chip opens the Machines screen (watch, wake, remove, add); null leaves the chip a plain label. */
     onMachines: (() -> Unit)? = null,
+    /**
+     * Every saved machine, for the chip row (decision D4). With two or more the row is drawn ([MachineChipRow]): the watched chip opens [onMachines],
+     * another asks to watch it through [onWatchMachine]. With fewer, the single [HostChip] is drawn, as before.
+     */
+    machineChips: List<MachineChip> = emptyList(),
+    /** Another machine's chip was tapped: the caller decides whether that is free (the return to the chosen machine) or asks the gate. */
+    onWatchMachine: (MachineChip) -> Unit = {},
     /** Pull down to read the herd again; null hides the gesture. */
     onRefresh: (() -> Unit)? = null,
     refreshing: Boolean = false,
@@ -121,11 +142,7 @@ fun HerdHome(
     var readyOpen by rememberSaveable { mutableStateOf(false) }
 
     val firstBlockedId = model?.rows?.firstOrNull { it.state == StateWord.Blocked }?.key?.target?.terminalId
-    val (health, chipStatus) = when (state) {
-        is HomeUiState.Loading -> HostHealth.Connecting to "connecting"
-        is HomeUiState.Live -> HostHealth.Live to "live · " + AgeText.span(state.ageMillis).removeSuffix(" ago")
-        is HomeUiState.Degraded -> HostHealth.Degraded to (state.ageMillis?.let { "as of " + clock(nowMillis - it) } ?: "no data yet")
-    }
+    val (health, chipStatus) = chipHealth(state, nowMillis, clock)
 
     Column(modifier.fillMaxSize()) {
         ScreenHeader("Paddock") { PaddockIconButton(PaddockIcons.Settings, "Settings", onSettings) }
@@ -147,7 +164,8 @@ fun HerdHome(
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         val summary = live?.summary ?: if (state is HomeUiState.Loading) "Connecting…" else "No data yet"
                         HerdSummary(summary, flag = if (state is HomeUiState.Degraded) "not live" else null, dimmed = state !is HomeUiState.Live)
-                        HostChip(state.hostName, chipStatus, health = health, onClick = onMachines)
+                        if (machineChips.size >= 2 && onMachines != null) MachineChipRow(machineChips, chipStatus, health, onMachines = onMachines, onWatch = onWatchMachine)
+                        else HostChip(state.hostName, chipStatus, health = health, onClick = onMachines)
                     }
                 }
                 if (state is HomeUiState.Degraded) {
@@ -156,7 +174,8 @@ fun HerdHome(
                     }
                     if (wakeLines.isNotEmpty()) {
                         item(key = "wake") {
-                            Column(Modifier.padding(top = 4.dp).semantics(mergeDescendants = true) { contentDescription = wakeLines.joinToString(". ") }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            // A polite live region: the facts fill in after the tap (packet sent, then the machine answering), and TalkBack reads each change.
+                            Column(Modifier.padding(top = 4.dp).semantics(mergeDescendants = true) { contentDescription = wakeLines.joinToString(". "); liveRegion = LiveRegionMode.Polite }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 for (line in wakeLines) Text(line, style = PaddockTokens.type.secondary, color = PaddockTokens.colors.dim)
                             }
                         }

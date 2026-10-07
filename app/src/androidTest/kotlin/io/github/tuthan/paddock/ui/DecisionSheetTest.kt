@@ -150,8 +150,8 @@ class DecisionSheetTest {
 
     @Test fun anAnswerThatWasWrittenSaysWrittenAndKeepsTheDesktopCaveat() {
         show(model(
-            canAnswer = false, result = "allow written 14:03:12 · for the hook to hand to Claude Code, which this does not prove", resultTone = ResultTone.Ok,
-            status = "Handed to Claude Code as Yes. Waiting for the agent to move on. ${DecisionPresenter.CAVEAT}", statusTone = ResultTone.Ok, timeLeft = null,
+            canAnswer = false, result = "allow written 14:03:12 · for the hook to hand to the agent, which this does not prove", resultTone = ResultTone.Ok,
+            status = "Handed to the agent as Yes. Waiting for the agent to move on. ${DecisionPresenter.CAVEAT}", statusTone = ResultTone.Ok, timeLeft = null,
         ))
         rule.onNodeWithText("allow written 14:03:12", substring = true).assertIsDisplayed()
         rule.onNodeWithText(DecisionPresenter.CAVEAT, substring = true).assertIsDisplayed()
@@ -237,12 +237,21 @@ class DecisionSheetTest {
 
     @Test fun theEntryOnTheOutputTabNamesTheToolAndOpensTheSheetWithoutAnswering() {
         var opened = 0
-        rule.setContent { PaddockTheme(darkTheme = true) { DecisionEntry(DecisionEntryModel("Bash", "Answer within 41 s"), { opened++ }) } }
+        rule.setContent { PaddockTheme(darkTheme = true) { DecisionEntry(DecisionEntryModel("Bash", "Answer within 41 s", "Claude Code"), { opened++ }) } }
         rule.onNodeWithTag("decision-entry").assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
         rule.onNodeWithText("Claude Code is waiting for a Yes or No · Bash · Answer within 41 s").assertIsDisplayed()
         rule.onAllNodesWithText("Yes").assertCountEquals(0)
         rule.onNodeWithTag("decision-entry").performClick()
         assertEquals(1, opened)
+    }
+
+    @Test fun theEntryNamesTheAgentAndSaysTheAgentWhenItsKindIsNotKnown() {
+        rule.setContent { PaddockTheme(darkTheme = true) { androidx.compose.foundation.layout.Column {
+            DecisionEntry(DecisionEntryModel("Bash", "Answer within 20 s", "Codex"), {})
+            DecisionEntry(DecisionEntryModel("Edit", null), {})
+        } } }
+        rule.onNodeWithText("Codex is waiting for a Yes or No · Bash · Answer within 20 s").assertIsDisplayed()
+        rule.onNodeWithText("The agent is waiting for a Yes or No · Edit").assertIsDisplayed()
     }
 
     /** What Yes approves must stay on screen at every font size: the request keeps 100 dp. */

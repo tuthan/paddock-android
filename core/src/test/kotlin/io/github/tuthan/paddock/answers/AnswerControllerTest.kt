@@ -39,6 +39,7 @@ class AnswerControllerTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var installed: Installed? = Installed(Snapshot("0.9.1", 22, panes = listOf(Pane(paneId = "w1:p1", terminalId = "term_1", workspaceId = "w1", tabId = "w1:t1"))), now, 1)
     @Volatile private var status: AgentStatus? = AgentStatus.Blocked
+    @Volatile private var kind: String? = "claude"
     @After fun stop() { scope.cancel() }
 
     private class Decided(val pane: String, val session: String, val id: String, val behavior: Behavior)
@@ -58,7 +59,7 @@ class AnswerControllerTest {
     }
 
     private val port = FakePort()
-    private fun controller(poll: Long = 20, settle: Long = 10) = AnswerController(scope, port, journal, { installed }, { status }, { now }, poll, settle)
+    private fun controller(poll: Long = 20, settle: Long = 10, quiet: Long = 100) = AnswerController(scope, port, journal, { installed }, { status }, { now }, poll, settle, quietPollMillis = quiet, agentKind = { kind })
 
     private suspend fun until(what: String, cond: () -> Boolean) {
         try { withTimeout(5_000) { while (!cond()) delay(5) } } catch (e: kotlinx.coroutines.TimeoutCancellationException) { throw AssertionError("timed out waiting for $what") }
@@ -322,20 +323,77 @@ class AnswerControllerTest {
         c.refresh(key); until("working observed") { view(c).workingObserved }
     }
 
-    @Test fun watchingReadsOnlyWhileTheAgentIsBlockedOrAnAnswerIsSettling() = runBlocking<Unit> {
-        val c = controller(poll = 15)
+    @Test fun watchingReadsAtFullPaceWhileTheAgentIsBlockedAndQuietlyOtherwiseNeverNot() = runBlocking<Unit> {
+        val c = controller(poll = 15, quiet = 100)
         c.watch(key)
         until("the first read") { port.lists.isNotEmpty() }
         val blockedReads = port.lists.size
         delay(150)
-        assertTrue(port.lists.size > blockedReads + 3, "polls while blocked")
+        assertTrue(port.lists.size > blockedReads + 3, "polls at full pace while blocked")
         status = AgentStatus.Idle
         port.listing = listingOf(entries = emptyList(), candidate = null)
         delay(80)
         val idleStart = port.lists.size
-        delay(200)
-        assertEquals(idleStart, port.lists.size, "stops reading when the agent is no longer blocked and nothing is settling")
+        delay(400)
+        val quiet = port.lists.size - idleStart
+        assertTrue(quiet in 2..8, "an agent that is not blocked is still read, at the quiet pace: $quiet reads in 400 ms at 100 ms")
+        // A request that appears while herdr says idle is found and offered: the files decide, not the status.
+        port.listing = listingOf(received = now, candidate = request(ID_B))
+        until("the request shows although herdr says idle") { c.views.value["term_1"]?.listing?.candidate?.request?.requestId == ID_B }
         c.unwatch("term_1")
+    }
+
+    @Test fun aCodexAgentIsReadAtFullPaceWhateverHerdrSaysBecauseItsStatusIsNotReliableWhileTheHookWaits() = runBlocking<Unit> {
+        kind = "codex"
+        for (s in listOf(AgentStatus.Working, AgentStatus.Idle, AgentStatus.Done, AgentStatus.Unknown, null)) {
+            status = s
+            val c = controller(poll = 15, quiet = 5_000)
+            c.watch(key)
+            until("the first read") { port.lists.isNotEmpty() }
+            val first = port.lists.size
+            delay(150)
+            assertTrue(port.lists.size > first + 3, "keeps reading a Codex agent that herdr calls $s at full pace")
+            c.unwatch("term_1")
+        }
+    }
+
+    @Test fun anAgentThatIsNotBlockedAndNotCodexIsReadQuietlyWhateverItsKind() = runBlocking<Unit> {
+        status = AgentStatus.Working
+        for (other in listOf("claude", "opencode", null)) {
+            kind = other
+            val d = controller(poll = 15, quiet = 120)
+            port.listing = listingOf(entries = emptyList(), candidate = null)
+            d.watch(key)
+            until("the first read") { port.lists.isNotEmpty() }
+            val before = port.lists.size
+            delay(400)
+            val reads = port.lists.size - before
+            assertTrue(reads in 1..6, "a working $other is read at the quiet pace: $reads reads in 400 ms at 120 ms")
+            d.unwatch("term_1")
+        }
+    }
+
+    @Test fun whichAgentsAreReadAtFullPaceIsAPureRule() {
+        for (kind in listOf("codex", " Codex ")) {
+            for (s in listOf(AgentStatus.Blocked, AgentStatus.Working, AgentStatus.Idle, AgentStatus.Done, AgentStatus.Unknown, null)) assertTrue(AnswerRules.readsAtFullPace(s, kind), "$kind $s")
+        }
+        for (kind in listOf("claude", "opencode", "", null)) {
+            assertTrue(AnswerRules.readsAtFullPace(AgentStatus.Blocked, kind))
+            for (s in listOf(AgentStatus.Working, AgentStatus.Idle, AgentStatus.Done, AgentStatus.Unknown, null)) assertFalse(AnswerRules.readsAtFullPace(s, kind), "$kind $s")
+        }
+    }
+
+    @Test fun forCodexWorkingProvesNothingAboutMovingOnOnlyTheEndOfTheTurnDoes() = runBlocking<Unit> {
+        kind = "codex"
+        status = AgentStatus.Working
+        val c = controller().opened()
+        c.answered(Behavior.Allow)
+        port.listing = listingOf(entries = listOf(entry(ID_A, RequestState.Consumed, decision = Behavior.Allow)), candidate = null)
+        c.refresh(key); until("consumed") { view(c).outcome is RequestOutcome.Consumed }
+        delay(100)
+        assertFalse(view(c).workingObserved, "herdr called Codex working all along")
+        status = AgentStatus.Idle
+        c.refresh(key); until("the turn ended") { view(c).workingObserved }
     }
 
     @Test fun aHostThatFailsEveryReadIsAskedSlowlyEvenWhileTheAgentIsBlocked() = runBlocking<Unit> {

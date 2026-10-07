@@ -40,6 +40,32 @@ object PaddockIcons {
     val Machine = icon("machine", rect(3f, 4f, 18f, 12f, 2f), "M8 20h8M12 16v4")
     val Bell = icon("bell", "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", "M10.3 21a1.94 1.94 0 0 0 3.4 0")
     val File = icon("file", "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5")
+    /** A padlock: the mark a locked Pro button draws before its label (`PaddockButton`'s `pro`), beside the word "Pro", never instead of it. */
+    val Lock = icon("lock", rect(4.5f, 10.5f, 15f, 10.5f, 2f), "M8 10.5V7a4 4 0 0 1 8 0v3.5", "M12 14.5v2.5")
+
+    /**
+     * What kind of machine a card is about, as plain line glyphs in the same grid, not the vendors' logos: a penguin (Linux), an apple (macOS) and a
+     * window of four panes (Windows). They sit beside the machine's name, which says the same in words (`MachineCopy.osSpoken`), so they carry no meaning alone.
+     */
+    val Linux = icon(
+        "linux",
+        "M12 3C9.8 3 8.6 4.8 8.6 6.8C8.6 8.4 7.4 9.4 6.6 11.4C5.6 13.8 5.4 16.2 6.4 18C7.2 19.4 8.6 20 10 20H14C15.4 20 16.8 19.4 17.6 18C18.6 16.2 18.4 13.8 17.4 11.4C16.6 9.4 15.4 8.4 15.4 6.8C15.4 4.8 14.2 3 12 3z",
+        "M10.4 6.6h.01M13.6 6.6h.01", "M11 9.4L12 10.4L13 9.4", "M8.2 21.4h2.6M13.2 21.4h2.6",
+    )
+    val MacOs = icon(
+        "macos",
+        "M12 8.2c-.9-.7-2.1-1-3.2-.6-2.2.8-3.2 3.4-2.4 6.2.7 2.5 2.1 4.8 3.6 4.8.7 0 1-.4 2-.4s1.3.4 2 .4c1.5 0 2.9-2.3 3.6-4.8.8-2.8-.2-5.4-2.4-6.2-1.1-.4-2.3-.1-3.2.6z",
+        "M12 8c0-1.8.9-3.3 2.6-4",
+    )
+    val WindowsOs = icon("windows", "M4.5 5.5c0-.8.7-1.5 1.5-1.5h12c.8 0 1.5.7 1.5 1.5v13c0 .8-.7 1.5-1.5 1.5H6c-.8 0-1.5-.7-1.5-1.5z", "M12 4v16M4.5 12h15")
+
+    /** The glyph for [os], or null when the machine's kind is not known: no glyph is better than a wrong one. */
+    fun forOs(os: io.github.tuthan.paddock.hostprofile.HostOs?): ImageVector? = when (os) {
+        io.github.tuthan.paddock.hostprofile.HostOs.Linux -> Linux
+        io.github.tuthan.paddock.hostprofile.HostOs.Mac -> MacOs
+        io.github.tuthan.paddock.hostprofile.HostOs.Windows -> WindowsOs
+        null -> null
+    }
 
     internal fun circle(cx: Float, cy: Float, r: Float) = "M${cx - r} ${cy}a$r $r 0 1 0 ${2 * r} 0a$r $r 0 1 0 ${-2 * r} 0"
 

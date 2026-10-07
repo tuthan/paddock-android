@@ -1,39 +1,57 @@
 #!/usr/bin/env python3
-"""paddock-claude-permission-hook: a Claude Code PermissionRequest hook that lets a phone answer one permission prompt
-(Python 3 standard library only; Python 3.11 or newer for the configuration).
+"""paddock-claude-permission-hook: a PermissionRequest hook that lets a phone answer one permission prompt of Claude Code, Codex
+or opencode (Python 3 standard library only; Python 3.11 or newer for the configuration).
 
-Register it yourself in ~/.claude/settings.json beside any other hook (the timeout is the window plus five seconds):
+Register it yourself beside any other hook (the timeout is the window plus five seconds). Claude Code, ~/.claude/settings.json:
 
     {"hooks": {"PermissionRequest": [{"hooks": [{"type": "command",
         "command": "python3 /home/you/.local/share/paddock/paddock-claude-permission-hook.py", "timeout": 65}]}]}}
 
-and turn it on in ~/.config/paddock/hook.toml (the default is off: no window, the hook does nothing):
+Codex (~/.codex/hooks.json, then trusted once in /hooks) runs the same file with `--agent codex`, and opencode's plugin
+(paddock-opencode-permission.js) with `--agent opencode`. Turn it on in ~/.config/paddock/hook.toml (the default is off: no
+window, the hook does nothing):
 
-    window_seconds = 60                      # 0 to 300; how long a phone has to answer
+    window_seconds = 60                      # 0 to 300; how long a phone has to answer; 0 turns every agent off
+    codex_window_seconds = 20                # optional, 0 to 300; Codex only, see below; the default is the smaller of 20 and window_seconds
     allowed_tools = ["Bash", "Edit"]         # optional; the default is every tool
 
-Claude Code shows its own dialog while this hook waits, so the desktop is never blocked: whoever answers first wins. The
-hook mints a request id, publishes the request as a file under $XDG_RUNTIME_DIR/paddock/<herdr session>/<pane id>/ (see
+Claude Code and opencode show their own dialog while this hook waits, so the desktop is never blocked: whoever answers first wins.
+Codex does not: it shows nothing until every hook has returned, so the window is a delay of its desktop prompt, which is why it has
+a window of its own. Codex stays `working` in herdr the whole time (the hook does not change that), so the phone reads Codex's
+request while the agent is working, and there is no early "needs you" alert for it.
+
+The hook mints a request id, publishes the request as a file under $XDG_RUNTIME_DIR/paddock/<herdr session>/<pane id>/ (see
 paddock-decide.py for the states and the rename protocol; the request carries this process's pid so a writer can tell that the
 hook ended), and waits up to the window for a decision file carrying that id.
-A decision becomes Claude Code's answer to this one invocation and nothing else: allow or deny, never updatedInput, never a
+A decision becomes the agent's answer to this one invocation and nothing else: allow or deny, never updatedInput, never a
 permission rule. When the window lapses, or herdr shows the pane's agent moving on from `blocked` (the desktop answered:
 Claude Code does not stop a hook when that happens, and a decision printed afterwards is ignored), the request is marked
-expired and the hook prints nothing, which leaves the normal dialog. A newer request of the same Claude session in the same pane
+expired and the hook prints nothing, which leaves the normal dialog. A newer request of the same agent session in the same pane
 supersedes an older pending one (the dialog it belonged to is gone), and the older hook then stops waiting. Any exception, a timeout and a signal all end the same
-way: no output, exit 0, so a failure can only fall back to the desktop dialog. Exit code 2 is never used; Claude Code does
-not honour it for this event.
+way: no output, exit 0, so a failure can only fall back to the desktop dialog. Exit code 2 is never used: Claude Code does
+not honour it for this event, and Codex would read it as a refusal.
 
-Exits at once, printing nothing, unless HERDR_ENV is 1, the window is above zero and the tool is allowed. It never calls
-herdr to report a state: herdr 0.9.1 detects `blocked` from the screen by itself and ignores reports for a pane whose agent it
-detects (Phase 08 evidence). It reads the pane's status over herdr's own socket, read-only, to notice a desktop answer.
+Exits at once, printing nothing, unless HERDR_ENV is 1, the window is above zero and the tool is allowed. Whatever `allowed_tools` says,
+it never takes the two tools that are not a Yes or No (QUESTIONS below): a hook's `allow` cannot pick an option of a question, so a Yes
+from the phone would be consumed and change nothing. It reads the pane's
+status over herdr's own socket, read-only, to notice a desktop answer (not for Codex, which has no dialog to answer meanwhile).
+Only Codex makes a herdr call beyond that: `agent.list` when Codex's shared daemon started the hook (its environment is the
+first terminal's, not the asking pane's, so the pane is found as the one Codex agent in the same folder, and the hook does
+nothing when that is not exactly one). The hook never writes to herdr.
 """
 import json
 import os
 import sys
 import time
 
-VERSION = 1
+# This script's version, as host/SOURCE.json pins it; the request file's own `v` (PROTOCOL) is the one paddock-decide.py checks.
+VERSION = 4
+PROTOCOL = 1
+AGENTS = ("claude", "codex", "opencode")
+# Claude Code raises a PermissionRequest for these too, but they ask the user to choose (an option of a question, how to leave plan mode): an allow
+# or a deny says nothing about which, so the phone cannot answer them. They stay on the desktop.
+QUESTIONS = ("AskUserQuestion", "ExitPlanMode")
+CODEX_WINDOW = 20              # seconds: Codex shows no prompt of its own while the hook waits, so its default window is short
 MAX_INPUT = 256 * 1024         # tool input kept in the request; past this it is cut and the request is never answerable
 MAX_STDIN = 16 * 1024 * 1024
 MAX_WINDOW = 300
@@ -58,24 +76,45 @@ def config_path():
 
 
 def load_config():
-    """(window seconds, allowed tools or None). Anything wrong, missing or unsafe means the hook is off."""
+    """(window seconds, allowed tools or None, Codex's window seconds or None). Anything wrong, missing or unsafe means the hook is off."""
     path = config_path()
     try:
         st = os.stat(path)
     except OSError:
-        return 0, None
+        return 0, None, None
     if st.st_uid != os.geteuid() or st.st_mode & 0o022:
-        return 0, None
+        return 0, None, None
     import tomllib
     with open(path, "rb") as f:
         data = tomllib.load(f)
     window = data.get("window_seconds", 0)
     if isinstance(window, bool) or not isinstance(window, int) or not 0 <= window <= MAX_WINDOW:
-        return 0, None
+        return 0, None, None
     tools = data.get("allowed_tools")
     if tools is not None and not (isinstance(tools, list) and all(isinstance(t, str) for t in tools)):
-        return 0, None
-    return window, tools
+        return 0, None, None
+    codex = data.get("codex_window_seconds")
+    if codex is not None and (isinstance(codex, bool) or not isinstance(codex, int) or not 0 <= codex <= MAX_WINDOW):
+        return 0, None, None
+    return window, tools, codex
+
+
+def agent_window(agent, window, codex):
+    """How long a phone has to answer for [agent]. [window] 0 is the switch that turns every agent off."""
+    if window <= 0:
+        return 0
+    if agent == "codex":
+        return codex if codex is not None else min(window, CODEX_WINDOW)
+    return window
+
+
+def parse_agent(argv):
+    """`--agent claude|codex|opencode` (claude when there are no arguments). None for anything else, which makes the hook do nothing."""
+    if not argv:
+        return "claude"
+    if len(argv) == 2 and argv[0] == "--agent" and argv[1] in AGENTS:
+        return argv[1]
+    return None
 
 
 def new_request_id():
@@ -166,36 +205,62 @@ def supersede(directory, patterns, claude_session):
             pass
 
 
+def shared_daemon_parent():
+    """True when Codex's shared app-server daemon started this hook: its HERDR_* are the first terminal's, not the asking pane's."""
+    try:
+        with open("/proc/%d/cmdline" % os.getppid(), "rb") as f:
+            return b"app-server" in f.read(4096).split(b"\0")
+    except OSError:
+        return False
+
+
 class Herdr:
-    """Read-only questions to herdr's socket: how is the agent in this pane doing? Every failure answers None.
+    """Questions to herdr's socket about one pane. Every failure answers None (or False).
 
     herdr 0.9.1 closes a connection after the first reply, so each question is its own connection."""
 
     def __init__(self, socket_path, pane):
         self.socket_path, self.pane = socket_path, pane
 
-    def status(self):
+    def call(self, method, params, timeout=0.3):
+        """The `result` of one request, or None."""
         if not self.socket_path:
             return None
         try:
             import socket
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.3)
+                sock.settimeout(timeout)
                 sock.connect(self.socket_path)
-                request = {"id": "paddock-hook", "method": "agent.get", "params": {"target": self.pane}}
-                sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
+                sock.sendall((json.dumps({"id": "paddock-hook", "method": method, "params": params}) + "\n").encode("utf-8"))
                 buffer = b""
                 while b"\n" not in buffer:
                     chunk = sock.recv(65536)
                     if not chunk:
                         break
                     buffer += chunk
-                    if len(buffer) > 1 << 20:
+                    if len(buffer) > 1 << 22:
                         return None
-            status = json.loads(buffer.partition(b"\n")[0].decode("utf-8"))["result"]["agent"]["agent_status"]
-            return status if isinstance(status, str) else None
+            result = json.loads(buffer.partition(b"\n")[0].decode("utf-8")).get("result")
+            return result if isinstance(result, dict) else None
         except Exception:
             return None
+
+    def status(self):
+        result = self.call("agent.get", {"target": self.pane})
+        try:
+            status = result["agent"]["agent_status"]
+        except (TypeError, KeyError):
+            return None
+        return status if isinstance(status, str) else None
+
+    def codex_pane(self, cwd):
+        """The one pane that runs Codex in [cwd], whatever its status; None when there is not exactly one (then nothing is published)."""
+        result = self.call("agent.list", {}, timeout=1.0)
+        agents = result.get("agents") if result else None
+        if not isinstance(agents, list):
+            return None
+        found = [a.get("pane_id") for a in agents if isinstance(a, dict) and a.get("agent") == "codex" and a.get("cwd") == cwd]
+        return found[0] if len(found) == 1 and isinstance(found[0], str) else None
 
     def close(self):
         pass
@@ -254,14 +319,18 @@ class Request:
         self.settled = True
 
 
-def honour(request, behavior):
-    sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": behavior}}}))
+def honour(request, behavior, message=None):
+    decision = {"behavior": behavior}
+    if message and behavior == "deny":
+        decision["message"] = message
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}))
     sys.stdout.flush()
     request.consume()
 
 
-def wait(request, herdr, window):
-    """Waits up to [window] seconds. Returns the behavior to print, or None to leave the dialog to the desktop."""
+def wait(request, herdr, window, watch_desktop=True):
+    """Waits up to [window] seconds. Returns the behavior to print, or None to leave the dialog to the desktop.
+    [watch_desktop] is off for Codex, which shows no dialog while the hook waits, so the desktop cannot have answered."""
     deadline = time.monotonic() + window
     next_status = 0.0
     seen_blocked, moved_on = False, 0
@@ -276,7 +345,7 @@ def wait(request, herdr, window):
         now = time.monotonic()
         if now >= deadline:
             return request.expire(grace=True)
-        if now >= next_status:
+        if watch_desktop and now >= next_status:
             next_status = now + STATUS_POLL
             status = herdr.status()
             if status == "blocked":
@@ -292,10 +361,12 @@ def wait(request, herdr, window):
 def run():
     os.umask(0o077)
     environ = os.environ
+    agent = parse_agent(sys.argv[1:])
     raw = sys.stdin.buffer.read(MAX_STDIN + 1)
-    if environ.get("HERDR_ENV") != "1" or not environ.get("HERDR_PANE_ID") or not os.path.exists(config_path()):
+    if agent is None or environ.get("HERDR_ENV") != "1" or not environ.get("HERDR_PANE_ID") or not os.path.exists(config_path()):
         return
-    window, allowed = load_config()
+    window, allowed, codex_window = load_config()
+    window = agent_window(agent, window, codex_window)
     if window <= 0 or len(raw) > MAX_STDIN:
         return
     import re
@@ -311,10 +382,16 @@ def run():
         return
     tool, claude_session, mode = data.get("tool_name"), data.get("session_id"), data.get("permission_mode")
     pane = environ["HERDR_PANE_ID"]
+    herdr = Herdr(environ.get("HERDR_SOCKET_PATH"), pane)
+    if agent == "codex" and shared_daemon_parent():
+        # Codex's shared daemon runs every hook with the environment of the terminal that started the daemon. Never guess: with
+        # no single answer nothing is published, and the hook ends at once, which leaves Codex's own prompt.
+        pane = herdr.codex_pane(data.get("cwd")) or ""
+        herdr.pane = pane
     session = herdr_session(environ, patterns)
     if not isinstance(tool, str) or not tool or len(tool) > 200 or not valid(patterns["claude"], claude_session) or not valid(patterns["pane"], pane):
         return
-    if allowed is not None and tool not in allowed:
+    if tool in QUESTIONS or allowed is not None and tool not in allowed:
         return
     mode = mode if isinstance(mode, str) and len(mode) <= 64 else ""
 
@@ -329,9 +406,9 @@ def run():
     request_id = new_request_id()
     request = Request(directory, request_id)
     created = int(time.time() * 1000)
-    body = {"v": VERSION, "request_id": request_id, "claude_session_id": claude_session, "herdr_session": session, "pane_id": pane,
+    body = {"v": PROTOCOL, "request_id": request_id, "claude_session_id": claude_session, "herdr_session": session, "pane_id": pane,
             "tool_name": tool, "tool_input": tool_input, "permission_mode": mode, "created_at": created,
-            "expires_at": created + window * 1000, "truncated": truncated, "pid": os.getpid()}
+            "expires_at": created + window * 1000, "truncated": truncated, "pid": os.getpid(), "agent": agent}
     tmp = os.path.join(directory, request_id + ".pending.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
     try:
@@ -343,11 +420,10 @@ def run():
     import signal
     for name in ("SIGTERM", "SIGHUP", "SIGINT"):
         signal.signal(getattr(signal, name), _on_signal)
-    herdr = Herdr(environ.get("HERDR_SOCKET_PATH"), pane)
     try:
-        behavior = wait(request, herdr, window)
+        behavior = wait(request, herdr, window, watch_desktop=agent != "codex")
         if behavior:
-            honour(request, behavior)
+            honour(request, behavior, "Denied from the Paddock phone" if agent != "claude" else None)
     except BaseException:
         if not request.settled:
             try:

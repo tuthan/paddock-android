@@ -46,7 +46,13 @@ interface SagaHost {
     /** True when any of [candidates] is an executable the host can find. A throw means the host could not be asked. */
     suspend fun executableAvailable(candidates: List<String>): Boolean
     suspend fun createWorktree(parentWorkspaceId: String, branch: String, trust: Boolean, before: suspend () -> Unit): Created
-    suspend fun createTab(workspaceId: String, before: suspend () -> Unit): Created
+    /** A new tab in [workspaceId]; with [cwd] (a folder [resolveFolder] returned) its shell starts there, without it in herdr's own default folder. */
+    suspend fun createTab(workspaceId: String, cwd: String?, before: suspend () -> Unit): Created
+    /**
+     * The real, absolute path of [path] on the host when it is a folder there (`~` and symlinks resolved), null when it is not one. Read-only. herdr
+     * itself never refuses a folder: a missing one, a file and a relative path are all quietly replaced by its own default, so this is asked first.
+     */
+    suspend fun resolveFolder(path: String): String?
     /** Read-only. Never journaled. */
     suspend fun inspectPane(paneId: String): PaneFacts
     suspend fun startAgent(name: String, kind: String, paneId: String, timeoutMs: Int, before: suspend () -> Unit): StartedAgent
@@ -79,6 +85,7 @@ object SagaFailure {
     const val PANE_NOT_READY = "pane_not_ready"
     const val PANE_BUSY = "pane_busy"
     const val WRONG_CWD = "wrong_cwd"
+    const val FOLDER_MISSING = "folder_missing"
     const val NAME_TAKEN = "name_taken"
     const val START_REFUSED = "start_refused"
     const val START_NOT_SENT = "start_not_sent"
@@ -101,6 +108,8 @@ data class SagaRequest(
     val skipAvailabilityCheck: Boolean = false,
     /** For the trust dialog and the card: the repository's name, when the caller knows it. */
     val repository: String? = null,
+    /** The folder the agent's shell starts in, as the user typed it (`~/api`, `/srv/app`); null is the workspace's own. Never with a [branch]: a worktree has a folder of its own. */
+    val folder: String? = null,
 )
 
 /** The rules a request has to meet before anything is created; the form shows the first problem, [StartAgentSaga] refuses a request that has one. */
@@ -122,10 +131,21 @@ object SagaRules {
         else -> null
     }
 
+    const val FOLDER_MAX = 1024
+    /** A path the host can be asked about: absolute or `~`-relative, no control character. Whether it exists is the host's answer, not a rule. */
+    fun folderProblem(path: String): String? = when {
+        path.isBlank() -> "Type the folder's full path."
+        path.length > FOLDER_MAX || path.any { it.isISOControl() } -> "That is not a folder path."
+        !(path == "~" || path.startsWith("/") || path.startsWith("~/")) -> "Type the full path, starting with / or ~/ (the home folder)."
+        else -> null
+    }
+
     fun problem(r: SagaRequest): String? =
         nameProblem(r.agentName)
             ?: (if (r.kind !in KINDS) "herdr cannot start \"${r.kind.take(40)}\"." else null)
             ?: r.branch?.let { branchProblem(it) }
+            ?: r.folder?.let { folderProblem(it) }
+            ?: (if (r.folder != null && r.branch != null) "A worktree has a folder of its own: choose a folder or a worktree, not both." else null)
             ?: (if (r.workspaceId.isBlank()) "Choose the workspace to start in." else null)
 
     /** The executables to look for: the kind's own name, plus the spellings its vendor's CLI is known by. */
@@ -173,7 +193,7 @@ class StartAgentSaga(
      * it, rebuilt from the record after a restart, when the first prompt's text is gone with the process.
      */
     fun requestOf(id: String): SagaRequest? = synchronized(lock) { requests[id] } ?: get(id)?.let {
-        SagaRequest(HostProfileId(it.host), it.session, it.agentName, it.kind, it.workspaceId, it.branch, repository = it.repository)
+        SagaRequest(HostProfileId(it.host), it.session, it.agentName, it.kind, it.workspaceId, it.branch, repository = it.repository, folder = it.folder)
     }
 
     private fun recovered(rows: List<SagaRecord>): List<SagaRecord> = rows.map {
@@ -188,7 +208,7 @@ class StartAgentSaga(
         val now = clock.nowMillis()
         val id = synchronized(lock) { "s$now-${++counter}" }
         var rec = SagaRecord(id, req.host.value, req.session, req.agentName, req.kind, req.workspaceId, req.branch, req.repository,
-            promptSha256 = req.firstPrompt?.let(OperationJournal::sha256Hex), startedAt = now, updatedAt = now)
+            folder = req.folder, promptSha256 = req.firstPrompt?.let(OperationJournal::sha256Hex), startedAt = now, updatedAt = now)
         synchronized(lock) { requests[id] = req; req.firstPrompt?.let { prompts[id] = it } }
         // Nothing exists yet: if even the first record cannot be written, nothing is created.
         rec = try { write(rec, add = true) } catch (e: java.io.IOException) {
@@ -202,7 +222,17 @@ class StartAgentSaga(
             if (!found) return fail(rec, SagaFailure.EXECUTABLE_MISSING, "${SagaRules.executables(req.kind).joinToString(" or ")} was not found on the host. Nothing was created.").rec
         }
 
-        rec = place(rec, req).next { return it }
+        // A folder is asked about before anything is created, because herdr would not refuse a bad one: it opens the tab in its own default folder instead.
+        var folder: String? = null
+        if (req.folder != null) {
+            rec = write(rec.copy(step = SagaStep.Folder))
+            folder = try { host.resolveFolder(req.folder) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { return fail(rec, SagaFailure.HOST_UNREACHABLE, "The host could not be asked about the folder (${reason(e)}). Nothing was created.").rec }
+            if (folder == null) return fail(rec, SagaFailure.FOLDER_MISSING, "${req.folder.take(200)} is not a folder on the host. Nothing was created.").rec
+        }
+
+        rec = place(rec, req, folder).next { return it }
         return afterPlace(rec, req)
     }
 
@@ -219,25 +249,28 @@ class StartAgentSaga(
         return afterPlace(renamed, req.copy(agentName = newName))
     }
 
-    private suspend fun place(start: SagaRecord, req: SagaRequest): Step {
+    private suspend fun place(start: SagaRecord, req: SagaRequest, folder: String?): Step {
         var rec = write(start.copy(step = SagaStep.Place))
         val worktree = req.branch != null
         val kind = if (worktree) OperationKind.WorktreeCreate else OperationKind.TabCreate
         val result = Operation.run(journal, key(rec.id), kind,
             resolveTarget = { req.workspaceId },
-            send = { _, before -> if (worktree) host.createWorktree(req.workspaceId, req.branch!!, req.trustRepository, before) else host.createTab(req.workspaceId, before) })
+            send = { _, before -> if (worktree) host.createWorktree(req.workspaceId, req.branch!!, req.trustRepository, before) else host.createTab(req.workspaceId, folder, before) })
         return when (result) {
             is OperationResult.Acknowledged -> {
                 val c = result.value
                 rec = try {
                     // The ids come first: they are all that names what now exists.
                     write(rec.copy(createdWorkspaceId = c.workspaceId, createdTabId = c.tabId, createdPaneId = c.paneId, createdTerminalId = c.terminalId,
-                        worktreePath = c.worktreePath, expectedCwd = c.cwd, repository = c.repository ?: rec.repository))
+                        worktreePath = c.worktreePath, expectedCwd = folder ?: c.cwd, repository = c.repository ?: rec.repository))
                 } catch (e: java.io.IOException) {
                     val shown = listOfNotNull(c.workspaceId, c.tabId, c.paneId).joinToString(", ")
                     return Step.Stop(publish(rec.copy(createdWorkspaceId = c.workspaceId, createdTabId = c.tabId, createdPaneId = c.paneId, createdTerminalId = c.terminalId, worktreePath = c.worktreePath, expectedCwd = c.cwd,
                         state = SagaState.Failed, failure = SagaFailure.IDS_NOT_SAVED, message = "herdr created $shown but this phone could not save the ids. They are shown here only until the app closes. Nothing was started.")))
                 }
+                // The folder was checked a moment ago, so a tab that opened anywhere else was opened by herdr's own fallback: stop before an agent starts in the wrong place.
+                if (folder != null && c.cwd != null && c.cwd != folder)
+                    return fail(rec, SagaFailure.WRONG_CWD, "herdr opened the new tab in ${c.cwd}, not in $folder. Nothing was started.")
                 Step.Next(rec)
             }
             is OperationResult.Rejected -> fail(rec, SagaFailure.PLACE_REFUSED, "herdr refused to create the ${if (worktree) "worktree" else "tab"} (${result.code}): ${result.message}".take(300), code = result.code)

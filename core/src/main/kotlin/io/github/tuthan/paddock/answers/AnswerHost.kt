@@ -45,13 +45,19 @@ object AnswerCodes {
     }
 }
 
-/** What the phone can say about the two scripts on one host. */
-data class AnswerSetup(val decide: RelayState, val hook: RelayState, val decideDestination: String, val hookDestination: String)
+/**
+ * What the phone can say about the scripts on one host: the writer, the hook and (for opencode) the plugin. [opencode] and [opencodeDestination] are
+ * null on a build that ships no plugin.
+ */
+data class AnswerSetup(
+    val decide: RelayState, val hook: RelayState, val decideDestination: String, val hookDestination: String,
+    val opencode: RelayState? = null, val opencodeDestination: String? = null,
+)
 
 /**
- * The host side of guarded answers on one connection: the two pinned scripts (the hook that publishes a request and the writer that
- * lists and answers requests), installed only on the user's say-so exactly like the other host scripts, and the two calls the phone
- * makes, `list` and `decide`. Both run `paddock-decide.py` and nothing else; no call reaches herdr and no key is ever sent.
+ * The host side of guarded answers on one connection: the pinned scripts (the hook that publishes a request, the writer that lists and
+ * answers requests, and the opencode plugin that hands opencode's requests to the hook), installed only on the user's say-so exactly like
+ * the other host scripts, and the two calls the phone makes, `list` and `decide`. Both run `paddock-decide.py` and nothing else; no call reaches herdr and no key is ever sent.
  *
  * Every call checks the script's hash and runs it in one command, so a copy that is not the pinned script is never run. The pane id
  * and the request id travel as argv words to a fixed script, never inside a shell string; the answer's own fields travel on stdin.
@@ -64,25 +70,29 @@ class AnswerHost(
     /** The herdr session's name as the hook sees it (`HERDR_SESSION`, or "default"); it is the first directory under the runtime root. */
     val herdrSession: String,
     private val phoneLabel: String = "phone",
+    /** The opencode plugin; null on a build that ships none. */
+    private val plugin: RelayInstaller? = null,
 ) : AnswerPort {
     private var home: String? = null
     private suspend fun home(): String = home ?: decide.homeDirectory().also { home = it }
 
     val decideSha256: String get() = decide.expectedSha256
     val hookSha256: String get() = hook.expectedSha256
+    val opencodeSha256: String? get() = plugin?.expectedSha256
     suspend fun hookDestination(): String = hook.destination(home())
     suspend fun decideDestination(): String = decide.destination(home())
 
     suspend fun inspect(): AnswerSetup {
         val h = home()
-        return AnswerSetup(decide.state(h), hook.state(h), decide.destination(h), hook.destination(h))
+        return AnswerSetup(decide.state(h), hook.state(h), decide.destination(h), hook.destination(h), plugin?.state(h), plugin?.destination(h))
     }
 
-    /** Writes both pinned scripts (owner-only, hash checked after). Called only after the user agreed to the shown hashes. */
+    /** Writes every pinned script (owner-only, hash checked after). Called only after the user agreed to the shown hashes. */
     suspend fun install() {
         val h = home()
         decide.install(h)
         hook.install(h)
+        plugin?.install(h)
     }
 
     /** One `list` of the pane's request files: a single exec, bounded, answered by the pinned script or refused. */
@@ -137,32 +147,64 @@ class AnswerHost(
 }
 
 /**
- * The text the user pastes on the host, shown in full before it can be copied: the hook's configuration (written only if none
- * exists, so nothing the user set is overwritten) and the registration to merge into `~/.claude/settings.json`. Paddock does not
- * edit Claude Code's settings.
+ * The text the user pastes on the host, shown in full before it can be copied: the hook's configuration (written only if none exists, so
+ * nothing the user set is overwritten) and, per agent, how to register the hook. Paddock edits no agent's settings.
  */
 object AnswerSetupText {
     const val MAX_WINDOW_SECONDS = 300
     const val DEFAULT_WINDOW_SECONDS = 60
+    /** Codex shows no prompt of its own while the hook waits, so its window is a delay of that prompt and its default is short. */
+    const val CODEX_WINDOW_SECONDS = 20
+    /** Codex's timeout beyond its window: the hook ends by itself a little after the window, so Codex never has to kill it. */
+    const val CODEX_TIMEOUT_MARGIN = 10
+    const val OPENCODE_PLUGIN_LINK = "~/.config/opencode/plugins/paddock-opencode-permission.js"
 
-    fun configCommand(windowSeconds: Int): String {
+    fun configCommand(windowSeconds: Int, codexWindowSeconds: Int = minOf(windowSeconds, CODEX_WINDOW_SECONDS)): String {
         require(windowSeconds in 1..MAX_WINDOW_SECONDS) { "the window is 1 to $MAX_WINDOW_SECONDS seconds" }
+        require(codexWindowSeconds in 0..MAX_WINDOW_SECONDS) { "Codex's window is 0 to $MAX_WINDOW_SECONDS seconds" }
         return buildString {
-            appendLine("# Paddock: how long a phone has to answer a Claude Code permission prompt (0 turns it off).")
+            appendLine("# Paddock: how long a phone has to answer an agent's permission prompt (0 turns it off). Codex has a shorter window of its own.")
             appendLine("mkdir -p ~/.config/paddock")
-            appendLine("[ -e ~/.config/paddock/hook.toml ] || printf 'window_seconds = $windowSeconds\\n' > ~/.config/paddock/hook.toml")
+            appendLine("[ -e ~/.config/paddock/hook.toml ] || printf 'window_seconds = $windowSeconds\\ncodex_window_seconds = $codexWindowSeconds\\n' > ~/.config/paddock/hook.toml")
             append("chmod 600 ~/.config/paddock/hook.toml")
         }
     }
 
+    private fun checkHook(hookPath: String) = require(hookPath.startsWith("/") && '\n' !in hookPath && '"' !in hookPath && '\\' !in hookPath) { "unexpected hook path" }
+
     /** The JSON to add under `hooks.PermissionRequest` in `~/.claude/settings.json`; Claude Code's timeout is the window plus five seconds. */
     fun settingsSnippet(hookPath: String, windowSeconds: Int): String {
-        require(hookPath.startsWith("/") && '\n' !in hookPath && '"' !in hookPath && '\\' !in hookPath) { "unexpected hook path" }
+        checkHook(hookPath)
         require(windowSeconds in 1..MAX_WINDOW_SECONDS) { "the window is 1 to $MAX_WINDOW_SECONDS seconds" }
         return buildString {
             appendLine("""{"hooks": {"PermissionRequest": [{"hooks": [{"type": "command",""")
             appendLine("""  "command": "python3 $hookPath",""")
             appendLine("""  "timeout": ${windowSeconds + 5}}]}]}}""")
         }.trimEnd()
+    }
+
+    /**
+     * The JSON to add under `hooks.PermissionRequest` in `~/.codex/hooks.json`. The same hook, told which agent it serves with `--agent codex`; the
+     * timeout is Codex's window plus [CODEX_TIMEOUT_MARGIN] seconds. Codex hashes the command and the timeout when the hook is trusted, so a change to
+     * either asks for a new review.
+     */
+    fun codexSnippet(hookPath: String, codexWindowSeconds: Int): String {
+        checkHook(hookPath)
+        require(codexWindowSeconds in 1..MAX_WINDOW_SECONDS) { "Codex's window is 1 to $MAX_WINDOW_SECONDS seconds" }
+        return buildString {
+            appendLine("""{"hooks": {"PermissionRequest": [{"hooks": [{"type": "command",""")
+            appendLine("""  "command": "python3 $hookPath --agent codex",""")
+            appendLine("""  "timeout": ${codexWindowSeconds + CODEX_TIMEOUT_MARGIN}}]}]}}""")
+        }.trimEnd()
+    }
+
+    /** The one command that registers the opencode plugin: a link from opencode's plugin directory to the pinned file Paddock installed. */
+    fun opencodeCommand(pluginPath: String): String {
+        require(pluginPath.startsWith("/") && pluginPath.none { it == '\n' || it == '\'' || it == '\\' }) { "unexpected plugin path" }
+        return buildString {
+            appendLine("# Paddock: let the phone answer opencode's permission prompts. The file is the one Paddock installed; it is linked, not copied.")
+            appendLine("mkdir -p ~/.config/opencode/plugins")
+            append("ln -sf '$pluginPath' $OPENCODE_PLUGIN_LINK")
+        }
     }
 }

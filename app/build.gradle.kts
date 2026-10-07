@@ -107,7 +107,7 @@ androidComponents {
         }
         val task = tasks.register<GenerateRelayAssets>("generate${variant.name.replaceFirstChar { it.uppercase() }}RelayAssets") {
             scripts.from(
-                listOf("paddock-relay.py", "paddock-control.py", "paddock-alert-relay.py", "paddock-alert-relay.service", "alert-relay.example.toml", "paddock-decide.py", "paddock-claude-permission-hook.py")
+                listOf("paddock-relay.py", "paddock-control.py", "paddock-alert-relay.py", "paddock-alert-relay.service", "alert-relay.example.toml", "paddock-decide.py", "paddock-claude-permission-hook.py", "paddock-opencode-permission.js")
                     .map { rootProject.layout.projectDirectory.file("host/$it") },
             )
             source.set(rootProject.layout.projectDirectory.file("host/SOURCE.json"))

@@ -41,13 +41,13 @@ data class DecisionModel(
  * What the Output tab's entry says: the newest pending request exists, for which tool, and how long it has. It describes the request
  * the hook is waiting on now, never the one on the sheet (which may be one already answered).
  */
-data class DecisionEntryModel(val toolName: String?, val timeLeft: String?)
+data class DecisionEntryModel(val toolName: String?, val timeLeft: String?, /** The agent's name for the line ("Codex"), or null for "The agent". */ val agent: String? = null)
 
 object DecisionPresenter {
     /** A request that has just appeared on the sheet cannot be answered for this long: a finger already on its way to something else must not land on it. */
     const val APPEAR_GUARD_MILLIS = 1_500L
     const val JUST_APPEARED = "This request just appeared. Yes and No are off for a moment, so a tap meant for something else cannot land on it."
-    const val CAVEAT = "If the desktop answered a moment earlier, Claude Code kept the desktop's answer."
+    const val CAVEAT = "If the desktop answered a moment earlier, the agent kept the desktop's answer."
 
     fun model(view: AnswerView?, nowMillis: Long, gate: OperationGate, sending: Boolean, presenter: OperationPresenter = OperationPresenter()): DecisionModel {
         if (view == null || view.listing == null && view.error == null) return DecisionModel(DecisionModel.Kind.Loading)
@@ -107,16 +107,16 @@ object DecisionPresenter {
     /**
      * The entry above the output of a blocked agent: non-null only while a pending request exists that has time left and whose hook is
      * alive. A request that is too large to show still counts (the sheet says why it cannot be answered); an expired one, one whose hook
-     * ended and an unreadable one do not.
+     * ended, an unreadable one and a question that is not a permission do not.
      */
-    fun entry(view: AnswerView?, nowMillis: Long): DecisionEntryModel? {
+    fun entry(view: AnswerView?, nowMillis: Long, agentKind: String? = null): DecisionEntryModel? {
         val listing = view?.listing ?: return null
         val a = AnswerRules.answerability(listing, nowMillis)
         val why = (a as? Answerability.No)?.why
-        if (why == NotAnswerable.NothingPending || why == NotAnswerable.Expired || why == NotAnswerable.HookGone || why == NotAnswerable.Unreadable) return null
+        if (why == NotAnswerable.NothingPending || why == NotAnswerable.Expired || why == NotAnswerable.HookGone || why == NotAnswerable.Unreadable || why == NotAnswerable.NotAPermission) return null
         val request = when (a) { is Answerability.Yes -> a.request; is Answerability.No -> a.request }
         val left = request?.let { it.expiresAt - AnswerRules.hostNow(listing, nowMillis) }
-        return DecisionEntryModel(request?.toolName, left?.let { "Answer within ${(it + 999) / 1000} s" })
+        return DecisionEntryModel(request?.toolName, left?.let { "Answer within ${(it + 999) / 1000} s" }, AgentNames.label(agentKind))
     }
 
     /** What reading the host's files after an unknown answer found, for the one request that answer was for. */
@@ -128,7 +128,7 @@ object DecisionPresenter {
     private fun status(o: RequestOutcome?, working: Boolean): String? = when (o) {
         null, RequestOutcome.Waiting -> null
         is RequestOutcome.Sent -> "${label(o.behavior)} written. Waiting for the hook to take it."
-        is RequestOutcome.Consumed -> "Handed to Claude Code" + (o.behavior?.let { " as ${label(it)}" } ?: "") + ". " + (if (working) "The agent moved on." else "Waiting for the agent to move on.") + " " + CAVEAT
+        is RequestOutcome.Consumed -> "Handed to the agent" + (o.behavior?.let { " as ${label(it)}" } ?: "") + ". " + (if (working) "The agent moved on." else "Waiting for the agent to move on.") + " " + CAVEAT
         RequestOutcome.Expired -> "Expired. Answer on the desktop."
         RequestOutcome.Replaced -> NotAnswerable.Replaced.sentence
         RequestOutcome.Gone -> "This request is gone from the host. Its files are removed after an hour."

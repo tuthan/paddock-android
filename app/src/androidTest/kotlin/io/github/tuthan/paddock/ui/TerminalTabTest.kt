@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -20,6 +23,7 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -39,6 +43,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.tuthan.paddock.terminal.EndReason
 import io.github.tuthan.paddock.terminal.PtySize
@@ -201,6 +206,31 @@ class TerminalTabTest {
         screenNode().assertIsDisplayed()
         shoot("terminal-observing-light")
     }
+
+    /**
+     * The grid is as tall while the terminal connects as when it is read-only. The pill is alone in its row while connecting; if that row is shorter the grid
+     * grows, and where the terminal's size is unknown (a Mac host) the observer is drawn for the grid, so it reconnects, and shortens the row again, forever.
+     */
+    private fun gridKeepsItsHeightThroughConnecting(fontScale: Float?, compact: Boolean) {
+        var view by mutableStateOf(viewOf(TerminalMode.Observing, pty = null))
+        rule.setContent {
+            val base = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(base.density, fontScale) else base) {
+                PaddockTheme(darkTheme = true) { Box(Modifier.fillMaxSize().padding(16.dp)) { TerminalTab(view, Calls().actions(), compact = compact) } }
+            }
+        }
+        val observing = screenNode().getBoundsInRoot().height
+        for (mode in listOf(TerminalMode.Connecting(control = false), TerminalMode.Connecting(control = true), TerminalMode.Observing)) {
+            rule.runOnIdle { view = viewOf(mode, pty = null) }
+            rule.waitForIdle()
+            assertEquals("the grid's height with $mode", observing, screenNode().getBoundsInRoot().height)
+        }
+        rule.onNodeWithText("Request control").assertIsDisplayed()
+    }
+
+    @Test fun theGridKeepsItsHeightWhileConnecting() = gridKeepsItsHeightThroughConnecting(null, compact = false)
+    @Test fun theGridKeepsItsHeightWhileConnectingAtTwoHundredPercentFont() = gridKeepsItsHeightThroughConnecting(2f, compact = false)
+    @Test fun theGridKeepsItsHeightWhileConnectingWithTheKeyboardUp() = gridKeepsItsHeightThroughConnecting(null, compact = true)
 
     @Test fun beforeTheFirstScreenItSaysItIsConnecting() {
         show(viewOf(TerminalMode.Connecting(control = false), grid = false))

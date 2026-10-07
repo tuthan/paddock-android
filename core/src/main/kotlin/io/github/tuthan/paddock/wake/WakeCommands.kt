@@ -15,6 +15,11 @@ object WakeCommands {
         val out = ArrayList<WakeCommand>()
         // Each enable command follows its own reading: the wakeup node being off says nothing about the magic-packet setting.
         if (r.wakeup == "disabled") out += WakeCommand("Let the interface wake the machine, until the next reboot", "echo enabled | sudo tee /sys/class/net/$iface/device/power/wakeup")
+        if (r.womp != null) {
+            // macOS has one setting for Wi-Fi and Ethernet, and pmset keeps it across reboots. An unread setting still gets its command.
+            if (!r.magicPacketOn) out += WakeCommand("Wake for network access (stays on after a reboot)", "sudo pmset -a womp 1")
+            return out
+        }
         if (r.wifi && r.phy != null) {
             if (!r.magicPacketOn) out += WakeCommand("Wake on a magic packet, until the next reboot", "sudo iw phy ${r.phy} wowlan enable magic-packet")
             out += WakeCommand("Keep it after a reboot (name from `nmcli -t -f NAME,DEVICE connection show --active`)", "nmcli connection modify \"<connection name>\" 802-11-wireless.wake-on-wlan magic")
@@ -39,12 +44,13 @@ object WakeCommands {
 
     private fun notReadyWhy(r: WakeReadiness): String = when {
         r.wakeup == "disabled" -> "the interface is not allowed to wake the machine"
+        r.womp != null -> "Wake for network access is off"
         r.wifi -> "Wi-Fi wake (WoWLAN) is ${r.wowlan ?: "off"}"
         else -> "Wake-on is ${r.ethtool ?: "off"}"
     }
 
     private fun unknownWhy(r: WakeReadiness?): String {
-        val said = if (r?.wifi == true) r.wowlan else r?.ethtool
+        val said = if (r?.womp != null) r.womp else if (r?.wifi == true) r.wowlan else r?.ethtool
         return said?.removePrefix("unknown: ")?.takeIf { it.isNotEmpty() } ?: "the machine did not say"
     }
 }

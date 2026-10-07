@@ -85,35 +85,6 @@ class AlertRelayHostTest {
         assertTrue(installed)
     }
 
-    private val unit = host.resolve("paddock-alert-relay.service").readText()
-    private val example = host.resolve("alert-relay.example.toml").readText()
-
-    @Test fun theSetupCommandsEmbedThePinnedFilesAndFillInTheMachineAndTheSocket() {
-        val text = AlertRelaySetup.commands(unit, example, "workstation", "/home/u/.config/herdr/sessions/work/herdr.sock", pin)
-        assertContains(text, "script sha256 $pin")
-        assertContains(text, unit.trimEnd('\n'))
-        assertContains(text, "profile = \"workstation\"")
-        assertContains(text, "socket = \"/home/u/.config/herdr/sessions/work/herdr.sock\"")
-        assertFalse("socket = \"~/.config/herdr/herdr.sock\"" in text)
-        assertContains(text, "<<'PADDOCK_UNIT'")
-        assertContains(text, "<<'PADDOCK_CONF'")
-        // enabling is the user's: the commands say so, and nothing in them starts anything before the check
-        assertTrue(text.lastIndexOf("--check") < text.lastIndexOf("enable --now"))
-        // the configuration is never overwritten
-        assertContains(text, "[ -e ~/.config/paddock/alert-relay.toml ] ||")
-    }
-
-    @Test fun theConfigurationIsWrittenWithModeSixHundred() {
-        assertContains(AlertRelaySetup.commands(unit, example, "w", "/s/herdr.sock", pin), "chmod 600 ~/.config/paddock/alert-relay.toml")
-    }
-
-    @Test fun aHostileSocketPathOrATerminatorInAFileIsRefused() {
-        for (bad in listOf("relative/herdr.sock", "/a\"b/herdr.sock", "/a\nb/herdr.sock"))
-            assertFailsWith<IllegalArgumentException>(bad) { AlertRelaySetup.commands(unit, example, "w", bad, pin) }
-        assertFailsWith<IllegalArgumentException> { AlertRelaySetup.commands(unit + "\nPADDOCK_UNIT\n", example, "w", "/s/herdr.sock", pin) }
-        assertFailsWith<IllegalArgumentException> { AlertRelaySetup.commands(unit, example + "\nPADDOCK_CONF\n", "w", "/s/herdr.sock", pin) }
-    }
-
     private fun pushSession(testExit: Int = 0, writeExit: Int = 0) = FakeSession(onExec = { argv, _ ->
         when {
             argv.first() == "sh" && argv[2].startsWith("test -s") -> FakeSession.result(testExit)
@@ -151,5 +122,88 @@ class AlertRelayHostTest {
         assertTrue(s.execs.single().first[2].startsWith("test -s"), "existence only: nothing is read back")
         val r = pushSession(); relay(r).removePushEndpoint()
         assertContains(r.execs.single().first[2], "rm -f")
+    }
+
+    // ---- a Mac ----------------------------------------------------------------------------------------------------------------------
+
+    private val macHome = "/Users/u"
+    private val macPath = "$macHome/.local/share/paddock/paddock-alert-relay.py"
+
+    /** A Mac as an SSH command sees it: `uname` says Darwin, there is no `sha256sum` (only `shasum`), no `systemctl`, and every script goes in on stdin. */
+    private fun mac(onHost: String?, checkExit: Int = 0, checkErr: String = "", state: String = "active", testOut: String = "paddock-test: ok 200\n", uname: () -> Int = { 0 }) =
+        FakeSession(onExec = { argv, stdin ->
+            val text = stdin?.toString(Charsets.UTF_8).orEmpty()
+            when {
+                argv.first() == "sh" && argv.getOrNull(1) == "-c" && argv[2].startsWith("uname") -> if (uname() == 0) FakeSession.result(0, "Darwin\n") else FakeSession.result(1)
+                argv.first() == "sh" && argv.getOrNull(1) == "-c" && argv[2].startsWith("printf") -> FakeSession.result(0, macHome)
+                argv.first() == "sha256sum" -> FakeSession.result(127, err = "sha256sum: command not found")
+                argv.first() == "shasum" -> if (onHost == null) FakeSession.result(1) else FakeSession.result(0, "$onHost  ${argv.last()}\n")
+                argv == listOf("sh", "-s") && "--check" in text -> FakeSession.result(checkExit, out = if (checkExit == 21) "paddock-setup: no-python\n" else "", err = checkErr)
+                argv == listOf("sh", "-s") && "launchctl print" in text -> FakeSession.result(0, state + "\n")
+                argv == listOf("sh", "-s") && "PADDOCK_TEST" in text -> FakeSession.result(if ("ok" in testOut) 0 else 1, testOut)
+                argv == listOf("sh", "-s") -> FakeSession.result(0, "paddock-setup: off\n")
+                else -> FakeSession.result(127)
+            }
+        })
+
+    @Test fun aMacIsReadThroughShasumAndTheLaunchAgentAndALookedForPython() = runBlocking<Unit> {
+        val s = mac(pin, 0, "paddock-alert-relay: config ok; herdr reachable (session default, delivery unifiedpush)\n")
+        val r = relay(s); val status = r.inspect()
+        assertEquals(ServicePlatform.Launchd, r.platform())
+        assertEquals(RelayState.Current, status.script, "the hash came from shasum: a Mac has no sha256sum")
+        assertEquals(macPath, status.destination)
+        assertTrue(assertNotNull(status.check).ok)
+        assertEquals(ServiceState.Active, status.service)
+        assertTrue(s.execs.none { it.first.first() in listOf("systemctl", "python3") }, "no systemd and no bare python3 on a Mac")
+        val check = s.execs.map { it.second?.toString(Charsets.UTF_8).orEmpty() }.single { "--check" in it }
+        assertContains(check, AlertSetupScript.FIND_PYTHON); assertContains(check, "\"$macPath\" --check </dev/null")
+    }
+
+    @Test fun theLaunchAgentsStatesAreNamedLikeSystemds() = runBlocking<Unit> {
+        for ((said, want) in listOf("active" to ServiceState.Active, "inactive" to ServiceState.Inactive, "unknown" to ServiceState.NotInstalled, "???" to ServiceState.Unknown))
+            assertEquals(want, relay(mac(pin, state = said)).inspect().service, said)
+    }
+
+    @Test fun aMacWithoutAnyPythonThreeElevenSaysSoInsteadOfAReadingFailure() = runBlocking<Unit> {
+        val check = assertNotNull(relay(mac(pin, checkExit = 21)).inspect().check)
+        assertEquals(21, check.exit); assertFalse(check.ok); assertEquals(listOf(AlertSetupCopy.NO_PYTHON_MAC), check.lines)
+    }
+
+    @Test fun theTestAlertOnAMacRunsThePythonItFoundAndSaysWhenThereIsNone() = runBlocking<Unit> {
+        val s = mac(pin)
+        assertEquals(AlertSetupScript.TestOutcome.Sent, relay(s).sendTest())
+        val (argv, stdin) = s.execs.last()
+        assertEquals(listOf("sh", "-s"), argv, "over SSH an argument cannot hold quotes or line breaks, so the script is on stdin")
+        val text = stdin!!.toString(Charsets.UTF_8)
+        assertContains(text, AlertSetupScript.FIND_PYTHON); assertContains(text, "exec \"\$PY\" - <<'PADDOCK_TEST'"); assertContains(text, "urllib.request")
+        assertEquals(AlertSetupScript.TestOutcome.Failed("no Python 3.11 or newer on the machine"), relay(mac(pin, testOut = "paddock-setup: no-python\n")).sendTest())
+    }
+
+    @Test fun turningOffOnAMacSendsTheLaunchdScriptNotTheSystemdOne() = runBlocking<Unit> {
+        val s = mac(pin); relay(s).turnOff()
+        val text = s.execs.last().second!!.toString(Charsets.UTF_8)
+        assertContains(text, "launchctl bootout"); assertContains(text, "launchctl disable"); assertFalse("systemctl" in text)
+    }
+
+    @Test fun installingOnAMacVerifiesTheFileWithShasum() = runBlocking<Unit> {
+        var installed = false
+        val s = FakeSession(onExec = { argv, stdin ->
+            when {
+                argv.first() == "sh" && argv[2].startsWith("umask") -> { installed = true; assertTrue(stdin.contentEquals(script)); FakeSession.result(0) }
+                argv.first() == "sha256sum" -> FakeSession.result(127)
+                argv.first() == "shasum" -> if (installed) FakeSession.result(0, "$pin  x\n") else FakeSession.result(1)
+                else -> FakeSession.result(0, macHome)
+            }
+        })
+        relay(s).install()
+        assertTrue(installed)
+    }
+
+    @Test fun aMachineThatWillNotSayWhatItIsIsTakenForLinuxAndAskedAgainNextTime() = runBlocking<Unit> {
+        var answers = false
+        val r = relay(mac(pin, uname = { if (answers) 0 else 1 }))
+        assertEquals(ServicePlatform.Systemd, r.platform())
+        answers = true
+        assertEquals(ServicePlatform.Launchd, r.platform(), "a slow answer is not remembered as a wrong one")
     }
 }

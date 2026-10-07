@@ -49,10 +49,23 @@ class RelaySagaHost(private val relay: RelayClient, private val session: SshSess
             repository = r.worktree.label)
     }
 
-    override suspend fun createTab(workspaceId: String, before: suspend () -> Unit): Created {
-        val r = relay.call("tab.create", buildJsonObject { put("workspace_id", workspaceId); put("focus", false) }, timeout = 20.seconds, beforeWrite = before)
+    override suspend fun createTab(workspaceId: String, cwd: String?, before: suspend () -> Unit): Created {
+        val r = relay.call("tab.create", buildJsonObject { put("workspace_id", workspaceId); put("focus", false); if (cwd != null) put("cwd", cwd) }, timeout = 20.seconds, beforeWrite = before)
             .decode<TabCreatedResult>("tab_created")
         return Created(null, r.tab.tabId, r.rootPane.paneId, r.rootPane.terminalId, r.rootPane.cwd)
+    }
+
+    /**
+     * The path travels on stdin, never in argv (it is free text, and an argument cannot carry a quote or a backslash through every login shell). The script
+     * expands a leading `~`, refuses anything that is not absolute after that, and prints `pwd -P` of the folder: the same real path herdr reports for a pane.
+     */
+    override suspend fun resolveFolder(path: String): String? {
+        require(path.isNotEmpty() && path.none { it.isISOControl() }) { "invalid folder path" }
+        val r = session.exec(listOf("/bin/sh", "-c", RESOLVE_FOLDER, "paddock-folder"), stdin = (path + "\n").toByteArray(Charsets.UTF_8),
+            limits = ExecLimits(stdoutMax = 8192, stderrMax = 4096, deadline = 10.seconds))
+        if (r.exit != 0) return null
+        val out = r.stdout.toString(Charsets.UTF_8).trimEnd('\n')
+        return out.takeIf { it.startsWith("/") && it.none { c -> c.isISOControl() } }
     }
 
     override suspend fun inspectPane(paneId: String): PaneFacts {
@@ -101,6 +114,8 @@ class RelaySagaHost(private val relay: RelayClient, private val session: SshSess
         val EXECUTABLE = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
         val SHELLS = setOf("bash", "zsh", "fish", "sh", "dash", "ksh", "ash", "nu", "pwsh", "tcsh", "csh", "xonsh", "elvish")
         private val LOGIN_SHELLS = setOf("bash", "zsh", "fish", "sh", "dash", "ksh")
+        /** No single quote, no backslash and no line break: those cannot go in an argument over SSH. `read -r` takes the path from stdin as it is. */
+        const val RESOLVE_FOLDER = "IFS= read -r d; case \"\$d\" in \"~\") d=\"\$HOME\";; \"~/\"*) d=\"\$HOME/\${d#\"~/\"}\";; esac; case \"\$d\" in /*) cd -- \"\$d\" 2>/dev/null && pwd -P;; *) exit 3;; esac"
         const val PLAIN = "PATH=\"\$HOME/.local/bin:\$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:\$PATH\"; for c in \"\$@\"; do command -v \"\$c\" >/dev/null 2>&1 && exit 0; done; exit 1"
     }
 }

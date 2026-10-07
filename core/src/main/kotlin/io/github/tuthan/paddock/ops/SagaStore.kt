@@ -11,7 +11,7 @@ import kotlinx.serialization.json.Json
 /** The steps of the start-agent saga, in order. A saga's record names the step it is at or failed at. */
 @Serializable
 enum class SagaStep(val label: String) {
-    Availability("check the executable"), Place("create the place"), Verify("check the pane"), Start("start the agent"), FirstPrompt("send the first prompt")
+    Availability("check the executable"), Folder("check the folder"), Place("create the place"), Verify("check the pane"), Start("start the agent"), FirstPrompt("send the first prompt")
 }
 
 @Serializable
@@ -53,10 +53,19 @@ data class SagaRecord(
     val startedAt: Long,
     val updatedAt: Long,
     val recovered: Boolean = false,
+    /** The folder the user asked the agent to start in, as typed; null for the workspace's own. [expectedCwd] holds what the host made of it. */
+    val folder: String? = null,
 ) {
     /** Anything herdr created that still exists as far as this record knows. */
     val createdSomething get() = createdWorkspaceId != null || createdTabId != null || createdPaneId != null
     val needsRecovery get() = state == SagaState.Failed && !recovered && createdSomething
+
+    /**
+     * Whether the Spaces tab shows a card for it: it left something to deal with, or it is the attempt the user made just now ([attemptSince], the time
+     * they pressed Start) and stopped before creating anything (an executable or folder that is not there). The second kind has nothing to close, but it
+     * is the only place that says why nothing started, and where "Start anyway" is. Older ones of that kind stay quiet; they are in Activity.
+     */
+    fun showsCard(attemptSince: Long?) = needsRecovery || (state == SagaState.Failed && !recovered && attemptSince != null && updatedAt >= attemptSince)
 }
 
 @Serializable

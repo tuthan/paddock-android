@@ -51,6 +51,8 @@ tools/validate-fixtures.sh                   # corpus completeness, no leaks, `d
 
 `docs/onboarding.md` (Welcome, Connect staying on the form with each failure beside its fix, Find on this network, Scan the code on the desktop), `docs/pairing.md` (Send the key to the desktop's `pair` popup and the wire), `docs/wake.md` (Wake-on-LAN from the Home banner, with a relay for waking from away). The traditional steps (this phone's key and its authorize command, an imported key, Paste a pairing link) stay on Add machine whatever else is used.
 
+Also: `docs/alerts.md` (locked-phone alerts in one step from the app: Paddock shows them through UnifiedPush, or the ntfy app shows them, on the public ntfy.sh or a self-hosted server, from every saved machine, and what that looks like on an iPhone), `docs/guarded-answers.md` (a Yes or No from the phone for a Claude Code, Codex or opencode permission prompt; Android only), `docs/spaces.md` (starting an agent, in the workspace's folder or another folder you name), `docs/machines.md` (saved machines, each with a name of the user's choosing and a Linux, macOS or Windows icon), `docs/app-lock.md` (Lock Paddock with the phone's own fingerprint, face or PIN; no code of Paddock's own).
+
 ## Dependencies
 
 Every dependency is reviewed with Socket before it enters `gradle/libs.versions.toml`, and its row lands in `docs/dependency-reviews.md` in the same commit. See `docs/build-decision-record.md` for the toolchain.

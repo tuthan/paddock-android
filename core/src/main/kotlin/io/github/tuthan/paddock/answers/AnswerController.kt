@@ -55,8 +55,8 @@ data class AnswerView(
 }
 
 /**
- * Runs the phone's Yes and No for Claude Code permission requests. Reading is a poll of `paddock-decide.py list` while a screen
- * watches a blocked agent; answering is one journaled [Operation]: the pane is resolved from the installed snapshot, the row is
+ * Runs the phone's Yes and No for permission requests of Claude Code, Codex and opencode. Reading is a poll of `paddock-decide.py list` while a screen
+ * watches an agent, at full pace while it is blocked or is Codex and at a quiet pace otherwise ([AnswerRules.readsAtFullPace]); answering is one journaled [Operation]: the pane is resolved from the installed snapshot, the row is
  * written first, a fresh list proves the request on screen is still the newest pending one with time left, and one exec writes
  * the decision. Nothing here can send a key: the controller holds no herdr client at all.
  *
@@ -73,6 +73,8 @@ class AnswerController(
     private val pollMillis: Long = POLL_MILLIS,
     private val settlingPollMillis: Long = SETTLING_POLL_MILLIS,
     private val errorPollMillis: Long = ERROR_POLL_MILLIS,
+    private val quietPollMillis: Long = QUIET_POLL_MILLIS,
+    private val agentKind: (terminalId: String) -> String? = { null },
 ) {
     private val _views = MutableStateFlow<Map<String, AnswerView>>(emptyMap())
     val views: StateFlow<Map<String, AnswerView>> = _views.asStateFlow()
@@ -134,9 +136,11 @@ class AnswerController(
             while (true) {
                 val view = _views.value[id]
                 val settling = view?.settling == true
-                // A machine without the script (or an unreadable one) fails the same way every time: ask again slowly, never at the blocked-agent pace.
-                if (settling || agentStatus(id) == AgentStatus.Blocked || view?.listing == null && view?.error == null) readOnce(key)
-                delay(when { settling -> settlingPollMillis; _views.value[id]?.error != null -> errorPollMillis; else -> pollMillis })
+                // The host's files are the truth, whatever herdr says about the agent, so every watched agent is read. A machine without the script (or an
+                // unreadable one) fails the same way every time: ask again slowly, never at the blocked-agent pace.
+                readOnce(key)
+                val full = AnswerRules.readsAtFullPace(agentStatus(id), agentKind(id))
+                delay(when { settling -> settlingPollMillis; _views.value[id]?.error != null -> errorPollMillis; full -> pollMillis; else -> quietPollMillis })
             }
         } finally {
             synchronized(lock) { watchers[id]?.job = null }
@@ -175,7 +179,8 @@ class AnswerController(
             val nothingToAct = shown != null && v.result == null && AnswerRules.outcome(listing, shown.requestId, now).let { it is RequestOutcome.Gone || it is RequestOutcome.Expired }
             if (candidate != null && (shown == null || nothingToAct)) shown = candidate
             val outcome = shown?.let { AnswerRules.outcome(listing, it.requestId, now) }
-            val moved = agentStatus(terminalId).let { it == AgentStatus.Working || it == AgentStatus.Idle || it == AgentStatus.Done }
+            // Codex stays `working` in herdr while its hook waits, so for Codex only the end of the turn shows it moved on.
+            val moved = agentStatus(terminalId).let { it == AgentStatus.Idle || it == AgentStatus.Done || it == AgentStatus.Working && !AgentNames.isCodex(agentKind(terminalId)) }
             m + (terminalId to v.copy(
                 shown = shown, shownSince = if (shown?.requestId != v.shown?.requestId) now else v.shownSince,
                 outcome = outcome, answerability = AnswerRules.answerability(listing, now),
@@ -267,5 +272,7 @@ class AnswerController(
         const val POLL_MILLIS = 2_000L
         const val SETTLING_POLL_MILLIS = 600L
         const val ERROR_POLL_MILLIS = 15_000L
+        /** An agent herdr does not call blocked (and that is not Codex) is looked at this often: a request still shows within a few seconds of its file. */
+        const val QUIET_POLL_MILLIS = 4_000L
     }
 }

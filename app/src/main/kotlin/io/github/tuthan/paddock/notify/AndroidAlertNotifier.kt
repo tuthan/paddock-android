@@ -7,10 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Icon
 import android.net.Uri
+import android.os.Bundle
 import io.github.tuthan.paddock.MainActivity
 import io.github.tuthan.paddock.R
 import io.github.tuthan.paddock.alerts.AlertAction
 import io.github.tuthan.paddock.alerts.AlertNotifier
+import io.github.tuthan.paddock.alerts.DeepLink
 import io.github.tuthan.paddock.alerts.NotificationContent
 
 /**
@@ -33,6 +35,8 @@ class AndroidAlertNotifier(private val context: Context) : AlertNotifier {
             .setWhen(content.whenMillis).setShowWhen(true)
             .setAutoCancel(true)
             .setCategory(Notification.CATEGORY_STATUS)
+            // The link says which machine this is for, so coming to the front can clear that machine's notifications and no other's.
+            .addExtras(Bundle().apply { putString(EXTRA_LINK, content.link) })
             .setContentIntent(open)
         val public = builder(content.publicTitle, content.publicText).setVisibility(Notification.VISIBILITY_PUBLIC).build()
         val notification = builder(content.title, content.text).apply {
@@ -55,6 +59,17 @@ class AndroidAlertNotifier(private val context: Context) : AlertNotifier {
         nm.activeNotifications.filter { it.tag == TAG }.forEach { nm.cancel(TAG, it.id) }
     }
 
+    override fun cancelFor(profileId: String) {
+        val mine = nm.activeNotifications.filter { it.tag == TAG }
+        fun summary(n: android.service.notification.StatusBarNotification) = n.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0
+        val gone = mine.filter { !summary(it) && DeepLink.profileOf(it.notification.extras.getString(EXTRA_LINK)) == profileId }
+        gone.forEach { nm.cancel(TAG, it.id) }
+        // A Done stack's summary is not for one machine's link; it goes when no notification of its stack is left. What is left is judged from this list, not from
+        // a second read of the active ones, which may still show what was just cancelled.
+        val left = mine - gone.toSet()
+        left.filter { summary(it) && left.none { c -> !summary(c) && c.notification.group == it.notification.group } }.forEach { nm.cancel(TAG, it.id) }
+    }
+
     private fun pending(requestCode: Int, link: String): PendingIntent = PendingIntent.getActivity(
         context, requestCode,
         // Explicit, so the link needs no intent filter: the filter admits only `paddock://open`, and the push form is this app's own.
@@ -65,5 +80,6 @@ class AndroidAlertNotifier(private val context: Context) : AlertNotifier {
     companion object {
         /** All of Paddock's alert notifications carry this tag, so cancelling them never touches anything else. */
         const val TAG = "paddock-alert"
+        private const val EXTRA_LINK = "paddock.link"
     }
 }

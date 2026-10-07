@@ -27,7 +27,7 @@
 
 Target 37 also means edge-to-edge is enforced: the first screen draws under the system bars on API 36 and 37 unless it applies insets. `MainActivity` uses `safeDrawingPadding()`; every later screen must do the same. This closes the API 37 build-tuple item left open by Gate G0.
 
-`INTERNET` is declared (Phase 02, the SSH transport), and so is `ACCESS_NETWORK_STATE`, a normal permission `ConnectionOwner` uses to notice a default-network change and replace a dead socket.
+`INTERNET` is declared (Phase 02, the SSH transport), and so is `ACCESS_NETWORK_STATE`, a normal permission `ConnectionOwner` uses to notice a default-network change and replace a dead socket. `USE_BIOMETRIC` (2026-10-07) is a normal permission the platform `BiometricPrompt` needs before it will open for the app lock; it is install-time with no prompt, and nothing in Paddock reads a biometric.
 
 ## Release-cut settings
 

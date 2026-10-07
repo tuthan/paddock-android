@@ -36,6 +36,9 @@ class WakeTap(
 
     private val sending = AtomicBoolean(false)
     @Volatile private var following: Job? = null
+    /** Bumped by [forget], under [lock] with the clearing, so a tap can tell whether the machine it sent for is still the watched one. */
+    private var generation = 0L
+    private val lock = Any()
 
     fun tap() {
         // Facts are set only after the send finishes, so two quick taps would both pass the guard: this flag is what stops the second.
@@ -43,8 +46,9 @@ class WakeTap(
         scope.launch { try { run() } finally { sending.set(false) } }
     }
 
-    /** Another machine is watched: what the last tap came to is not about it. */
-    fun forget() {
+    /** Another machine is watched: what the last tap came to is not about it, and a tap still sending records nothing (see [run]). */
+    fun forget() = synchronized(lock) {
+        generation++
         following?.cancel()
         following = null
         _facts.value = null
@@ -52,12 +56,16 @@ class WakeTap(
 
     private suspend fun run() {
         if (_facts.value?.canWakeAgain(clock.nowMillis()) == false) return
+        val mine = synchronized(lock) { generation }
         val before = link()
         val result = send() ?: return
         // A machine that is already live says so; the two later facts would be true at the tap and mean nothing about this packet.
         val facts = WakeFacts(clock.nowMillis(), result, alreadyLive = before.reachable)
-        _facts.value = facts
-        if (!facts.transmitted) return
+        // Another machine became the watched one while this packet was being sent ([forget]): its facts, the reconnect and the follow would all land
+        // on that machine, whose connection says nothing about this packet. The check and the write share the lock, so a forget cannot fall between them.
+        val current = synchronized(lock) { (generation == mine).also { if (it) _facts.value = facts } }
+        if (!current || !facts.transmitted) return
+        if (synchronized(lock) { generation != mine }) return
         reconnect()
         if (!facts.alreadyLive) follow(facts, before)
     }

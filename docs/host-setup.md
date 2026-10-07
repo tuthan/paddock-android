@@ -32,6 +32,34 @@ To verify by hand, on the machine: `sha256sum ~/.local/share/paddock/paddock-rel
 
 Without this, Paddock only knows what is happening while it is open. With it, a small program on the machine posts a generic message ("an agent needs you") to a push path you choose; nothing about the agent is in the message. Read `alerts.md` for what it promises and what it does not (measured best effort, never always-on).
 
+1. On the phone: **Settings > Locked-phone alerts**. Choose how alerts reach you (*Paddock shows the alert*, needs the ntfy app or another UnifiedPush app installed; or *The ntfy app shows the alert*, which also works on an iPhone) and, for the second, which server: the public `ntfy.sh` or your own (its `https://` address and, if it needs one, an access token). Use a server you run if the machine touches work you care about.
+2. Tap **Turn on alerts…** and read the confirmation: it lists what Paddock writes on the machine (the relay script, hash `9fd18cadd27861cafa8a83a55acb8d975c2f367215178cedc3c8d1a603612285`; `~/.config/paddock/alert-relay.toml`, mode 600; the systemd user unit, hash `227c624bc91e3a5c466936694ac58b1ccc4c804adb0a01f7b37e813fb74bc7ba` (on a Mac a launchd LaunchAgent instead: `~/Library/LaunchAgents/io.github.tuthan.paddock-alert-relay.plist`, and a Python 3.11 or newer such as `brew install python`; see `alerts.md`, "On a Mac"); and, in the Paddock way, the address file). Confirm. Paddock does it over the SSH connection already open, checks the configuration with the relay's own `--check`, and only then enables and starts the unit and runs `loginctl enable-linger`. The steps and the first failure are shown on the screen. Needs systemd and Python 3.11 or newer on the machine.
+3. In the ntfy-app way, **Open in the ntfy app** (or copy the link) to subscribe the ntfy app to the topic Paddock made. On an iPhone, add the topic by hand: the screen shows the server and the topic.
+4. **Send a test alert** from the same screen: the machine posts one test message the way the relay would. If it does not show, the ntfy app is not subscribed, or (iPhone, your own server) `upstream-base-url` is not set.
+5. **Several machines:** repeat steps 1 to 4 on each machine you want alerts from (the setup runs over the live connection, so watch the machine once; its page says so until then). Each machine has its own address or topic, so every one alerts whichever machine Paddock is watching; on an iPhone, subscribe the ntfy app to each topic by hand. While Paddock is open only the watched machine's alerts are held back, because its herd is on screen; another machine's still raises a notification. An agent raises an alert when herdr shows it `blocked` or `done`: a Claude Code or opencode prompt or question does, a Codex permission request does not (`alerts.md`).
+6. On the phone, turn **Alerts** on too if you want alerts while Paddock is open (Android 13 and later asks for the notification permission here, in context). To test for real, make an agent block (or finish) and watch the phone.
+
+The text that Paddock runs is under **Details and manual setup** on the same screen, so you can read it first or paste it into a shell yourself.
+
+To undo: delete the `paddock@phone` line from `~/.ssh/authorized_keys`.
+
+## 2. The two helpers the app installs (needed for every connection and every control session)
+
+The app asks before it installs each of these, and shows the hash. Both are single Python files with no dependencies; they are copied to `~/.local/share/paddock/` with owner-only permissions. Paddock refuses to run a file whose hash is not the one it was built with, so a file edited on the machine is never used (the app says so and offers to reinstall).
+
+| File | What it does | SHA-256 (release 0.0.1 and any build whose `host/SOURCE.json` shows the same) |
+| --- | --- | --- |
+| `paddock-relay.py` | Opens the connection to herdr's local socket and passes herdr's own JSON through. It adds nothing herdr could not already answer. | `8effb4b5aa733fccf72b5ca31545bc24f05046d000d463d6939b3486b3339695` |
+| `paddock-control.py` | Runs exactly one `herdr terminal session control` command for the Terminal tab and forwards only the four terminal message types; it releases control when the phone stops answering. | `d95e0a155a4e7a9addcc0018c3c267448a45e0611bfb24cad5b88df43a23ceff` |
+
+On first connect the app shows the relay's install question: **Install the relay** copies the file; **Not now** closes the question and installs nothing, and Home offers it again as a recovery action. The Terminal tab asks for the control helper the first time you ask for control.
+
+To verify by hand, on the machine: `sha256sum ~/.local/share/paddock/paddock-relay.py ~/.local/share/paddock/paddock-control.py` must print the two hashes above. To undo: `rm -r ~/.local/share/paddock`.
+
+## 3. Alerts on a locked phone (optional)
+
+Without this, Paddock only knows what is happening while it is open. With it, a small program on the machine posts a generic message ("an agent needs you") to a push path you choose; nothing about the agent is in the message. Read `alerts.md` for what it promises and what it does not (measured best effort, never always-on).
+
 1. On the phone: **Settings > Locked-phone alerts**. It shows the alert relay's hash, `9fd18cadd27861cafa8a83a55acb8d975c2f367215178cedc3c8d1a603612285`, and installs only that file after you confirm.
 2. Run the commands the screen shows, on the machine. They write `~/.config/systemd/user/paddock-alert-relay.service` (hash `227c624bc91e3a5c466936694ac58b1ccc4c804adb0a01f7b37e813fb74bc7ba`) and, only if you have none, `~/.config/paddock/alert-relay.toml` (mode 600).
 3. Edit that file: the `url` of your ntfy server and a long random `topic`. The topic name is the only secret in this path; use a server you run if you can. Install the ntfy app on the phone and subscribe to the same topic.
@@ -39,17 +67,20 @@ Without this, Paddock only knows what is happening while it is open. With it, a 
 5. Start it: `systemctl --user daemon-reload && systemctl --user enable --now paddock-alert-relay.service`, and `loginctl enable-linger "$USER"` so it runs without a login session and after a reboot.
 6. On the phone, turn **Alerts** on (Android 13 and later asks for the notification permission here, in context). To test, make an agent block (or finish) and watch the phone.
 
-To undo: `systemctl --user disable --now paddock-alert-relay.service`, delete the unit file and `~/.config/paddock/alert-relay.toml`, and turn Alerts off in Settings.
+To undo: **Turn off alerts…** on the same screen (stops and disables the unit and removes the address file; the configuration stays, so turning them on again keeps your topic), or by hand: `systemctl --user disable --now paddock-alert-relay.service`, delete the unit file, `~/.config/paddock/alert-relay.toml` and `push-endpoint.json`, and turn Alerts off in Settings.
 
-## 4. Answering permission requests from the phone (optional, Claude Code only)
+## 4. Answering permission requests from the phone (optional: Claude Code, Codex, opencode)
 
-Off until you set it up. When on, Claude Code's own dialog stays on the desktop and the phone can answer the same request while it waits; whoever answers first wins, and any failure leaves the desktop dialog alone. Read `guarded-answers.md` first.
+Off until you set it up. When on, the phone can answer an agent's permission request. Claude Code and opencode keep their own dialog on the desktop while it waits, so whoever answers first wins; Codex shows nothing on the desktop until the window ends (that is how its hooks work), so it has a short window of its own, and there is no "needs you" alert for a Codex request (herdr keeps the agent `working` until Codex's own prompt appears; open the agent in Paddock to see it). Any failure leaves the desktop prompt alone. Read `guarded-answers.md` first.
 
-1. On the phone: **Settings > Guarded answers**. It shows the hashes of the two files it installs, `paddock-claude-permission-hook.py` (`964ea1a48e605e15d0d10c187cee401edca69604cf4f19d7eddab674ec41e478`) and `paddock-decide.py` (`f039d8fb5b194fdea08db3c576225d6fb199b5774996b81e835d692698ae7747`), and installs them after you confirm.
-2. Run the **configuration command** it shows. It writes `~/.config/paddock/hook.toml` with `window_seconds` (1 to 300; the default shown is 60) only if you have none, mode 600. No file, or `window_seconds = 0`, means the hook does nothing.
-3. Register the hook yourself: merge the JSON the screen shows under `hooks.PermissionRequest` in `~/.claude/settings.json`. Paddock never edits that file. Claude Code's `timeout` there is the window plus five seconds.
+1. On the phone: **Settings > Machines > the machine > Guarded answers** (the machine must be the watched one). It shows the hashes of the three files it installs into `~/.local/share/paddock/`, `paddock-claude-permission-hook.py` (`dd0351a38c08cc5ab1f9d213d6cbdb586ebcdd9780112ba85cd2c2ed2f99175a`), `paddock-decide.py` (`f039d8fb5b194fdea08db3c576225d6fb199b5774996b81e835d692698ae7747`) and `paddock-opencode-permission.js` (`cb9e1ad3931551e177ba7e929188759d9267a3a6f7774f5b8f5feaaa0e10fe3b`), and installs them after you confirm.
+2. Run the **configuration command** it shows. It writes `~/.config/paddock/hook.toml` with `window_seconds` (1 to 300; the default shown is 60; Claude Code and opencode) and `codex_window_seconds` (the default shown is 20; Codex) only if you have none, mode 600. No file, or `window_seconds = 0`, means the hook does nothing for any agent.
+3. Register the hook for each agent you use. Paddock never edits these files; the screen has one chip per agent and shows the exact text:
+   - **Claude Code:** merge the JSON under `hooks.PermissionRequest` in `~/.claude/settings.json`; the `timeout` there is the window plus five seconds. Start a new session.
+   - **Codex:** merge the JSON under `hooks.PermissionRequest` in `~/.codex/hooks.json` (the command has `--agent codex`; the `timeout` is Codex's window plus ten). Start Codex and choose **Trust** when it asks about the new hook (or `/hooks`, then `t`). On a Mac start Codex with `codex --no-daemon` (Codex's shared daemon runs hooks with the first terminal's environment; Paddock finds the right pane on Linux only, and only when one Codex agent runs in that folder).
+   - **opencode:** run `mkdir -p ~/.config/opencode/plugins` and `ln -sf ~/.local/share/paddock/paddock-opencode-permission.js ~/.config/opencode/plugins/paddock-opencode-permission.js`, then restart opencode.
 
-To undo: remove that entry from `~/.claude/settings.json` and delete `~/.config/paddock/hook.toml`.
+To undo: remove the entry from `~/.claude/settings.json` and `~/.codex/hooks.json`, delete `~/.config/opencode/plugins/paddock-opencode-permission.js`, and delete `~/.config/paddock/hook.toml`.
 
 ## 5. Pair from the desktop, and wake the machine (optional)
 
@@ -63,7 +94,7 @@ Neither is needed: section 1 always works. Both are additions (Phase 14).
 
 The listener is plaintext and LAN-only, and exists only while the popup is open; what crosses it is the phone's public key, a session handle and one result word. If the machine has several addresses, the link's host has to be the one the listener is bound to (`--listen-ip` or `--host` on the plugin's `bin/pair.py`). `docs/pairing.md` has the whole flow and the wire.
 
-**Wake the machine** needs the machine's network interface to accept a magic packet while the machine sleeps. Paddock reads the state over SSH (read-only) and shows the commands to run, when something has to change, under **Settings > the machine**; it never runs them. Typical on a laptop with Wi-Fi:
+**Wake the machine** needs the machine's network interface to accept a magic packet while the machine sleeps. Paddock reads the state over SSH (read-only) and shows the commands to run, when something has to change, on the machine's page (**Machines**, from the chip on Home or from Settings, then the machine); it never runs them. Typical on a laptop with Wi-Fi:
 
 ```sh
 echo enabled | sudo tee /sys/class/net/<iface>/device/power/wakeup       # allow the interface to wake the machine

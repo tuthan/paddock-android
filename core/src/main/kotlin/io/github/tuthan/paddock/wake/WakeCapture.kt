@@ -13,22 +13,17 @@ import kotlin.time.Duration.Companion.seconds
  * machine or the phone says can reach a shell.
  */
 object WakeCapture {
-    /**
-     * One line of POSIX `sh`, because the session refuses an argument with a line break, a single quote or a backslash (so it can be
-     * quoted for any login shell): double quotes only, fields read with positional parameters instead of `sed`, `set -f` so an
-     * unquoted `*` in `iw`'s output is never a glob. `~` in the source below stands for `$` and is replaced before use.
-     *
-     * Extends `PATH` first: a non-login `sh` over SSH often lacks `/usr/sbin` and `/sbin`, where `ip`, `iw` and `ethtool` live on
-     * Debian. Prints `client=`, `gateway=` and then one `dev=… end` block for the interface of the route to the phone and, when it is
-     * another, for the default route's. Read-only: nothing is written, started or run with more rights than the SSH user has.
-     */
-    val COMMAND: String = listOf(
+    private val SHARED = listOf(
         "PATH=\"~PATH:/usr/sbin:/sbin\"",
         "export PATH",
         "set -f",
         "set -- ~SSH_CONNECTION",
         "c=~1",
         "echo \"client=~c\"",
+    )
+
+    /** `ip`, `/sys/class/net`, `iw` and `ethtool`: what a Linux host has. */
+    private val LINUX = listOf(
         "set -- ~(ip -o route get \"~c\" 2>/dev/null)",
         "dev=",
         "while [ ~# -gt 0 ]; do if [ \"~1\" = dev ]; then dev=~2; fi; shift; done",
@@ -52,7 +47,50 @@ object WakeCapture {
             "fi; echo end; }",
         "emit \"~dev\"",
         "if [ \"~defdev\" != \"~dev\" ]; then emit \"~defdev\"; fi",
-    ).joinToString("; ").replace('~', '$')
+    )
+
+    /**
+     * `route`, `ifconfig` and `pmset`: what macOS has. The interface of a route is the word after `interface:`, the gateway the word
+     * after `gateway:`; the hardware address is the word after `ether` and the address the word after the first `inet`. An interface
+     * is physical when it is named `en` and a number (a tunnel is `utun`, a bridge `bridge`, Apple's peer-to-peer links `awdl` and
+     * `llw`). Wake for network access is the `womp` line of `pmset -g`: 1 on, 0 off, nothing printed when it cannot be read.
+     */
+    private val MACOS = listOf(
+        "set -- ~(route -n get \"~c\" 2>/dev/null)",
+        "dev=",
+        "while [ ~# -gt 0 ]; do if [ \"~1\" = interface: ]; then dev=~2; fi; shift; done",
+        "set -- ~(route -n get default 2>/dev/null)",
+        "defdev=",
+        "gw=",
+        "while [ ~# -gt 0 ]; do if [ \"~1\" = interface: ]; then defdev=~2; fi; if [ \"~1\" = gateway: ]; then gw=~2; fi; shift; done",
+        "echo \"gateway=~gw\"",
+        "emit() { d=~1; [ -n \"~d\" ] || return 0; echo \"dev=~d\"; " +
+            "case \"~d\" in en[0-9]|en[0-9][0-9]) echo physical=yes;; *) echo physical=no;; esac; " +
+            "set -- ~(ifconfig \"~d\" 2>/dev/null); m=; a=; " +
+            "while [ ~# -gt 0 ]; do if [ \"~1\" = ether ] && [ -z \"~m\" ]; then m=~2; fi; if [ \"~1\" = inet ] && [ -z \"~a\" ]; then a=~2; fi; shift; done; " +
+            "echo \"mac=~m\"; echo \"addr=~a\"; " +
+            "set -- ~(pmset -g 2>/dev/null | grep -E \"^[[:space:]]+womp[[:space:]]\" | head -n 1); echo \"womp=~2\"; echo end; }",
+        "emit \"~dev\"",
+        "if [ \"~defdev\" != \"~dev\" ]; then emit \"~defdev\"; fi",
+    )
+
+    /**
+     * One line of POSIX `sh`, because the session refuses an argument with a line break, a single quote or a backslash (so it can be
+     * quoted for any login shell): double quotes only, fields read with positional parameters instead of `sed`, `set -f` so an
+     * unquoted `*` in `iw`'s output is never a glob. `~` in the source below stands for `$` and is replaced before use.
+     *
+     * Extends `PATH` first: a non-login `sh` over SSH often lacks `/usr/sbin` and `/sbin`, where `ip`, `iw` and `ethtool` live on
+     * Debian. Prints `client=`, `gateway=` and then one `dev=… end` block for the interface of the route to the phone and, when it is
+     * another, for the default route's. Read-only: nothing is written, started or run with more rights than the SSH user has.
+     *
+     * Two readers, chosen by `uname -s`: [MACOS] when it says `Darwin`, [LINUX] for anything else (so a host with no `uname` is read
+     * as before). Both print the same blocks, so [WakeCaptureParser] has one format to read.
+     */
+    val COMMAND: String = (
+        SHARED.joinToString("; ") +
+            "; if [ \"~(uname -s 2>/dev/null)\" = Darwin ]; then " + MACOS.joinToString("; ") +
+            "; else " + LINUX.joinToString("; ") + "; fi"
+        ).replace('~', '$')
 
     /**
      * Runs [COMMAND] and reads its answer. Never throws for a machine that answers badly: that is "not available", with the reason,
@@ -136,6 +174,7 @@ object WakeCaptureParser {
                 wowlan = if (wifi) wowlanWords(f["wowlan"]) else null,
                 ethtool = if (wifi) null else ethtoolWords(f["wol"]),
                 wifi = wifi, phy = if (wifi) f["phy"] else null,
+                womp = if (f.containsKey("womp")) wompWords(f["womp"]) else null,
             ),
         )
         return WakeReading(target, answered = true)
@@ -148,6 +187,13 @@ object WakeCaptureParser {
         "is disabled" in raw -> "disabled"
         "is enabled" in raw -> if ("magic packet" in raw) "enabled: magic packet" else "enabled"
         else -> "unknown: " + raw.take(80)
+    }
+
+    /** macOS's `womp` from `pmset -g`: `1` is on, `0` is off, and anything else (nothing printed, a word) is not known. */
+    private fun wompWords(raw: String?): String = when (raw) {
+        "1" -> "enabled"
+        "0" -> "disabled"
+        else -> "unknown: Wake for network access could not be read"
     }
 
     private fun ethtoolWords(raw: String?): String? = when {

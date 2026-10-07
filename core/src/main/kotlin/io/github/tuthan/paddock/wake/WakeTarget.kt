@@ -58,17 +58,22 @@ data class WakeReadiness(
     val ethtool: String? = null,
     val wifi: Boolean = false,
     val phy: String? = null,
+    /** macOS: Wake for network access, `pmset -g`'s `womp` line, as `enabled`, `disabled` or `unknown: …`; null for a Linux host. */
+    val womp: String? = null,
 ) {
     init {
         require(phy == null || PHY.matches(phy)) { "invalid phy" }
-        listOf(wakeup, wowlan, ethtool).forEach { require(it == null || it.length <= 120) { "readiness text too long" } }
+        require(womp == null || womp == "enabled" || womp == "disabled" || womp.startsWith("unknown")) { "invalid Wake for network access reading" }
+        listOf(wakeup, wowlan, ethtool, womp).forEach { require(it == null || it.length <= 120) { "readiness text too long" } }
     }
 
     /**
      * True when this reading itself says the magic-packet setting is on (Wi-Fi: WoWLAN lists magic packets; Ethernet: `Wake-on` has
      * `g`). It says nothing of `power/wakeup`, which is a separate setting with its own command.
      */
-    val magicPacketOn: Boolean get() = if (wifi) {
+    val magicPacketOn: Boolean get() = if (womp != null) {
+        womp == "enabled"
+    } else if (wifi) {
         wowlan != null && !wowlan.startsWith("unknown") && !wowlan.lowercase().startsWith("disabled") && "magic" in wowlan.lowercase()
     } else {
         ethtool != null && !ethtool.startsWith("unknown") && 'g' in ethtool
@@ -77,6 +82,11 @@ data class WakeReadiness(
     /** `ready`, `not ready` or `unknown`, for the Settings row. */
     val verdict: Verdict get() = when {
         wakeup == "disabled" -> Verdict.NotReady
+        womp != null -> when (womp) {
+            "enabled" -> Verdict.Ready
+            "disabled" -> Verdict.NotReady
+            else -> Verdict.Unknown
+        }
         wifi -> when {
             wowlan == null || wowlan.startsWith("unknown") -> Verdict.Unknown
             magicPacketOn -> Verdict.Ready
