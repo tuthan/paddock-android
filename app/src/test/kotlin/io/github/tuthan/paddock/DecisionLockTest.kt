@@ -1,5 +1,8 @@
 package io.github.tuthan.paddock
 
+import io.github.tuthan.paddock.routes.GUARDED_SETUP_IS_PRO
+import io.github.tuthan.paddock.routes.decisionNotice
+import io.github.tuthan.paddock.routes.decisionSetUp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull

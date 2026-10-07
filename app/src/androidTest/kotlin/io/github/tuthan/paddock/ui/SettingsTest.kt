@@ -35,8 +35,8 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isHeading
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.tuthan.paddock.PaddockApp
-import io.github.tuthan.paddock.ProGateHost
-import io.github.tuthan.paddock.SettingsRoute
+import io.github.tuthan.paddock.routes.ProGateHost
+import io.github.tuthan.paddock.routes.SettingsRoute
 import io.github.tuthan.paddock.billing.Distribution
 import io.github.tuthan.paddock.billing.EntitlementState
 import io.github.tuthan.paddock.billing.GateContext
@@ -44,7 +44,7 @@ import io.github.tuthan.paddock.billing.ProCopy
 import io.github.tuthan.paddock.billing.ProGate
 import io.github.tuthan.paddock.billing.ProStatus
 import io.github.tuthan.paddock.billing.ProView
-import io.github.tuthan.paddock.proCard
+import io.github.tuthan.paddock.routes.proCard
 import io.github.tuthan.paddock.ui.components.SecureWindow
 import io.github.tuthan.paddock.ui.screens.ABOUT_THEME
 import io.github.tuthan.paddock.ui.screens.LocalAccess

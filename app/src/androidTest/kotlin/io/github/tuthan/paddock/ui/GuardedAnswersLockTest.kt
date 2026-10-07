@@ -10,8 +10,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import io.github.tuthan.paddock.GUARDED_SETUP_IS_PRO
-import io.github.tuthan.paddock.RequestWatch
+import io.github.tuthan.paddock.routes.GUARDED_SETUP_IS_PRO
+import io.github.tuthan.paddock.routes.RequestWatch
 import io.github.tuthan.paddock.answers.AnswerController
 import io.github.tuthan.paddock.answers.AnswerPort
 import io.github.tuthan.paddock.answers.Behavior
@@ -19,8 +19,8 @@ import io.github.tuthan.paddock.answers.DecisionModel
 import io.github.tuthan.paddock.answers.NotAnswerable
 import io.github.tuthan.paddock.answers.RequestListing
 import io.github.tuthan.paddock.attention.StateWord
-import io.github.tuthan.paddock.decisionNotice
-import io.github.tuthan.paddock.decisionSetUp
+import io.github.tuthan.paddock.routes.decisionNotice
+import io.github.tuthan.paddock.routes.decisionSetUp
 import io.github.tuthan.paddock.herdr.AgentStatus
 import io.github.tuthan.paddock.herdr.Pane
 import io.github.tuthan.paddock.herdr.Snapshot
