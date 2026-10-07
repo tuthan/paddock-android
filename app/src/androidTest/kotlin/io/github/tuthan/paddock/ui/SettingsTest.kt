@@ -600,18 +600,18 @@ class SettingsTest {
         }
     }
 
-    @After fun clearTheGate() { graph.dismissGate(); graph.dismissGateNotice() }
+    @After fun clearTheGate() { graph.proService.dismissGate(); graph.proService.dismissGateNotice() }
 
     private fun inSheet(m: SemanticsMatcher) = rule.onNode(m and hasAnyAncestor(isDialog()))
 
     @Test fun aLockedBuildsOverviewRowOpensTheSheetTitledWhatProCoversWithEveryLineAndNoFreePath() {
         assumeTrue("a build with -PpaddockUnlocked=false", !Distribution.UNLOCKED)
-        assertEquals("what the gate sees as busy: ${graph.journal.records.value.filter { it.inFlight }}", GateContext.IDLE, graph.gateContext(false))
+        assertEquals("what the gate sees as busy: ${graph.journal.records.value.filter { it.inFlight }}", GateContext.IDLE, graph.proService.gateContext(false))
         showRoute()
         val short = ProCopy.coverageShort(ProGate.GATED)
         rule.onNode(hasContentDescription("What Pro covers, $short")).performScrollTo().assertIsDisplayed().performClick()
         rule.waitForIdle()
-        assertEquals(ProCopy.OVERVIEW_ID, graph.gateRequest.value)
+        assertEquals(ProCopy.OVERVIEW_ID, graph.proService.gateRequest.value)
         inSheet(hasText("What Pro covers")).assertIsDisplayed()
         val lines = ProCopy.coverageLines(ProGate.GATED)
         assertEquals(5, lines.size)
@@ -627,7 +627,7 @@ class SettingsTest {
         shoot("settings-pro-overview")
         inSheet(hasText("Not now")).performScrollTo().performClick()
         rule.waitForIdle()
-        assertEquals(null, graph.gateRequest.value)
+        assertEquals(null, graph.proService.gateRequest.value)
         assertEquals(0, rule.onAllNodes(isDialog()).fetchSemanticsNodes().size)
     }
 
@@ -639,9 +639,9 @@ class SettingsTest {
         assertEquals(0, rule.onAllNodes(hasContentDescription(ProCopy.OVERVIEW_ROW, substring = true)).fetchSemanticsNodes().size)
         assertEquals(0, rule.onAllNodesWithText(ProCopy.coverage(ProGate.GATED)).fetchSemanticsNodes().size)
         // Asked for anyway, the host drops it: Pro is held, so there is nothing to show.
-        rule.runOnIdle { graph.openProOverview() }
+        rule.runOnIdle { graph.proService.openProOverview() }
         rule.waitForIdle()
-        assertEquals(null, graph.gateRequest.value)
+        assertEquals(null, graph.proService.gateRequest.value)
         assertEquals(0, rule.onAllNodes(isDialog()).fetchSemanticsNodes().size)
     }
 

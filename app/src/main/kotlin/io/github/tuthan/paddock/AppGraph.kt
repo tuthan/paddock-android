@@ -32,7 +32,7 @@ import io.github.tuthan.paddock.billing.ProCapability
 import io.github.tuthan.paddock.billing.ProCopy
 import io.github.tuthan.paddock.billing.ProCapabilities
 import io.github.tuthan.paddock.billing.ProGate
-import io.github.tuthan.paddock.billing.ProSession
+import io.github.tuthan.paddock.billing.ProService
 import io.github.tuthan.paddock.billing.ProView
 import io.github.tuthan.paddock.billing.Entitlements
 import io.github.tuthan.paddock.billing.FileEntitlementStore
@@ -270,21 +270,8 @@ class AppGraph(private val app: Application) {
     val settings: StateFlow<AppSettings> get() = prefs.settings
     val snippets: StateFlow<List<String>> get() = prefs.snippets
 
-    /** Everything Pro does between the screens and the store (Phase 13): one store action at a time, nothing a store call throws reaches the process, prices only when shown. */
-    private val proSession = ProSession(entitlements, scope, clock, Distribution.UNLOCKED)
-    /** What Settings and the Pro gate show about Pro: the saved state first, then whatever the store said. */
-    val pro: StateFlow<ProView> = proSession.view
-
-    private val _gateRequest = MutableStateFlow<String?>(null)
-    /**
-     * The Pro capability the user just chose without having Pro, or [ProCopy.OVERVIEW_ID] for Settings' overview; the gate sheet shows while it is
-     * set and the user is idle.
-     */
-    val gateRequest: StateFlow<String?> = _gateRequest.asStateFlow()
-
-    private val gateNoticeHolder = GateNotice(scope)
-    /** Why the last tap on a Pro control did nothing (a deferral, see [ProGate.deferNotice]); `PaddockRoot` shows it as a notice, and it goes by itself after [GateNotice.SHOW_MILLIS]. */
-    val gateNotice: StateFlow<String?> = gateNoticeHolder.text
+    /** Pro: the store, the gate and the sheet that asks for it (Phase 13). */
+    val proService = ProService(entitlements, scope, clock, manualInput, journal, Distribution.UNLOCKED)
 
     fun start() {
         triggers.install()
@@ -300,16 +287,14 @@ class AppGraph(private val app: Application) {
         // The chips of the machines not watched say how many agents need you (Pro): looked at only while the herd is in front and not covered by the lock.
         // The look is one short session per machine every half minute; the push alerts are what reaches the user in the background.
         scope.launch {
-            kotlinx.coroutines.flow.combine(triggers.interactive, appLock.locked, _machines, _profile, pro) { front, covered, all, watched, view ->
-                io.github.tuthan.paddock.probe.ProbeTargets.of(front, covered, locked(ProCapabilities.HOSTS_MERGED, view), all, watched?.id)
+            kotlinx.coroutines.flow.combine(triggers.interactive, appLock.locked, _machines, _profile, proService.view) { front, covered, all, watched, view ->
+                io.github.tuthan.paddock.probe.ProbeTargets.of(front, covered, proService.locked(ProCapabilities.HOSTS_MERGED, view), all, watched?.id)
             }.distinctUntilChanged().collectLatest { targets -> if (targets.isNotEmpty()) probe.run(targets) }
         }
-        proSession.start(triggers.foreground)
-        // Whatever an earlier purchase said is not about this opening of the gate sheet; the store's prices are asked for the first time it is shown.
-        scope.launch { _gateRequest.collect { request -> proSession.gateChanged(opened = request != null) } }
+        proService.start(triggers.foreground)
         // Widgets are a Pro capability: when the answer to "does this phone hold Pro" changes they are redrawn. This is only the trigger, by the same rule
         // (Entitlements.hasPro): what is drawn is decided by PaddockWidgets.locked from the saved file, which is written before this state moves. With no widget placed the redraw does nothing.
-        scope.launch { pro.map { entitlements.hasPro(it.state) }.distinctUntilChanged().collect { runCatching { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) } } }
+        scope.launch { proService.view.map { proService.hasPro(it) }.distinctUntilChanged().collect { runCatching { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) } } }
         scope.launch {
             prefs.load()
             val read = runCatching { profiles.list() }
@@ -332,58 +317,6 @@ class AppGraph(private val app: Application) {
                 .collectLatest { active -> if (active) _profile.value?.let { watch(it) } else controller?.pause() }
         }
     }
-
-    /** Asks the store what the account owns (app start, a store change, a return to the foreground); waits behind a store action in flight. */
-    suspend fun verifyPro() = proSession.verify()
-
-    fun restorePurchases() = proSession.restore()
-
-    /** The store's prices, asked for the first time Settings' Pro card or the gate sheet is shown (a no-op after that and in a build without a store). */
-    fun loadPrices() = proSession.loadPrices()
-
-    fun buyTip(productId: String) = proSession.buyTip(productId)
-
-    fun buyPro() = proSession.buyPro { _gateRequest.value = null }
-
-    /**
-     * The user chose a capability. Returns whether it may run now; when it is a Pro one without Pro and the user is idle, the gate
-     * sheet is asked for instead. [pendingAnswerOnScreen] is the one fact only the screen knows: the decision sheet or guarded answers is up.
-     */
-    fun requestCapability(capabilityId: String, pendingAnswerOnScreen: Boolean): Boolean {
-        val context = gateContext(pendingAnswerOnScreen)
-        val decision = ProGate.decide(capabilityId, entitlements.hasPro(pro.value.state), context)
-        gateDecided(capabilityId, decision, context)
-        return decision == GateDecision.PROCEED
-    }
-
-    /**
-     * Settings' "What Pro covers" row (decision D5): the gate sheet as an overview of Pro, asked for as [ProCopy.OVERVIEW_ID]. It is not a capability
-     * ([ProGate.decide] would let it through), so this decides by the same rule a gated capability gets from an idle app: idle opens the sheet, busy
-     * defers it and the notice says why, as a deferred capability does. Whether Pro is held is the host's to check when it draws, as for any request.
-     * The sheet stays the only place Pro is bought; Settings only opens it.
-     */
-    fun openProOverview() {
-        val context = gateContext(pendingAnswerOnScreen = false)
-        gateDecided(ProCopy.OVERVIEW_ID, if (context == GateContext.IDLE) GateDecision.SHOW_GATE else GateDecision.DEFER, context)
-    }
-
-    /** What a decision does besides its answer: the notice, and the sheet request for [SHOW_GATE][GateDecision.SHOW_GATE]. */
-    private fun gateDecided(requestId: String, decision: GateDecision, context: GateContext) {
-        // A deferral shows no sheet, but a tap that does nothing and says nothing reads as a broken app: the notice says why, in one sentence.
-        gateNoticeHolder.decided(decision, context)
-        if (decision == GateDecision.SHOW_GATE) _gateRequest.value = requestId
-    }
-
-    fun dismissGate() { _gateRequest.value = null }
-
-    fun dismissGateNotice() = gateNoticeHolder.dismiss()
-
-    /** Whether a control for [capability] carries its Pro label and does not run: gated, and neither held nor unlocked by the build. A screen passes the [pro] value it collected, so it follows a purchase. */
-    fun locked(capability: ProCapability, view: ProView = pro.value): Boolean = ProGate.locked(capability.id, entitlements.hasPro(view.state))
-
-    /** What the user is in the middle of; the rule, including which journal rows still count as running, is [ProGate.context]. */
-    fun gateContext(pendingAnswerOnScreen: Boolean): GateContext =
-        ProGate.context(pendingAnswerOnScreen, manualInput.current.value != null, journal.records.value, clock.nowMillis())
 
     /** The one imported-key slot: importing again replaces the key, and profiles that use it keep working. */
     suspend fun importedKey(): io.github.tuthan.paddock.ssh.ImportedKeyInfo? = withContext(Dispatchers.IO) { importedKeys.info(IMPORTED_KEY_ID) }
