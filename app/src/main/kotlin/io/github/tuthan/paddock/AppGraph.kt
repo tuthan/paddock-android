@@ -12,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.filterNotNull
 import io.github.tuthan.paddock.alerts.AlertEvent
 import io.github.tuthan.paddock.alerts.AlertInbox
+import io.github.tuthan.paddock.alerts.AlertService
 import io.github.tuthan.paddock.alerts.AlertOutcome
 import io.github.tuthan.paddock.alerts.AlertReads
 import io.github.tuthan.paddock.alerts.AlertResolver
@@ -142,7 +143,6 @@ class AppGraph(private val app: Application) {
     /** Notifications Paddock raises itself, only while it is open but not in front (the watching mode of Phase 07). */
     private val notifier = AndroidAlertNotifier(app)
     val notificationAccess = NotificationAccessReader(app)
-    private val alertRules = LocalAlertRules()
     /** Connector mode: registrations with a UnifiedPush distributor, one per machine. A push raises a generic notification through [notifier]. */
     private val pushRegistry = PushRegistry(FilePushStore(File(files, "push.json")), clock = clock)
     /** What was last set up for each machine's alerts (how they arrive, the server and topic), so the subscribe link can be shown again and a second run keeps the topic. */
@@ -228,6 +228,11 @@ class AppGraph(private val app: Application) {
         scope, clock, lanPaths, sockets, permissionMissing = { gate.lanAccessMissing() }, watched = _profile, profile = { id -> profiles.get(id) },
         link = { hostUi.view.value.let { WakeLink.of(it.phase, it.freshness) } }, links = hostUi.view.map { WakeLink.of(it.phase, it.freshness) },
         reconnect = { retry() },
+    )
+    /** What an arrived alert turns into, and the notifications the open app raises itself ([AlertService]). */
+    val alertService = AlertService(
+        clock, settings = { prefs.value }, interactive = { triggers.interactive.value }, show = { notifier.show(it) },
+        switchTo = { id -> watchProfile(id, chosen = false) }, monitored = hostUi.view.map { (it.phase as? HostPhase.Monitoring)?.host },
     )
     /** The open terminal session, kept through a rotation so turning the phone does not release control. */
     val terminals = io.github.tuthan.paddock.host.Retained<io.github.tuthan.paddock.terminal.TerminalSession>(scope) { it.close() }
@@ -450,44 +455,6 @@ class AppGraph(private val app: Application) {
         profile
     }
 
-    /**
-     * The arrival rule for an alert (Phase 07): switch to the machine it names, wait for a read this phone made after the alert
-     * arrived on a live connection, and resolve the target against that read. A null outcome means no such read came in time.
-     */
-    suspend fun resolveAlert(event: AlertEvent.Arrived): AlertResolution {
-        val hint = event.hint
-        val fresh = freshHerd(hint.target.host.value, event.arrivedAtMillis)
-            ?: return AlertResolution(AlertOutcome.NoLongerObserved(Unobserved.UnknownMachine), "this phone", null, null)
-        val snapshot = fresh.snapshot ?: return AlertResolution(null, fresh.profile.name, null, fresh.host)
-        val outcome = AlertResolver.resolve(hint, fresh.profile.hostId, fresh.host!!.sessionName, snapshot)
-        val terminal = when (outcome) { is AlertOutcome.Current -> outcome.terminalId; is AlertOutcome.Changed -> outcome.terminalId; is AlertOutcome.NoLongerObserved -> null }
-        return AlertResolution(outcome, fresh.profile.name, terminal?.let { id -> fresh.host.home.value?.rows?.firstOrNull { it.key.target.terminalId == id } }, fresh.host)
-    }
-
-    /** What a push that named no terminal found: the same arrival rule, answered with counts from the fresh read. A null outcome means no such read came in time. */
-    suspend fun resolveMachine(event: AlertEvent.MachineWoke): MachineResolution {
-        val fresh = freshHerd(event.hint.host.value, event.arrivedAtMillis) ?: return MachineResolution(null, "this phone", unknownMachine = true)
-        return MachineResolution(fresh.snapshot?.let { AlertResolver.resolveMachine(it) }, fresh.profile.name, unknownMachine = false)
-    }
-
-    private class FreshHerd(val profile: HostProfile, val host: MonitoredHost?, val snapshot: Snapshot?)
-
-    /**
-     * The arrival rule: switch to [profileId]'s machine, wait for a read the phone made after [arrivedAtMillis] on a live
-     * connection. Null when the phone has no such machine; a null snapshot when no such read came within the arrival timeout.
-     */
-    private suspend fun freshHerd(profileId: String, arrivedAtMillis: Long): FreshHerd? {
-        // Not chosen: an alert moves the phone, it does not change the machine the user chose, so going back stays free.
-        val profile = watchProfile(profileId, chosen = false) ?: return null
-        val deadline = clock.nowMillis() + AlertArrival.TIMEOUT_MILLIS
-        val host = withTimeoutOrNull(AlertArrival.TIMEOUT_MILLIS) {
-            hostUi.view.map { (it.phase as? HostPhase.Monitoring)?.host }.first { it != null && it.profile.id == profile.id }
-        } ?: return FreshHerd(profile, null, null)
-        host.refresh()
-        val installed = AlertArrival.freshRead(AlertReads(host.sessionName, host.freshness, host.reconciler.installed), arrivedAtMillis, (deadline - clock.nowMillis()).coerceAtLeast(1_000))
-        return FreshHerd(profile, host, installed?.snapshot)
-    }
-
     /** The saved sagas, for Activity while no host is being monitored (a restart, a lost connection). */
     fun savedSagas(): List<io.github.tuthan.paddock.ops.SagaRecord> = runCatching { sagaStore.load().records }.getOrDefault(emptyList())
 
@@ -508,7 +475,7 @@ class AppGraph(private val app: Application) {
         hostUi.attach(next)
         next.start()
         alertWatcher?.cancel()
-        alertWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) raiseAlerts(p.host) } }
+        alertWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) alertService.raise(p.host) } }
         widgetWatcher?.cancel()
         widgetWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) widgets.track(p.host) } }
         wakeWatcher?.cancel()
@@ -606,22 +573,6 @@ class AppGraph(private val app: Application) {
         machineWritten(written)
     }
 
-    /**
-     * Watching mode: a terminal the open app saw become Blocked or Done raises a notification, unless alerts are off or the
-     * herd is in front. The reconciler only reports changes between two reads of one epoch, so a reconnect invents none.
-     */
-    private suspend fun raiseAlerts(host: MonitoredHost) {
-        host.reconciler.observations.collect { o ->
-            if (o !is Observation.StatusChanged) return@collect
-            val settings = prefs.value
-            val agent = host.reconciler.installed.value?.snapshot?.agents?.firstOrNull { it.terminalId == o.key.target.terminalId }
-            val alert = alertRules.alertFor(
-                o.to, agent, o.key.target, host.profile.name, clock.nowMillis() / 1000, settings.localAlerts, triggers.interactive.value, agent?.let { AttentionModel.title(it) },
-            ) ?: return@collect
-            runCatching { notifier.show(AlertContent.of(alert, settings.hidePromptOnLockScreen)) }
-        }
-    }
-
     /** "Try again": a setup problem on a healthy connection runs the setup again; anything else refreshes the connection. */
     fun retry() {
         if (controller?.retrySetup() == true) return
@@ -671,12 +622,6 @@ class AppGraph(private val app: Application) {
         KeyKind.Imported -> importedKeys.load(profile.importedKeyId!!) ?: throw ConnectFailure.BadKey("the imported key is missing")
     }
 }
-
-/** What an arrived alert turned into. [row] is the agent's row when there is one; [host] lets the caller acknowledge a Done. */
-class AlertResolution(val outcome: AlertOutcome?, val machine: String, val row: AgentRowModel?, val host: MonitoredHost?)
-
-/** What a push for a whole machine turned into. [outcome] is null when the read did not come in time; [unknownMachine] when this phone has no such machine. */
-class MachineResolution(val outcome: MachineOutcome?, val machine: String, val unknownMachine: Boolean)
 
 /**
  * What one Remove… from a machine's page came to ([AppGraph.requestRemoval]): the machine's [id] and the [name] the page showed, and the [result].

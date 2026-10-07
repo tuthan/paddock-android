@@ -304,11 +304,12 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                 // A push that named no terminal: the herd of that machine, read fresh, and what that read says in counts.
                 alertNotice = AlertCopy.OPENING
                 route = Route.Home
-                val r = graph.resolveMachine(e)
+                val r = graph.alertService.resolveMachine(e)
+                val machineOutcome = r.outcome
                 alertNotice = when {
                     r.unknownMachine -> AlertCopy.UNKNOWN_MACHINE
-                    r.outcome == null -> AlertCopy.unreachable(r.machine)
-                    else -> AlertCopy.machineNotice(r.outcome, r.machine)
+                    machineOutcome == null -> AlertCopy.unreachable(r.machine)
+                    else -> AlertCopy.machineNotice(machineOutcome, r.machine)
                 }
                 graph.alerts.consume(e)
             }
@@ -316,7 +317,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                 // The herd shows while the connection and the read come up; the alert is resolved against that read, never a cached one.
                 alertNotice = AlertCopy.OPENING
                 route = Route.Home
-                val resolved = graph.resolveAlert(e)
+                val resolved = graph.alertService.resolveAlert(e)
                 val outcome = resolved.outcome
                 if (outcome == null) alertNotice = AlertCopy.unreachable(resolved.machine)
                 else {
