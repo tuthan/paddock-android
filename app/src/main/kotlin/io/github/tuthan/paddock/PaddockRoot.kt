@@ -56,7 +56,9 @@ import io.github.tuthan.paddock.hostprofile.MachineRow
 import io.github.tuthan.paddock.alerts.PushWords
 import io.github.tuthan.paddock.hostprofile.MachineRoster
 import io.github.tuthan.paddock.probe.ProbeCopy
+import io.github.tuthan.paddock.hostprofile.Boot
 import io.github.tuthan.paddock.hostprofile.MachineRemoval
+import io.github.tuthan.paddock.hostprofile.RemovalOutcome
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.hostprofile.MachineCopy
 import io.github.tuthan.paddock.hostprofile.MachineSwitch
@@ -255,7 +257,7 @@ private fun reviewTab(graph: AppGraph, terminalId: String): AgentTab {
 
 @Composable
 private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
-    val boot by graph.boot.collectAsState()
+    val boot by graph.machineBook.boot.collectAsState()
     var route by rememberSaveable { mutableStateOf(Route.Home) }
     var addFrom by rememberSaveable { mutableStateOf(Route.Home) }
     var terminalId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -268,10 +270,10 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     var alertRelayFrom by rememberSaveable { mutableStateOf(Route.Settings) }
     // A removal confirmed on a machine's page and still running: Watch and Remove wait for it on the list and the page (the graph also serializes them).
     // The graph's, not this composition's: the removal runs in the graph's scope and outlives a rotation.
-    val removingId by graph.removingMachine.collectAsState()
+    val removingId by graph.machineBook.removingMachine.collectAsState()
     var relayDismissed by rememberSaveable { mutableStateOf(false) }
     // "Not now" on the relay prompt is about the machine it was shown for: another machine watched means its own prompt, if it has one.
-    val watchedId = graph.profile.collectAsState().value?.id
+    val watchedId = graph.machineBook.profile.collectAsState().value?.id
     var dismissedFor by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(watchedId) { if (dismissedFor != null && dismissedFor != watchedId) relayDismissed = false; dismissedFor = watchedId }
     var reviewKey by rememberSaveable { mutableStateOf(false) }
@@ -359,7 +361,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
 
     // What a Remove… confirmed on a machine's page came to. Read from the graph, not from a callback the page captured: the removal runs in the graph's
     // scope and can end after a rotation or while the app is away, and whichever composition is here then says it once.
-    val removal by graph.removalOutcome.collectAsState()
+    val removal by graph.machineBook.removalOutcome.collectAsState()
     LaunchedEffect(removal) {
         val r = removal ?: return@LaunchedEffect
         when (val result = r.result) {
@@ -370,7 +372,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
             }
             is MachineRemoval.Result.Incomplete -> alertNotice = MachineCopy.removeFailed(result.failed)
         }
-        graph.consumeRemoval(r)
+        graph.machineBook.consumeRemoval(r)
     }
 
     val effective = when {
@@ -533,7 +535,7 @@ private fun HomeRoute(
     onOpen: (terminalId: String) -> Unit, onReviewPrompt: (terminalId: String) -> Unit, onSettings: () -> Unit, onSetUpKey: () -> Unit,
     onShowCommand: () -> Unit, onNotice: (String) -> Unit = {}, onMachines: () -> Unit = {},
 ) {
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
     val now = rememberNow()
     val name = profile?.name ?: "this machine"
@@ -591,7 +593,7 @@ private fun HomeRoute(
         })
     }
     // The machine chips (decision D4, 2026-10-06): with two or more saved machines, one chip each; another machine's chip asks to watch it.
-    val machines by graph.machines.collectAsState()
+    val machines by graph.machineBook.machines.collectAsState()
     val pro by graph.proService.view.collectAsState()
     val switchLocked = graph.proService.locked(ProCapabilities.SWITCH_MACHINE, pro)
     val rows = MachineRoster.rows(machines, profile?.id, settings.chosenProfileId)
@@ -634,7 +636,7 @@ private fun HomeRoute(
 private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onTab: (AgentTab) -> Unit, onBack: () -> Unit, onCompose: () -> Unit, onDecision: () -> Unit) {
     val view by graph.hostUi.view.collectAsState()
     val settings by graph.settings.collectAsState()
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     if (terminalId == null || host == null) {
         // The connection is not up (or the app was restored without one): say so and offer the way back.
@@ -846,7 +848,7 @@ private fun ComposeRoute(
 ) {
     val view by graph.hostUi.view.collectAsState()
     val settings by graph.settings.collectAsState()
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val sends = host?.sends
     if (terminalId == null || host == null || sends == null) {
@@ -944,7 +946,7 @@ private fun SnippetsRoute(graph: AppGraph, onBack: () -> Unit) {
 
 @Composable
 private fun ActivityRoute(graph: AppGraph, onOpenAgent: (terminalId: String) -> Unit) {
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     var filter by rememberSaveable { mutableStateOf(ActivityFilter.All) }
@@ -973,7 +975,7 @@ private fun ActivityRoute(graph: AppGraph, onOpenAgent: (terminalId: String) -> 
 /** The Spaces tab (Phase 09): the watched machine's sessions, the start-agent flow and its recovery cards. */
 @Composable
 private fun SpacesRoute(graph: AppGraph, onNotice: (String) -> Unit, onOpenAgent: (terminalId: String) -> Unit) {
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val view by graph.hostUi.view.collectAsState()
     val pro by graph.proService.view.collectAsState()
     val spaces = view.spaces
@@ -1124,7 +1126,7 @@ private fun switchMachine(graph: AppGraph, row: MachineRow, onNotice: (String) -
         // Locked, the gate never lets this tap through: it opens the sheet from an idle app, or the notice says when Pro is offered.
         MachineSwitch.Decision.AskGate -> graph.proService.requestCapability(ProCapabilities.SWITCH_MACHINE.id, pendingAnswerOnScreen = false)
         MachineSwitch.Decision.Busy -> onNotice(MachineCopy.SWITCH_BUSY)
-        MachineSwitch.Decision.Switch -> graph.scope.launch { graph.watchProfile(row.id, chosen = true)?.let { onNotice(MachineCopy.nowWatching(it.name)) } }
+        MachineSwitch.Decision.Switch -> graph.scope.launch { graph.machineBook.watch(row.id, chosen = true)?.let { onNotice(MachineCopy.nowWatching(it.name)) } }
     }
 }
 
@@ -1145,7 +1147,7 @@ private fun wakeClock(millis: Long, nowMillis: Long): String =
 @Composable
 private fun watchedHealth(graph: AppGraph): HostHealth {
     val view by graph.hostUi.view.collectAsState()
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val now = graph.clock.nowMillis()
     return chipHealth(io.github.tuthan.paddock.host.HomeUiMapper.map(profile?.name.orEmpty(), view, now).state, now).first
 }
@@ -1156,8 +1158,8 @@ private fun watchedHealth(graph: AppGraph): HostHealth {
  */
 @Composable
 private fun MachinesRoute(graph: AppGraph, busy: Boolean, onBack: () -> Unit, onOpen: (MachineRow) -> Unit, onAdd: () -> Unit, onNotice: (String) -> Unit) {
-    val machines by graph.machines.collectAsState()
-    val profile by graph.profile.collectAsState()
+    val machines by graph.machineBook.machines.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val settings by graph.settings.collectAsState()
     val view by graph.hostUi.view.collectAsState()
     val pro by graph.proService.view.collectAsState()
@@ -1184,8 +1186,8 @@ private fun MachinesRoute(graph: AppGraph, busy: Boolean, onBack: () -> Unit, on
 private fun MachineRoute(
     graph: AppGraph, machineId: String?, removingId: String?, onBack: () -> Unit, onAlertRelay: () -> Unit, onGuardedAnswers: () -> Unit, onNotice: (String) -> Unit,
 ) {
-    val machines by graph.machines.collectAsState()
-    val profile by graph.profile.collectAsState()
+    val machines by graph.machineBook.machines.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val settings by graph.settings.collectAsState()
     val view by graph.hostUi.view.collectAsState()
     val pro by graph.proService.view.collectAsState()
@@ -1218,14 +1220,14 @@ private fun MachineRoute(
             ),
             onBack = onBack,
             onWatch = { switchMachine(graph, row, onNotice) },
-            onRemove = { graph.requestRemoval(machine.id, machine.name) },
+            onRemove = { graph.machineBook.requestRemoval(machine.id, machine.name) },
             onAlertRelay = onAlertRelay,
             onGuardedAnswers = onGuardedAnswers,
             onCopyWakeCommand = { cmd -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock wake command", cmd)) },
-            onSaveWakeRelay = { relay -> scope.launch { graph.setWakeRelay(machine.id, relay) } },
+            onSaveWakeRelay = { relay -> scope.launch { graph.machineBook.setWakeRelay(machine.id, relay) } },
             onWake = { graph.wakes.wake(machine.id) },
-            onRename = { name -> scope.launch { if (graph.renameMachine(machine.id, name)) onNotice(MachineCopy.renamed(name)) } },
-            onSetOs = { os -> scope.launch { graph.setMachineOs(machine.id, os) } },
+            onRename = { name -> scope.launch { if (graph.machineBook.rename(machine.id, name)) onNotice(MachineCopy.renamed(name)) } },
+            onSetOs = { os -> scope.launch { graph.machineBook.setOs(machine.id, os) } },
         )
     }
 }
@@ -1235,8 +1237,8 @@ private fun MachineRoute(
 internal fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onMachines: () -> Unit, onEditSnippets: () -> Unit, onAlertRelay: () -> Unit) {
     val snippets by graph.snippets.collectAsState()
     val settings by graph.settings.collectAsState()
-    val profile by graph.profile.collectAsState()
-    val machines by graph.machines.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
+    val machines by graph.machineBook.machines.collectAsState()
     val view by graph.hostUi.view.collectAsState()
     val pro by graph.proService.view.collectAsState()
     // The store's prices (the tip buttons) are asked for when the Pro card is first shown, not at start; a no-op after they are known.
@@ -1380,7 +1382,7 @@ private fun DecisionRoute(graph: AppGraph, terminalId: String?, onBack: () -> Un
     val view by graph.hostUi.view.collectAsState()
     val settings by graph.settings.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     // Pro gates setting guarded answers up, never the request already on screen: Yes and No work as they did.
     val pro by graph.proService.view.collectAsState()
     val setUpLocked = graph.proService.locked(ProCapabilities.GUARDED_ANSWERS, pro)
@@ -1436,7 +1438,7 @@ private fun DecisionRoute(graph: AppGraph, terminalId: String?, onBack: () -> Un
 @Composable
 private fun GuardedAnswersRoute(graph: AppGraph, onBack: () -> Unit) {
     val view by graph.hostUi.view.collectAsState()
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val answerHost = host?.answerHost
     val ctx = LocalContext.current
@@ -1503,7 +1505,7 @@ private fun GuardedAnswersRoute(graph: AppGraph, onBack: () -> Unit) {
 @Composable
 private fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
     val view by graph.hostUi.view.collectAsState()
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val relay = host?.alertRelay
     val ctx = LocalContext.current
@@ -1708,7 +1710,7 @@ private fun AddMachineRoute(
     picked: AddMachineInput?, onPicked: (AddMachineInput?) -> Unit,
 ) {
     val ctx = LocalContext.current
-    val watched by graph.profile.collectAsState()
+    val watched by graph.machineBook.profile.collectAsState()
     // Setting up the key keeps the machine (its id, so its pinned host key and history) while it is the same host and port.
     val fixing = watched.takeIf { editing }
     val scope = rememberCoroutineScope()
@@ -1736,7 +1738,7 @@ private fun AddMachineRoute(
             // What is on screen now is the last attempt's: only a phase that is not that one can be this attempt's answer.
             graph.hostUi.beginAttempt()
             // Setting up the watched machine's key keeps the user's choice where it was: an alert may have moved the phone to this machine.
-            graph.addMachine(profile, chosen = MachineRoster.choosesOnAdd(profile, fixing))
+            graph.machineBook.add(profile, chosen = MachineRoster.choosesOnAdd(profile, fixing))
             // The same profile is resumed, not rebuilt: ask for the reconnect that picks up the new key.
             if (already) graph.retry()
             // Stay on the form: the root follows the connection and either leaves for Home or shows what went wrong here.
@@ -2047,7 +2049,7 @@ private fun HostKeyDialogs(graph: AppGraph, reviewKey: Boolean, dismissReview: (
     // A key the pairing link does not name was refused before any question: this only says so, with both fingerprints, and offers no way to trust it.
     val refusal by graph.broker.pairingRefused.collectAsState()
     refusal?.let { r -> FingerprintDialog(HostKeyPrompts.pairingMismatch(r), onTrust = {}, onCancel = { graph.broker.clearPairingRefusal() }) }
-    val profile by graph.profile.collectAsState()
+    val profile by graph.machineBook.profile.collectAsState()
     val changed by graph.broker.changed.collectAsState()
     val c = profile?.let { changed[it.id] }
     val scope = rememberCoroutineScope()

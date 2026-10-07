@@ -43,6 +43,7 @@ import io.github.tuthan.paddock.hostkey.HostKeyPolicy
 import io.github.tuthan.paddock.hostprofile.FileHostProfileStore
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.hostprofile.KeyKind
+import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.hostprofile.MachineRemoval
 import io.github.tuthan.paddock.hostprofile.MachineRoster
 import io.github.tuthan.paddock.identity.HostProfileId
@@ -92,9 +93,6 @@ import kotlinx.coroutines.withContext
 import io.github.tuthan.paddock.pairing.pendingOrNull
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-
-/** Where the machine list stands at start-up. */
-enum class Boot { Loading, NoMachines, Ready }
 
 /**
  * The app's object graph and the one host it watches. Process-wide so a rotation or a trip to another app does not rebuild
@@ -148,35 +146,35 @@ class AppGraph(private val app: Application) {
     private val pushRegistry = PushRegistry(FilePushStore(File(files, "push.json")), clock = clock)
     /** What was last set up for each machine's alerts (how they arrive, the server and topic), so the subscribe link can be shown again and a second run keeps the topic. */
     val alertSetups: io.github.tuthan.paddock.alerts.AlertSetupStore = io.github.tuthan.paddock.alerts.FileAlertSetupStore(File(files, "alert-setup.json"))
-    val push = UnifiedPushConnector(
+    val push: UnifiedPushConnector = UnifiedPushConnector(
         app, pushRegistry, scope, clock,
         machineName = { id -> profiles.get(id)?.name },
         show = { notifier.show(it) },
         herdInFront = { triggers.interactive.value && !appLock.locked.value },
-        watchedProfile = { _profile.value?.id },
+        watchedProfile = { machineBook.profile.value?.id },
         hideOnLockScreen = { runCatching { prefs.stored().hidePromptOnLockScreen }.getOrDefault(true) },
     )
 
     /** What the home-screen widgets draw (Phase 10): the last read of the watched machine, written by the open app and by [WidgetService.refresh]. */
-    val widgets = WidgetService(
+    val widgets: WidgetService = WidgetService(
         store = io.github.tuthan.paddock.widget.WidgetCaches.store(app),
         read = io.github.tuthan.paddock.widget.WidgetRefresher(io.github.tuthan.paddock.widget.WidgetCaches.store(app), clock) { host, session ->
             ledger.installedEpoch(host, session)?.let { ledger.seenLookup(host, session, it) } ?: io.github.tuthan.paddock.attention.SeenLookup { null }
         }::refresh,
         clock = clock, acquire = { profile -> owner.acquire(profile) }, profiles = profiles,
-        watchedProfileId = { prefs.stored().watchedProfileId }, inForeground = { triggers.foreground.value }, removing = { it in removing },
+        watchedProfileId = { prefs.stored().watchedProfileId }, inForeground = { triggers.foreground.value }, removing = { machineBook.isRemoving(it) },
         locked = { io.github.tuthan.paddock.widget.PaddockWidgets.locked(app) }, redraw = { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) },
     )
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
-    val owner = ConnectionOwner(scope, SessionFactory { profile -> connect(profile) }, clock)
-    val triggers = AndroidTriggers(app, owner, onNetworkChanged = { probe.lookAgainNow() })
+    val owner: ConnectionOwner = ConnectionOwner(scope, SessionFactory { profile -> connect(profile) }, clock)
+    val triggers: AndroidTriggers = AndroidTriggers(app, owner, onNetworkChanged = { probe.lookAgainNow() })
 
     /**
      * The light look at the machines this phone is not watching, for the counts on Home's chips (Pro, `hosts.merged`). Its own short sessions, never the
      * owner's: it holds no lease on anything, and it never asks the user ([connectForProbe]).
      */
-    val probe = io.github.tuthan.paddock.probe.MachineProbe(clock, open = { profile -> connectForProbe(profile) })
+    val probe: io.github.tuthan.paddock.probe.MachineProbe = io.github.tuthan.paddock.probe.MachineProbe(clock, open = { profile -> connectForProbe(profile) })
 
     /** Whether Paddock's screens are covered by the lock (Settings > Privacy > Lock Paddock). Elapsed real time, so the date changing cannot stretch the timeout. */
     val appLock = io.github.tuthan.paddock.applock.AppLock { android.os.SystemClock.elapsedRealtime() }
@@ -184,55 +182,64 @@ class AppGraph(private val app: Application) {
     /** Every script, unit file and example configuration Paddock installs on a machine, each checked against its pin (host/SOURCE.json) when the graph is built. */
     val hostScripts = PinnedHostScripts { name -> app.assets.open(name).use { it.readBytes() } }
 
-    private val _boot = MutableStateFlow(Boot.Loading)
-    val boot: StateFlow<Boot> = _boot.asStateFlow()
+    /** Settings and the user's snippets, and what writes them ([SettingsController]). */
+    val prefs = SettingsController(scope, FileAppSettingsStore(File(files, "settings.json")), FileSnippetStore(File(files, "snippets.json")), appLock)
+    val settings: StateFlow<AppSettings> get() = prefs.settings
+    val snippets: StateFlow<List<String>> get() = prefs.snippets
 
-    private val _profile = MutableStateFlow<HostProfile?>(null)
-    val profile: StateFlow<HostProfile?> = _profile.asStateFlow()
+    /** Pro: the store, the gate and the sheet that asks for it (Phase 13). */
+    val proService = ProService(entitlements, scope, clock, manualInput, journal, Distribution.UNLOCKED)
 
-    private val _machines = MutableStateFlow<List<HostProfile>>(emptyList())
-    /** Every machine saved on this phone, by name: the Machines screen, each machine's page and Home's chips. Only one is watched ([profile]). */
-    val machines: StateFlow<List<HostProfile>> = _machines.asStateFlow()
-
-    /** One change to the saved machines at a time: add, switch and remove each read and write the profile store and the watched machine. */
-    private val machineLock = kotlinx.coroutines.sync.Mutex()
-    /** Machines being removed: nothing may start watching them (a foreground flip does `hostWatcher.watch(_profile.value)`, and the removed machine is still that until the end). */
-    private val removing: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-
-    private val _removingMachine = MutableStateFlow<String?>(null)
-    /**
-     * The machine a removal is running for, or null. Held here, not in the screen, because the removal runs in [scope] and outlives a rotation: the
-     * Machines screen and a machine's page keep Watch and Remove… waiting for as long as it runs, whichever composition draws them.
-     */
-    val removingMachine: StateFlow<String?> = _removingMachine.asStateFlow()
-
-    private val _removalOutcome = MutableStateFlow<RemovalOutcome?>(null)
-    /**
-     * What the last removal asked for from a machine's page ([requestRemoval]) came to, until the root has shown it ([consumeRemoval]). State, not a
-     * callback: a rotation or a trip away while the removal runs would leave a callback in a composition that is gone, and "Removed X." would be lost.
-     */
-    val removalOutcome: StateFlow<RemovalOutcome?> = _removalOutcome.asStateFlow()
-
-    /** One write to [machines] at a time: a re-read of the store must not land after, and so undo, an in-place write made meanwhile ([machineWritten]). */
-    private val machinesWrite = kotlinx.coroutines.sync.Mutex()
-
-    private suspend fun refreshMachines() { machinesWrite.withLock { runCatching { profiles.list() }.onSuccess { _machines.value = it } } }
+    /** The saved machines and the one watched ([MachineBook]); what it must tell the rest of the app is [MachineBook.Effects]. */
+    val machineBook: MachineBook = MachineBook(
+        profiles, prefs, scope, clock,
+        /**
+         * Everything this phone holds about a machine, forgotten before its profile goes. Not here, on purpose: this phone's own key and the one imported key
+         * (every machine shares them), and the operation journal (what the phone sent, with no machine text; adding the same machine again finds an unknown outcome there).
+         */
+        removal = MachineRemoval(
+            listOf(
+                MachineRemoval.Forget("its alert registration") { id -> push.unregister(id) },
+                MachineRemoval.Forget("its alert setup") { id -> alertSetups.remove(id) },
+                MachineRemoval.Forget("the host key") { id -> hostKeyStore.remove(id); broker.clearChanged(id); broker.expectPairing(id, null) },
+                MachineRemoval.Forget("what the phone saw there") { id -> ledger.forgetHost(HostProfileId(id)); withContext(Dispatchers.IO) { ledger.flush() } },
+                MachineRemoval.Forget("its widget copy") { id -> widgets.forget(id) },
+                // A request made for this machine's desktop is no longer about anything this phone has.
+                MachineRemoval.Forget("a pairing request") { id ->
+                    val host = profiles.get(id)?.host?.trim()
+                    val pending = pairingCoordinator.state.value.pendingOrNull
+                    val sharedWithAnother = profiles.list().any { it.id != id && it.host.trim().equals(host, ignoreCase = true) }
+                    if (host != null && pending != null && !sharedWithAnother && pending.host.trim().equals(host, ignoreCase = true)) pairingCoordinator.clear()
+                },
+            ),
+        ) { id -> profiles.remove(id) },
+        effects = object : MachineBook.Effects {
+            override val inForeground: Boolean get() = triggers.foreground.value
+            override fun watch(profile: HostProfile) = hostWatcher.watch(profile)
+            override fun stopWatching() = hostWatcher.stop()
+            override suspend fun dropConnection(id: String) = owner.drop(id)
+            override fun becameWatched(id: String) = wakes.watching(id)
+            // Its Wake facts and their flow go with it: a later machine with the same id starts with none.
+            override fun forgotten(id: String) { wakes.forget(id); probe.forget(id) }
+            override fun watchedRemoved() = hostUi.reset()
+        },
+    )
 
     val hostUi = HostUiModel(scope)
     /** Wake for every saved machine: the watched one through its tap, any other as a send only ([WakeService]). */
-    val wakes = WakeService(
-        scope, clock, lanPaths, sockets, permissionMissing = { gate.lanAccessMissing() }, watched = _profile, profile = { id -> profiles.get(id) },
+    val wakes: WakeService = WakeService(
+        scope, clock, lanPaths, sockets, permissionMissing = { gate.lanAccessMissing() }, watched = machineBook.profile, profile = { id -> profiles.get(id) },
         link = { hostUi.view.value.let { WakeLink.of(it.phase, it.freshness) } }, links = hostUi.view.map { WakeLink.of(it.phase, it.freshness) },
         reconnect = { retry() },
     )
     /** What an arrived alert turns into, and the notifications the open app raises itself ([AlertService]). */
-    val alertService = AlertService(
+    val alertService: AlertService = AlertService(
         clock, settings = { prefs.value }, interactive = { triggers.interactive.value }, show = { notifier.show(it) },
-        switchTo = { id -> watchProfile(id, chosen = false) }, monitored = hostUi.view.map { (it.phase as? HostPhase.Monitoring)?.host },
+        switchTo = { id -> machineBook.watch(id, chosen = false) }, monitored = hostUi.view.map { (it.phase as? HostPhase.Monitoring)?.host },
     )
     /** The one machine watched now: its connection controller, and what follows that controller's phases and readings ([HostWatcher]). */
-    val hostWatcher = HostWatcher(
-        scope, isRemoving = { it in removing },
+    val hostWatcher: HostWatcher = HostWatcher(
+        scope, isRemoving = { machineBook.isRemoving(it) },
         create = { profile ->
             HostSessionController(
                 scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, hostScripts.relay, hostScripts.relaySha256, sessionName = profile.session,
@@ -248,22 +255,14 @@ class AppGraph(private val app: Application) {
         follows = listOf(
             { c -> c.phase.collectLatest { p -> if (p is HostPhase.Monitoring) alertService.raise(p.host) } },
             { c -> c.phase.collectLatest { p -> if (p is HostPhase.Monitoring) widgets.track(p.host) } },
-            { c -> c.wake.filterNotNull().collect { saveWake(c.profile, it) } },
-            { c -> c.os.filterNotNull().collect { saveDetectedOs(c.profile, it) } },
+            { c -> c.wake.filterNotNull().collect { machineBook.saveWake(c.profile, it) } },
+            { c -> c.os.filterNotNull().collect { machineBook.saveDetectedOs(c.profile, it) } },
             // A live connection ends any pairing request: the key is no longer what stands between this phone and the machine.
             { c -> c.phase.collectLatest { p -> if (p is HostPhase.Monitoring) pairingCoordinator.connectedTo(p.host.profile.host) } },
         ),
     )
     /** The open terminal session, kept through a rotation so turning the phone does not release control. */
     val terminals = io.github.tuthan.paddock.host.Retained<io.github.tuthan.paddock.terminal.TerminalSession>(scope) { it.close() }
-
-    /** Settings and the user's snippets, and what writes them ([SettingsController]). */
-    val prefs = SettingsController(scope, FileAppSettingsStore(File(files, "settings.json")), FileSnippetStore(File(files, "snippets.json")), appLock)
-    val settings: StateFlow<AppSettings> get() = prefs.settings
-    val snippets: StateFlow<List<String>> get() = prefs.snippets
-
-    /** Pro: the store, the gate and the sheet that asks for it (Phase 13). */
-    val proService = ProService(entitlements, scope, clock, manualInput, journal, Distribution.UNLOCKED)
 
     fun start() {
         triggers.install()
@@ -273,13 +272,13 @@ class AppGraph(private val app: Application) {
         // Coming to the front clears the notifications of the machine now on screen, and only those: another machine's alert is not on this screen
         // (see AlertScreen). Switching the watched machine while in front clears the new machine's.
         scope.launch {
-            kotlinx.coroutines.flow.combine(triggers.interactive, appLock.locked, _profile) { front, locked, watched -> if (front && !locked) watched?.id else null }
+            kotlinx.coroutines.flow.combine(triggers.interactive, appLock.locked, machineBook.profile) { front, locked, watched -> if (front && !locked) watched?.id else null }
                 .distinctUntilChanged().collect { id -> if (id != null) runCatching { notifier.cancelFor(id) } }
         }
         // The chips of the machines not watched say how many agents need you (Pro): looked at only while the herd is in front and not covered by the lock.
         // The look is one short session per machine every half minute; the push alerts are what reaches the user in the background.
         scope.launch {
-            kotlinx.coroutines.flow.combine(triggers.interactive, appLock.locked, _machines, _profile, proService.view) { front, covered, all, watched, view ->
+            kotlinx.coroutines.flow.combine(triggers.interactive, appLock.locked, machineBook.machines, machineBook.profile, proService.view) { front, covered, all, watched, view ->
                 io.github.tuthan.paddock.probe.ProbeTargets.of(front, covered, proService.locked(ProCapabilities.HOSTS_MERGED, view), all, watched?.id)
             }.distinctUntilChanged().collectLatest { targets -> if (targets.isNotEmpty()) probe.run(targets) }
         }
@@ -289,24 +288,12 @@ class AppGraph(private val app: Application) {
         scope.launch { proService.view.map { proService.hasPro(it) }.distinctUntilChanged().collect { runCatching { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) } } }
         scope.launch {
             prefs.load()
-            val read = runCatching { profiles.list() }
-            val all = read.getOrDefault(emptyList())
-            _machines.value = all
-            // The machine watched last time, not whichever sorts first.
-            val watched = all.firstOrNull { it.id == prefs.value.watchedProfileId } ?: all.firstOrNull()
-            _profile.value = watched
-            // Settings written before there was a chosen machine, or naming one removed meanwhile: the watched machine is the choice. Saved once, and
-            // never from a list that could not be read (MachineRoster.startupChoice).
-            MachineRoster.startupChoice(read.isSuccess, all, prefs.value, watched?.id)?.let { migrated ->
-                prefs.update { it.copy(chosenProfileId = migrated.chosenProfileId) }
-                prefs.saveQuietly()
-            }
-            _boot.value = if (watched == null) Boot.NoMachines else Boot.Ready
+            machineBook.load()
             runCatching { push.resume() }
             // The connection is claimed while the app is visible and released when it is not (the owner closes it after its grace).
             // Held while the app is visible and uncovered: behind the lock screen nothing connects, so nothing asks a question (a host key, a key) the user cannot see.
             kotlinx.coroutines.flow.combine(triggers.foreground, appLock.locked) { visible, locked -> visible && !locked }.distinctUntilChanged()
-                .collectLatest { active -> if (active) _profile.value?.let { hostWatcher.watch(it) } else hostWatcher.pause() }
+                .collectLatest { active -> if (active) machineBook.profile.value?.let { hostWatcher.watch(it) } else hostWatcher.pause() }
         }
     }
 
@@ -332,189 +319,8 @@ class AppGraph(private val app: Application) {
         }
     }
 
-    /**
-     * Saves [profile], makes it the watched machine and connects. [chosen]: the user picked it, so it is also the chosen one ([AppSettings.chosenProfileId]).
-     * Setting up the watched machine's key passes false ([MachineRoster.choosesOnAdd]): after an alert moved the phone to that machine, fixing its key
-     * must not take away the free return to the machine the user chose.
-     */
-    suspend fun addMachine(profile: HostProfile, chosen: Boolean = true) = machineLock.withLock {
-        profiles.put(profile)
-        refreshMachines()
-        prefs.update { it.copy(watchedProfileId = profile.id, chosenProfileId = if (chosen) profile.id else it.chosenProfileId) }
-        prefs.save()
-        _profile.value = profile
-        _boot.value = Boot.Ready
-        if (triggers.foreground.value) hostWatcher.watch(profile)
-    }
-
-    /**
-     * Everything this phone holds about a machine, forgotten before its profile goes. Not here, on purpose: this phone's own key and the one imported key
-     * (every machine shares them), and the operation journal (what the phone sent, with no machine text; adding the same machine again finds an unknown outcome there).
-     */
-    private val removal by lazy {
-        MachineRemoval(
-            listOf(
-                MachineRemoval.Forget("its alert registration") { id -> push.unregister(id) },
-                MachineRemoval.Forget("its alert setup") { id -> alertSetups.remove(id) },
-                MachineRemoval.Forget("the host key") { id -> hostKeyStore.remove(id); broker.clearChanged(id); broker.expectPairing(id, null) },
-                MachineRemoval.Forget("what the phone saw there") { id -> ledger.forgetHost(HostProfileId(id)); withContext(Dispatchers.IO) { ledger.flush() } },
-                MachineRemoval.Forget("its widget copy") { id -> widgets.forget(id) },
-                // A request made for this machine's desktop is no longer about anything this phone has.
-                MachineRemoval.Forget("a pairing request") { id ->
-                    val host = profiles.get(id)?.host?.trim()
-                    val pending = pairingCoordinator.state.value.pendingOrNull
-                    val sharedWithAnother = profiles.list().any { it.id != id && it.host.trim().equals(host, ignoreCase = true) }
-                    if (host != null && pending != null && !sharedWithAnother && pending.host.trim().equals(host, ignoreCase = true)) pairingCoordinator.clear()
-                },
-            ),
-        ) { id -> profiles.remove(id) }
-    }
-
-    /**
-     * Removes a machine from this phone (see [MachineRemoval]). Removing the watched one stops watching it first, so nothing it writes comes after the
-     * forgetting, then watches the next saved machine ([MachineRoster.after]: the chosen machine when it is another one, else the first by name), or none;
-     * the user confirmed "Paddock then watches <next>", so it is also the chosen one. Removing the chosen machine while another is watched makes the watched one the choice, as start-up would. When something could not be forgotten
-     * the machine stays listed (and watched again) for another try. Free: the user must always be able to forget a machine.
-     */
-    suspend fun removeMachine(id: String): MachineRemoval.Result = try {
-        // Before the lock, so Watch and Remove… wait from the moment it is asked for, also while another change to the machines holds the lock.
-        _removingMachine.value = id
-        removeMachineLocked(id)
-    } finally {
-        // Only its own mark: a second removal asked for meanwhile keeps the screens waiting until it ends.
-        _removingMachine.compareAndSet(id, null)
-    }
-
-    /**
-     * Remove… on a machine's page, run in [scope] so leaving the page or turning the phone does not stop it. What it came to is kept in
-     * [removalOutcome] until the root has said so.
-     */
-    fun requestRemoval(id: String, name: String) {
-        // Marked at the tap, before the coroutine runs, so the next frame already has Watch and Remove… waiting; removeMachine clears it.
-        _removingMachine.value = id
-        scope.launch { _removalOutcome.value = RemovalOutcome(id, name, removeMachine(id)) }
-    }
-
-    /** The root showed [outcome]: it goes, unless a newer removal has replaced it meanwhile. */
-    fun consumeRemoval(outcome: RemovalOutcome) { _removalOutcome.compareAndSet(outcome, null) }
-
-    private suspend fun removeMachineLocked(id: String): MachineRemoval.Result = machineLock.withLock {
-        if (profiles.get(id) == null) return@withLock MachineRemoval.Result.Removed
-        val wasWatched = _profile.value?.id == id
-        val before = _profile.value
-        // From here nothing may start watching it, and its connection (and the grace after it) is closed now: a reconnect would raise a first-trust prompt for a key just forgotten.
-        removing += id
-        try {
-            if (wasWatched) hostWatcher.stop()
-            owner.drop(id)
-            val result = removal.remove(id)
-            refreshMachines()
-            if (result != MachineRemoval.Result.Removed) {
-                removing -= id
-                if (wasWatched && before != null && triggers.foreground.value) hostWatcher.watch(before)
-                return@withLock result
-            }
-            // Its Wake facts and their flow go with it: a later machine with the same id starts with none.
-            wakes.forget(id)
-            probe.forget(id)
-            if (wasWatched) {
-                val next = MachineRoster.after(_machines.value, id, prefs.value.chosenProfileId)
-                prefs.update { it.copy(watchedProfileId = next?.id, chosenProfileId = next?.id) }
-                prefs.saveQuietly()
-                _profile.value = next
-                hostUi.reset()
-                if (next == null) _boot.value = Boot.NoMachines else if (triggers.foreground.value) hostWatcher.watch(next)
-            } else {
-                val chosen = MachineRoster.chosen(_machines.value, prefs.value.chosenProfileId, _profile.value?.id)
-                if (chosen != prefs.value.chosenProfileId) {
-                    prefs.update { it.copy(chosenProfileId = chosen) }
-                    prefs.saveQuietly()
-                }
-            }
-            result
-        } finally {
-            removing -= id
-        }
-    }
-
-    /**
-     * Makes [id] the watched machine. Null when this phone has no such machine. [chosen]: the user picked it themselves (the machine list's Watch), so it
-     * also becomes the chosen machine ([AppSettings.chosenProfileId]). An alert calls this with the default: the machine an alert moves the phone to is
-     * never the one a phone without Pro may always return to.
-     */
-    suspend fun watchProfile(id: String, chosen: Boolean = false): HostProfile? = machineLock.withLock {
-        val profile = profiles.get(id) ?: return@withLock null
-        val switching = _profile.value?.id != profile.id
-        if (switching || (chosen && prefs.value.chosenProfileId != profile.id)) {
-            prefs.update { it.copy(watchedProfileId = profile.id, chosenProfileId = if (chosen) profile.id else it.chosenProfileId) }
-            prefs.saveQuietly()
-        }
-        if (switching) {
-            _profile.value = profile
-            // At the switch, not only when its connection starts (watch runs only in the foreground): from now on this machine's facts are the watched
-            // tap's, and its send-only "not watching this machine" line is no longer true. hostWatcher.watch() says it again for a controller it replaces; twice is harmless.
-            wakes.watching(profile.id)
-            if (triggers.foreground.value) hostWatcher.watch(profile)
-        }
-        profile
-    }
-
     /** The saved sagas, for Activity while no host is being monitored (a restart, a lost connection). */
     fun savedSagas(): List<io.github.tuthan.paddock.ops.SagaRecord> = runCatching { sagaStore.load().records }.getOrDefault(emptyList())
-
-    /**
-     * Keeps what a bring-up read about waking the machine, with the relay the user saved. Skipped when the stored profile is no longer
-     * the machine that was read (the user edited its address meanwhile). What to keep is [WakeTarget.afterReading]: a run that failed
-     * never replaces a hardware address already read, and a reading that says what is stored is not a write. One critical section in
-     * the store, so a profile edit or a relay save made meanwhile is not overwritten with a stale copy.
-     */
-    private suspend fun saveWake(read: HostProfile, reading: io.github.tuthan.paddock.wake.WakeReading) {
-        val written = profiles.update(read.id) { stored ->
-            if (!stored.host.equals(read.host, ignoreCase = true) || stored.port != read.port) null
-            else io.github.tuthan.paddock.wake.WakeTarget.afterReading(stored.wake, reading)?.let { stored.copy(wake = it) }
-        } ?: return
-        if (_profile.value?.id == written.id) _profile.value = written
-        machineWritten(written)
-    }
-
-    /**
-     * Keeps what a bring-up learned about the machine's OS as [HostProfile.detectedOs]. Skipped when the stored profile is no longer the machine that
-     * asked (its address was edited meanwhile), and a reading that says what is stored is not a write. The user's own pick ([HostProfile.os]) is never touched.
-     */
-    private suspend fun saveDetectedOs(read: HostProfile, os: io.github.tuthan.paddock.hostprofile.HostOs) {
-        val written = profiles.update(read.id) { stored ->
-            if (!stored.host.equals(read.host, ignoreCase = true) || stored.port != read.port || stored.detectedOs == os) null else stored.copy(detectedOs = os)
-        } ?: return
-        if (_profile.value?.id == written.id) _profile.value = written
-        machineWritten(written)
-    }
-
-    /**
-     * Renames [profileId] on this phone (the id, the pin and every fact that hangs off it stay). [MachineName] has already judged [name]; the store's own
-     * check is the last word. False when there is no such machine. The watched machine reconnects once: its name is part of what its connection was
-     * started with (the label the answer host writes), so a rename is the one edit here that is not free.
-     */
-    suspend fun renameMachine(profileId: String, name: String): Boolean {
-        val written = profiles.update(profileId) { stored -> stored.copy(name = name) }
-        if (written == null) return profiles.get(profileId)?.name == name
-        if (_profile.value?.id == written.id) { _profile.value = written; hostWatcher.watch(written) }
-        machineWritten(written)
-        return true
-    }
-
-    /** The user's own icon for [profileId]: an OS, or null to follow what the machine says. Never reconnects. */
-    suspend fun setMachineOs(profileId: String, os: io.github.tuthan.paddock.hostprofile.HostOs?) {
-        val written = profiles.update(profileId) { stored -> stored.copy(os = os) } ?: return
-        if (_profile.value?.id == written.id) _profile.value = written
-        machineWritten(written)
-    }
-
-    /**
-     * The saved list follows a write to one machine (its wake reading or relay), so the Machines screen and the machine page show it without a
-     * re-read of the store. Only a machine still listed is replaced: a removal that finished meanwhile is not undone. Behind [machinesWrite], so a
-     * re-read that started before this write reached the store ([refreshMachines]) cannot land after it with the old copy.
-     */
-    private suspend fun machineWritten(written: HostProfile) { machinesWrite.withLock { _machines.update { all -> all.map { if (it.id == written.id) written else it } } } }
 
     /**
      * Sends this phone's own public key to the desktop that showed the pairing code. Only the phone key is ever sent: an imported key
@@ -528,23 +334,10 @@ class AppGraph(private val app: Application) {
         return true
     }
 
-    /**
-     * Saves, replaces or clears the relay for waking [profileId] from away. Before any reading the profile gets a "not read yet" target
-     * that carries only the relay; the next bring-up fills in the rest and keeps it.
-     */
-    suspend fun setWakeRelay(profileId: String, relay: io.github.tuthan.paddock.wake.WakeRelay?) {
-        val written = profiles.update(profileId) { stored ->
-            val base = stored.wake ?: io.github.tuthan.paddock.wake.WakeTarget.unavailable("Not read yet: connect once so Paddock can read the machine's network interface.", clock.nowMillis())
-            stored.copy(wake = base.copy(relay = relay))
-        } ?: return
-        if (_profile.value?.id == written.id) _profile.value = written
-        machineWritten(written)
-    }
-
     /** "Try again": a setup problem on a healthy connection runs the setup again; anything else refreshes the connection. */
     fun retry() {
         if (hostWatcher.retrySetup()) return
-        _profile.value?.let { owner.refresh(it.id) }
+        machineBook.profile.value?.let { owner.refresh(it.id) }
     }
     fun installRelay() { hostWatcher.installRelay() }
 
@@ -590,11 +383,5 @@ class AppGraph(private val app: Application) {
         KeyKind.Imported -> importedKeys.load(profile.importedKeyId!!) ?: throw ConnectFailure.BadKey("the imported key is missing")
     }
 }
-
-/**
- * What one Remove… from a machine's page came to ([AppGraph.requestRemoval]): the machine's [id] and the [name] the page showed, and the [result].
- * Not a data class: two removals are two events even when they read alike, so consuming one never clears the other.
- */
-class RemovalOutcome(val id: String, val name: String, val result: MachineRemoval.Result)
 
 const val IMPORTED_KEY_ID = "imported"
