@@ -60,6 +60,7 @@ import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.relay.PinnedHostScripts
 import io.github.tuthan.paddock.settings.AppSettings
+import io.github.tuthan.paddock.settings.SettingsController
 import io.github.tuthan.paddock.settings.FileAppSettingsStore
 import io.github.tuthan.paddock.ssh.ConnectFailure
 import io.github.tuthan.paddock.ssh.ImportedKeyStore
@@ -122,14 +123,12 @@ class AppGraph(private val app: Application) {
     // After a restart: a request still inside its window is reopened, asking the desktop first whether the first send ever arrived.
     init { scope.launch { runCatching { pairingCoordinator.resume() } } }
     val ledger = Ledger(FileLedgerStore(File(files, "ledger.json"))) { System.currentTimeMillis() }
-    private val settingsStore = FileAppSettingsStore(File(files, "settings.json"))
     /** Pro: the last verified answer from the store account, kept in a plain file; the foss build has no store and every capability unlocked (Phase 13). */
     val entitlements = Entitlements(Distribution.billing(app), FileEntitlementStore(File(files, FileEntitlementStore.FILE_NAME)), clock, Distribution.UNLOCKED)
     /** What the phone asked of each terminal, written before it asks. Never deleted for an unknown outcome. */
     val journal = OperationJournal(FileJournalStore(File(files, "operations.json")), clock)
     /** Start-agent sagas with every id herdr returned (Phase 09); no prompt text is ever written here. */
     private val sagaStore = io.github.tuthan.paddock.ops.FileSagaStore(File(files, "sagas.json"))
-    private val snippetStore = FileSnippetStore(File(files, "snippets.json"))
     /** Manual input (Esc and Ctrl+C) lives as long as the process and is never restored: a killed app starts with it off. */
     val manualInput = ManualInputMode()
     /** Where a tapped alert enters: parsed, deduped, then resolved against a fresh read by [resolveAlert]. */
@@ -151,7 +150,7 @@ class AppGraph(private val app: Application) {
         show = { notifier.show(it) },
         herdInFront = { triggers.interactive.value && !appLock.locked.value },
         watchedProfile = { _profile.value?.id },
-        hideOnLockScreen = { runCatching { settingsStore.load().hidePromptOnLockScreen }.getOrDefault(true) },
+        hideOnLockScreen = { runCatching { prefs.stored().hidePromptOnLockScreen }.getOrDefault(true) },
     )
     @Volatile private var alertWatcher: Job? = null
 
@@ -266,8 +265,10 @@ class AppGraph(private val app: Application) {
     /** Lives while its machine is watched: paused when the app is hidden, resumed when it returns, replaced only for another machine. */
     @Volatile private var controller: HostSessionController? = null
 
-    private val _settings = MutableStateFlow(AppSettings())
-    val settings: StateFlow<AppSettings> = _settings.asStateFlow()
+    /** Settings and the user's snippets, and what writes them ([SettingsController]). */
+    val prefs = SettingsController(scope, FileAppSettingsStore(File(files, "settings.json")), FileSnippetStore(File(files, "snippets.json")), appLock)
+    val settings: StateFlow<AppSettings> get() = prefs.settings
+    val snippets: StateFlow<List<String>> get() = prefs.snippets
 
     /** Everything Pro does between the screens and the store (Phase 13): one store action at a time, nothing a store call throws reaches the process, prices only when shown. */
     private val proSession = ProSession(entitlements, scope, clock, Distribution.UNLOCKED)
@@ -285,14 +286,10 @@ class AppGraph(private val app: Application) {
     /** Why the last tap on a Pro control did nothing (a deferral, see [ProGate.deferNotice]); `PaddockRoot` shows it as a notice, and it goes by itself after [GateNotice.SHOW_MILLIS]. */
     val gateNotice: StateFlow<String?> = gateNoticeHolder.text
 
-    private val _snippets = MutableStateFlow<List<String>>(emptyList())
-    /** The user's own prompt snippets: on this phone only, never synced. */
-    val snippets: StateFlow<List<String>> = _snippets.asStateFlow()
-
     fun start() {
         triggers.install()
         // Leaving and coming back is what asks again: the lock counts the time the app was out of sight (it ignores a rotation, and the credential screen's own trip).
-        scope.launch { triggers.foreground.collect { visible -> if (visible) appLock.shown(_settings.value.appLock, _settings.value.appLockAfterSeconds) else appLock.hidden() } }
+        scope.launch { triggers.foreground.collect { visible -> if (visible) appLock.shown(prefs.value.appLock, prefs.value.appLockAfterSeconds) else appLock.hidden() } }
         // The herd in front of the user is the alert: notifications raised while it was away are cleared when it returns.
         // Coming to the front clears the notifications of the machine now on screen, and only those: another machine's alert is not on this screen
         // (see AlertScreen). Switching the watched machine while in front clears the new machine's.
@@ -314,21 +311,18 @@ class AppGraph(private val app: Application) {
         // (Entitlements.hasPro): what is drawn is decided by PaddockWidgets.locked from the saved file, which is written before this state moves. With no widget placed the redraw does nothing.
         scope.launch { pro.map { entitlements.hasPro(it.state) }.distinctUntilChanged().collect { runCatching { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) } } }
         scope.launch {
-            _settings.value = settingsStore.load()
-            // Covered from the first frame until this: a cold start with the lock on stays covered, one with it off opens now.
-            appLock.start(_settings.value.appLock)
-            _snippets.value = runCatching { snippetStore.load() }.getOrDefault(emptyList())
+            prefs.load()
             val read = runCatching { profiles.list() }
             val all = read.getOrDefault(emptyList())
             _machines.value = all
             // The machine watched last time, not whichever sorts first.
-            val watched = all.firstOrNull { it.id == _settings.value.watchedProfileId } ?: all.firstOrNull()
+            val watched = all.firstOrNull { it.id == prefs.value.watchedProfileId } ?: all.firstOrNull()
             _profile.value = watched
             // Settings written before there was a chosen machine, or naming one removed meanwhile: the watched machine is the choice. Saved once, and
             // never from a list that could not be read (MachineRoster.startupChoice).
-            MachineRoster.startupChoice(read.isSuccess, all, _settings.value, watched?.id)?.let { migrated ->
-                _settings.update { it.copy(chosenProfileId = migrated.chosenProfileId) }
-                runCatching { settingsStore.save(_settings.value) }
+            MachineRoster.startupChoice(read.isSuccess, all, prefs.value, watched?.id)?.let { migrated ->
+                prefs.update { it.copy(chosenProfileId = migrated.chosenProfileId) }
+                prefs.saveQuietly()
             }
             _boot.value = if (watched == null) Boot.NoMachines else Boot.Ready
             runCatching { push.resume() }
@@ -421,8 +415,8 @@ class AppGraph(private val app: Application) {
     suspend fun addMachine(profile: HostProfile, chosen: Boolean = true) = machineLock.withLock {
         profiles.put(profile)
         refreshMachines()
-        _settings.update { it.copy(watchedProfileId = profile.id, chosenProfileId = if (chosen) profile.id else it.chosenProfileId) }
-        settingsStore.save(_settings.value)
+        prefs.update { it.copy(watchedProfileId = profile.id, chosenProfileId = if (chosen) profile.id else it.chosenProfileId) }
+        prefs.save()
         _profile.value = profile
         _boot.value = Boot.Ready
         if (triggers.foreground.value) watch(profile)
@@ -517,17 +511,17 @@ class AppGraph(private val app: Application) {
             wakeFactsByMachine.remove(id)?.first?.cancel()
             probe.forget(id)
             if (wasWatched) {
-                val next = MachineRoster.after(_machines.value, id, _settings.value.chosenProfileId)
-                _settings.update { it.copy(watchedProfileId = next?.id, chosenProfileId = next?.id) }
-                runCatching { settingsStore.save(_settings.value) }
+                val next = MachineRoster.after(_machines.value, id, prefs.value.chosenProfileId)
+                prefs.update { it.copy(watchedProfileId = next?.id, chosenProfileId = next?.id) }
+                prefs.saveQuietly()
                 _profile.value = next
                 hostUi.reset()
                 if (next == null) _boot.value = Boot.NoMachines else if (triggers.foreground.value) watch(next)
             } else {
-                val chosen = MachineRoster.chosen(_machines.value, _settings.value.chosenProfileId, _profile.value?.id)
-                if (chosen != _settings.value.chosenProfileId) {
-                    _settings.update { it.copy(chosenProfileId = chosen) }
-                    runCatching { settingsStore.save(_settings.value) }
+                val chosen = MachineRoster.chosen(_machines.value, prefs.value.chosenProfileId, _profile.value?.id)
+                if (chosen != prefs.value.chosenProfileId) {
+                    prefs.update { it.copy(chosenProfileId = chosen) }
+                    prefs.saveQuietly()
                 }
             }
             result
@@ -544,9 +538,9 @@ class AppGraph(private val app: Application) {
     suspend fun watchProfile(id: String, chosen: Boolean = false): HostProfile? = machineLock.withLock {
         val profile = profiles.get(id) ?: return@withLock null
         val switching = _profile.value?.id != profile.id
-        if (switching || (chosen && _settings.value.chosenProfileId != profile.id)) {
-            _settings.update { it.copy(watchedProfileId = profile.id, chosenProfileId = if (chosen) profile.id else it.chosenProfileId) }
-            runCatching { settingsStore.save(_settings.value) }
+        if (switching || (chosen && prefs.value.chosenProfileId != profile.id)) {
+            prefs.update { it.copy(watchedProfileId = profile.id, chosenProfileId = if (chosen) profile.id else it.chosenProfileId) }
+            prefs.saveQuietly()
         }
         if (switching) {
             _profile.value = profile
@@ -745,7 +739,7 @@ class AppGraph(private val app: Application) {
     private suspend fun raiseAlerts(host: MonitoredHost) {
         host.reconciler.observations.collect { o ->
             if (o !is Observation.StatusChanged) return@collect
-            val settings = _settings.value
+            val settings = prefs.value
             val agent = host.reconciler.installed.value?.snapshot?.agents?.firstOrNull { it.terminalId == o.key.target.terminalId }
             val alert = alertRules.alertFor(
                 o.to, agent, o.key.target, host.profile.name, clock.nowMillis() / 1000, settings.localAlerts, triggers.interactive.value, agent?.let { AttentionModel.title(it) },
@@ -782,7 +776,7 @@ class AppGraph(private val app: Application) {
         if (io.github.tuthan.paddock.widget.PaddockWidgets.locked(app)) return "skipped: widgets are Pro and this phone does not hold it"
         if (triggers.foreground.value) return "skipped: the app is in front and keeps the cache itself"
         val all = runCatching { profiles.list() }.getOrDefault(emptyList())
-        val watched = runCatching { settingsStore.load().watchedProfileId }.getOrNull()
+        val watched = runCatching { prefs.stored().watchedProfileId }.getOrNull()
         val profile = all.firstOrNull { it.id == watched } ?: all.firstOrNull() ?: return "skipped: no machine"
         val cache = widgetStore.load()?.takeIf { it.hostId == profile.id } ?: return "skipped: nothing has been read from ${profile.name} yet"
         val lease = owner.acquire(profile)
@@ -808,70 +802,6 @@ class AppGraph(private val app: Application) {
         _profile.value?.let { owner.refresh(it.id) }
     }
     fun installRelay() { controller?.installRelay() }
-
-    /** Saved in the graph's scope: the herd redraws at once and leaving Settings straight after cannot drop the write. */
-    fun setAgentGlyphs(on: Boolean) {
-        _settings.update { it.copy(agentGlyphs = on) }
-        scope.launch { runCatching { settingsStore.save(_settings.value) } }
-    }
-
-    /**
-     * Turns the lock on or off, after the user proved themselves to the phone. Saved before it is believed: when the write fails the setting stays as it was and
-     * this says so (false), so Settings never shows a lock that a restart would not have. Turning it on leaves the app open; turning it off opens it.
-     */
-    suspend fun setAppLock(on: Boolean): Boolean {
-        val before = _settings.value
-        _settings.update { it.copy(appLock = on) }
-        val saved = runCatching { settingsStore.save(_settings.value) }.isSuccess
-        if (!saved) { _settings.value = before; return false }
-        appLock.enabledChanged(on)
-        return true
-    }
-
-    /** How long Paddock may be out of sight before the lock asks again. Saved in the graph's scope. */
-    fun setAppLockAfter(seconds: Int) {
-        _settings.update { it.copy(appLockAfterSeconds = seconds) }
-        scope.launch { runCatching { settingsStore.save(_settings.value) } }
-    }
-
-    suspend fun setProtectSensitive(on: Boolean) {
-        _settings.update { it.copy(protectSensitiveScreens = on) }
-        settingsStore.save(_settings.value)
-    }
-
-    /** Saved in the graph's scope, so leaving the screen straight after an edit cannot drop the write. */
-    fun setSnippets(items: List<String>) {
-        _snippets.value = items
-        scope.launch { runCatching { snippetStore.save(items) } }
-    }
-
-    fun setLocalAlerts(on: Boolean) {
-        _settings.update { it.copy(localAlerts = on) }
-        scope.launch { runCatching { settingsStore.save(_settings.value) } }
-    }
-
-    fun setHidePromptOnLockScreen(on: Boolean) {
-        _settings.update { it.copy(hidePromptOnLockScreen = on) }
-        scope.launch { runCatching { settingsStore.save(_settings.value) } }
-    }
-
-    /** The permission dialog was shown once: from now on a refusal without a rationale means the system will not show it again. */
-    fun notePermissionAsked() {
-        if (_settings.value.notificationPermissionAsked) return
-        _settings.update { it.copy(notificationPermissionAsked = true) }
-        scope.launch { runCatching { settingsStore.save(_settings.value) } }
-    }
-
-    fun setKeepPromptText(on: Boolean) {
-        _settings.update { it.copy(keepPromptText = on) }
-        scope.launch { runCatching { settingsStore.save(_settings.value) } }
-    }
-
-    /** The user agreed once to what desktop focus does; the first tap asks until this is set. */
-    fun setDesktopFocusConfirmed() {
-        _settings.update { it.copy(desktopFocusConfirmed = true) }
-        scope.launch { runCatching { settingsStore.save(_settings.value) } }
-    }
 
     /**
      * Replaces the pin with the key the user was shown ([shown], the warning the dialog drew), then reconnects, so the new pin

@@ -91,7 +91,7 @@ private fun clear(focus: FocusManager) = focus.clearFocus(force = true)
 
 /** The phone's screen lock is gone, so nothing can be asked: open the app and turn the lock off rather than leave the user outside their own app. */
 private fun dropLock(graph: AppGraph, ctx: android.content.Context) {
-    graph.scope.launch { graph.setAppLock(false); graph.appLock.unlocked() }
+    graph.scope.launch { graph.prefs.setAppLock(false); graph.appLock.unlocked() }
     Toast.makeText(ctx, AppLockCopy.DROPPED, Toast.LENGTH_LONG).show()
 }
 

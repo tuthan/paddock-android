@@ -678,7 +678,7 @@ private fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onT
     val answersLocked = graph.locked(ProCapabilities.GUARDED_ANSWERS, pro)
     val decision = rememberDecision(host, terminalId, now, watch = !answersLocked)?.takeIf { !answersLocked }
     // The tap checks the gate again, as for the keys; the first time ever it asks what focus does.
-    FocusGuard(settings.desktopFocusConfirmed, onConfirmed = graph::setDesktopFocusConfirmed, focus = { focus.key?.takeIf { focus.gate is OperationGate.Open }?.let { host.sends?.focus(it) } }) { requestFocus ->
+    FocusGuard(settings.desktopFocusConfirmed, onConfirmed = graph.prefs::setDesktopFocusConfirmed, focus = { focus.key?.takeIf { focus.gate is OperationGate.Open }?.let { host.sends?.focus(it) } }) { requestFocus ->
         val manual = rememberManualInput(
             graph, host, terminalId, focus.gate, now, (output as? OutputState.Showing)?.lines?.map { it.text },
             onOpenTerminal = { onTab(AgentTab.Terminal) }, onFocus = requestFocus,
@@ -938,7 +938,7 @@ private fun ComposeRoute(
 @Composable
 private fun SnippetsRoute(graph: AppGraph, onBack: () -> Unit) {
     val snippets by graph.snippets.collectAsState()
-    SnippetEditor(snippets, onChange = { graph.setSnippets(it) }, onBack = onBack)
+    SnippetEditor(snippets, onChange = { graph.prefs.setSnippets(it) }, onBack = onBack)
 }
 
 @Composable
@@ -1263,7 +1263,7 @@ internal fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onMachines: () -
     val auth = rememberDeviceAuth()
     val deviceLock = remember(resumes) { auth.lock() }
     fun askPermission() {
-        graph.notePermissionAsked()
+        graph.prefs.notePermissionAsked()
         permission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
     Settings(
@@ -1278,32 +1278,32 @@ internal fun SettingsRoute(graph: AppGraph, onBack: () -> Unit, onMachines: () -
             graph.appLock.authenticating()
             auth.authenticate(if (on) AppLockCopy.TURN_ON_TITLE else AppLockCopy.TURN_OFF_TITLE, AppLockCopy.CONFIRM_SUBTITLE) { r ->
                 graph.appLock.cancelled()
-                if (r == AuthResult.Success) scope.launch { if (!graph.setAppLock(on)) android.widget.Toast.makeText(ctx, "The setting could not be saved.", android.widget.Toast.LENGTH_LONG).show() }
+                if (r == AuthResult.Success) scope.launch { if (!graph.prefs.setAppLock(on)) android.widget.Toast.makeText(ctx, "The setting could not be saved.", android.widget.Toast.LENGTH_LONG).show() }
                 else if (r is AuthResult.Failed) android.widget.Toast.makeText(ctx, AppLockCopy.failed(r.message), android.widget.Toast.LENGTH_LONG).show()
             }
         },
-        onAppLockAfter = { graph.setAppLockAfter(it) },
+        onAppLockAfter = { graph.prefs.setAppLockAfter(it) },
         onOpenSecuritySettings = { runCatching { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) } },
         onRestorePurchase = { graph.restorePurchases() },
         onBuyTip = { graph.buyTip(it) },
         // The sheet is the one purchase surface: the row only asks for it (idle opens it, busy says why not now).
         onProOverview = { graph.openProOverview() },
-        onProtectSensitive = { scope.launch { graph.setProtectSensitive(it) } },
-        onAgentGlyphs = { graph.setAgentGlyphs(it) },
+        onProtectSensitive = { scope.launch { graph.prefs.setProtectSensitive(it) } },
+        onAgentGlyphs = { graph.prefs.setAgentGlyphs(it) },
         onOpenSystemSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
         onBack = onBack,
         onMachines = onMachines,
-        onKeepPromptText = { graph.setKeepPromptText(it) },
+        onKeepPromptText = { graph.prefs.setKeepPromptText(it) },
         onEditSnippets = onEditSnippets,
         onRetryJournal = { graph.journal.retryLoad() },
         // Off the main thread: setting the file aside is disk work. A failure leaves the journal unreadable, which the card keeps saying.
         onResetJournal = { scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { graph.journal.resetUnreadable() } } },
         // Turning alerts on is the moment the permission is asked for (Android 13 and later); a refusal leaves the recovery row.
         onLocalAlerts = { on ->
-            graph.setLocalAlerts(on)
+            graph.prefs.setLocalAlerts(on)
             if (on && notificationAccess is io.github.tuthan.paddock.alerts.NotificationAccess.NeedsPermission && notificationAccess.canAsk) askPermission()
         },
-        onHideOnLockScreen = { graph.setHidePromptOnLockScreen(it) },
+        onHideOnLockScreen = { graph.prefs.setHidePromptOnLockScreen(it) },
         onAlertRelay = onAlertRelay,
         onAlertRecovery = { action ->
             if (action == io.github.tuthan.paddock.alerts.AccessRecovery.Action.AskPermission) askPermission()
