@@ -206,7 +206,7 @@ class Phase09LiveTest {
     // ---- AC-09.3, AC-09.8: the saga against real herdr -----------------------------------------------------------------------
 
     private fun saga(store: InMemorySagaStore = InMemorySagaStore(), startTimeoutMs: Int = 15_000, wrap: (SagaHost) -> SagaHost = { it }, j: OperationJournal = journal()): Pair<StartAgentSaga, OperationJournal> =
-        StartAgentSaga(wrap(RelaySagaHost(relay, session, cli)), null, j, store, clock, startTimeoutMs = startTimeoutMs, verifyWindowMillis = 10_000, pollMillis = 250) to j
+        StartAgentSaga(host, name, wrap(RelaySagaHost(relay, session, cli)), null, j, store, clock, startTimeoutMs = startTimeoutMs, verifyWindowMillis = 10_000, pollMillis = 250) to j
 
     private suspend fun workspaceId() = snapshot().workspaces.first { it.label == "work" }.workspaceId
     private fun request(workspaceId: String, agent: String, kind: String = "claude", branch: String? = null, folder: String? = null) = SagaRequest(host, name, agent, kind, workspaceId, branch, repository = work.name, folder = folder)

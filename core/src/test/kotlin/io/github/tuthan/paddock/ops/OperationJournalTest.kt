@@ -355,6 +355,51 @@ class OperationJournalTest {
     }
 
 
+    /** A store holding [MAX_ROWS] finished rows, the oldest first, as a long-lived process would have accumulated them. */
+    private fun fullStore(): InMemoryJournalStore {
+        val seeded = (1..OperationJournal.MAX_ROWS).map {
+            OperationRecord(it.toLong(), "h1", "paddock-test", "t$it", 1, OperationKind.Esc, now - 1_000L + it, outcome = OperationOutcome.Acknowledged)
+        }
+        return InMemoryJournalStore(JournalData(nextId = OperationJournal.MAX_ROWS + 1L, records = seeded))
+    }
+
+    @Test fun theRowCapHoldsWhileTheSameJournalStaysAliveNotOnlyAtTheNextLoad() {
+        val seeded = fullStore(); val j = journal(seeded)
+        val row = j.started(key("fresh")); j.markSent(row.id, "w2:p1"); j.acknowledged(row.id)
+        assertEquals(OperationJournal.MAX_ROWS, j.records.value.size)
+        assertFalse("the oldest finished row went", 1L in j.records.value.map { it.id })
+        assertTrue(row.id in j.records.value.map { it.id })
+        assertEquals("what is saved is bounded as well", OperationJournal.MAX_ROWS, seeded.load().records.size)
+    }
+
+    @Test fun theRowCapDoesNotTouchAnOperationThatIsStillRunning() {
+        val j = journal(fullStore())
+        val running = j.started(key("running")); j.markSent(running.id, "w2:p1")
+        val other = j.started(key("other")); j.markSent(other.id, "w2:p2"); j.acknowledged(other.id)
+        val rows = j.records.value
+        assertEquals("an in-flight row is never pruned", OperationOutcome.Sent, rows.single { it.id == running.id }.outcome)
+        assertEquals("the cap on finished rows, plus the row that is still running", OperationJournal.MAX_ROWS + 1, rows.size)
+    }
+
+    @Test fun ageIsAppliedWhileTheSameJournalStaysAliveAndTakesTheKeptPromptTextWithIt() {
+        val j = journal()
+        val old = (j.begin(key("a"), OperationKind.Prompt, "secret prompt", keepText = true) as Begin.Started).record
+        j.markSent(old.id, "w2:p1"); j.acknowledged(old.id)
+        assertEquals("secret prompt", j.get(old.id)?.promptText)
+        now += OperationJournal.MAX_AGE_MILLIS + 1
+        val next = j.started(key("b")); j.markSent(next.id, "w2:p2"); j.acknowledged(next.id)
+        assertNull("a row older than the limit is gone without a restart", j.get(old.id))
+        assertFalse("and so is its kept text, on disk too", "secret prompt" in store.load().records.joinToString { it.promptText.orEmpty() })
+    }
+
+    @Test fun anUnknownRowSurvivesTheCommitTimePruneToo() {
+        val j = journal()
+        val lost = j.started(key("lost")); j.markSent(lost.id, "w2:p1"); j.unknown(lost.id, "link lost")
+        now += OperationJournal.MAX_AGE_MILLIS + 1
+        val next = j.started(key("b")); j.markSent(next.id, "w2:p2"); j.acknowledged(next.id)
+        assertNotNull(j.get(lost.id))
+    }
+
     @Test fun anAnswerRowKeepsTheRequestIdItAnsweredOnDiskAndAnOlderFileWithoutOneStillLoads() {
         val j = journal()
         val row = (j.begin(key(), OperationKind.Allow, requestId = "11111111-1111-4111-8111-111111111111") as Begin.Started).record

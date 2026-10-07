@@ -65,6 +65,25 @@ object SoftInput {
         }
     }
 
+    /**
+     * A whole edit as one write: the bytes of every key in order, with the armed modifiers spent on the first. A paste of ten thousand characters is one array,
+     * one input and a few records on the wire, not ten thousand queue entries; [bytes] is null when no key had bytes. [spent] says the modifiers were spent, so the
+     * caller disarms them once.
+     */
+    fun encodeAll(keys: List<SoftKey>, armed: Mods): Burst {
+        val out = java.io.ByteArrayOutputStream()
+        var mods = armed; var spent = false
+        for (k in keys) {
+            val e = encode(k, mods)
+            e.bytes?.let { out.write(it) }
+            if (e.spent) { mods = Mods.None; spent = true }
+        }
+        return Burst(if (out.size() == 0) null else out.toByteArray(), spent)
+    }
+
     /** The bytes to send ([bytes] is null for a code point a terminal cannot take) and whether the armed modifiers were spent on it. */
     class Encoded(val bytes: ByteArray?, val spent: Boolean)
+
+    /** What [encodeAll] made of one edit. */
+    class Burst(val bytes: ByteArray?, val spent: Boolean)
 }

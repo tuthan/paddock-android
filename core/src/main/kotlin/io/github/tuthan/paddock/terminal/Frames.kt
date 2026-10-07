@@ -33,6 +33,8 @@ sealed class TerminalProtocolError(message: String, cause: Throwable? = null) : 
     class TooLarge(val size: Int, val limit: Int) : TerminalProtocolError("terminal frame of $size bytes exceeds the $limit byte budget")
     class BadBase64(cause: Throwable) : TerminalProtocolError("terminal frame bytes are not base64", cause)
     class BadGeometry(val width: Int, val height: Int) : TerminalProtocolError("terminal frame geometry ${width}x$height is out of range")
+    /** The frame's bytes ask for more screen work than any real frame does (a few bytes can scroll or clear a whole screen each). Part of it may already have been applied. */
+    class WorkLimit(val cells: Long) : TerminalProtocolError("terminal frame asks for more than $cells cells of screen work")
 }
 
 /** Size limits for a terminal stream. A phone viewport is far below all of them. */
@@ -51,6 +53,13 @@ object TerminalLimits {
     const val MAX_CELLS = 250_000
     /** Bytes in one `terminal.input` record; a longer paste is split by the caller. */
     const val INPUT_BYTES = 16 shl 10
+    /**
+     * Cells of screen work (rows moved, cleared or reallocated) one frame may cost. The byte cap alone does not bound CPU: `ESC [ 5 0 0 S` is six bytes and moves
+     * a whole 500 x 500 screen. A cell is not one price: measured on the JVM at that size, a flood of scrolls and clears runs about 0.15 s and a flood of full
+     * resets about 0.08 s before this limit stops it. A real full repaint of the largest grid costs about a quarter of a million cells, and a thousand line
+     * feeds at the bottom of a phone-sized grid about four million.
+     */
+    const val FEED_WORK_CELLS = 16L shl 20
 
     fun validGeometry(cols: Int, rows: Int) = cols in 1..MAX_COLS && rows in 1..MAX_ROWS && cols.toLong() * rows <= MAX_CELLS
 }

@@ -139,8 +139,8 @@ class GuardedAnswersTest {
 
     @Test fun bothPastedTextsAreShownInFullBeforeTheyCanBeCopiedAndCopyingDoesNothingElse() {
         val calls = show(known(RelayState.Current))
-        rule.onNodeWithText("mkdir -p ~/.config/paddock", substring = true).performScrollTo().assertIsDisplayed()
-        rule.onNodeWithText("[ -e ~/.config/paddock/hook.toml ] ||", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("XDG_CONFIG_HOME:-\$HOME/.config", substring = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("[ -e \"\$d/hook.toml\" ] ||", substring = true).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("\"PermissionRequest\"", substring = true).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Copy the configuration command").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()
         rule.onNodeWithText("Copy the registration").performScrollTo().assertHeightIsAtLeast(48.dp).performClick()

@@ -181,9 +181,61 @@ class AnswerHostTest {
 
     // ---- the text the user pastes
 
+    /** Runs the pasted text in `sh` the way a user's shell would, with exactly [env] added to a bare environment; returns the home folder used. */
+    private fun runConfigCommand(home: java.io.File, env: Map<String, String>, window: Int = 45) {
+        val pb = ProcessBuilder("sh", "-c", AnswerSetupText.configCommand(window)).redirectErrorStream(true)
+        pb.environment().clear(); pb.environment()["PATH"] = System.getenv("PATH") ?: "/usr/bin:/bin"; pb.environment()["HOME"] = home.path
+        pb.environment().putAll(env)
+        val p = pb.start(); val out = p.inputStream.readBytes().toString(Charsets.UTF_8)
+        assertEquals(0, p.waitFor(), out); assertEquals("", out.trim(), "the command prints nothing")
+    }
+
+    private fun tempHome() = java.nio.file.Files.createTempDirectory("paddock-home").toFile()
+
+    @Test fun theConfigurationCommandWritesWhereTheHookReadsItHomeConfigWithoutXdgAndXdgConfigHomeWithIt() {
+        val home = tempHome()
+        try {
+            // No XDG_CONFIG_HOME, or an empty one (the hook's `os.environ.get(...) or ~/.config`): ~/.config/paddock/hook.toml.
+            runConfigCommand(home, emptyMap())
+            val plain = java.io.File(home, ".config/paddock/hook.toml")
+            assertEquals("window_seconds = 45\ncodex_window_seconds = 20\n", plain.readText())
+            plain.delete()
+            runConfigCommand(home, mapOf("XDG_CONFIG_HOME" to ""))
+            assertTrue(plain.exists(), "an empty XDG_CONFIG_HOME counts as unset")
+
+            // A set XDG_CONFIG_HOME, with a space in it: the file goes there, and nothing is written under ~/.config.
+            val xdg = java.io.File(home, "my config dir").also { it.mkdirs() }
+            java.io.File(home, ".config").deleteRecursively()
+            runConfigCommand(home, mapOf("XDG_CONFIG_HOME" to xdg.path), window = 90)
+            val moved = java.io.File(xdg, "paddock/hook.toml")
+            assertEquals("window_seconds = 90\ncodex_window_seconds = 20\n", moved.readText())
+            assertFalse(java.io.File(home, ".config").exists(), "the default place is not touched when the hook would not read it")
+            assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(java.nio.file.Files.getPosixFilePermissions(moved.toPath())))
+        } finally { home.deleteRecursively() }
+    }
+
+    @Test fun theConfigurationCommandNeverOverwritesAFileThatIsThereInEitherPlace() {
+        val home = tempHome()
+        try {
+            val xdg = java.io.File(home, "xdg")
+            val mine = java.io.File(xdg, "paddock/hook.toml").also { it.parentFile.mkdirs(); it.writeText("window_seconds = 5\nallowed_tools = [\"Bash\"]\n") }
+            runConfigCommand(home, mapOf("XDG_CONFIG_HOME" to xdg.path))
+            assertEquals("window_seconds = 5\nallowed_tools = [\"Bash\"]\n", mine.readText())
+        } finally { home.deleteRecursively() }
+    }
+
+    @Test fun theConfigurationCommandIsOneWordForEveryShellNoAssignmentOrExpansionOutsideTheShCall() {
+        val lines = AnswerSetupText.configCommand(60).lines()
+        // fish has neither `name=value` nor `${x:-y}`: everything of that kind sits inside the quotes handed to sh.
+        assertTrue(lines.first().startsWith("#"))
+        val body = lines.drop(1).joinToString("\n")
+        assertTrue(body.startsWith("sh -c '") && body.endsWith("'") && body.count { it == '\'' } == 2, body)
+    }
+
     @Test fun theConfigurationCommandWritesOnlyWhereThereIsNoneAndKeepsItPrivate() {
         val c = AnswerSetupText.configCommand(45)
-        assertTrue("[ -e ~/.config/paddock/hook.toml ] ||" in c)
+        assertTrue("""[ -e "${'$'}d/hook.toml" ] ||""" in c)
+        assertFalse("'" in c.lines().first(), "the comment has no apostrophe: a shell that does not read comments would wait for the closing quote")
         assertTrue("window_seconds = 45" in c)
         assertTrue("chmod 600" in c)
         // Codex has a window of its own: short by default, whatever the other agents are given.

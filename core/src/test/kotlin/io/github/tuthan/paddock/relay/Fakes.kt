@@ -29,7 +29,9 @@ class FakeStream(val argv: List<String>) : StreamChannel {
     override val stderr: Flow<ByteArray> = emptyFlow()
     /** Called with each request line written, so a scripted host can answer. */
     @Volatile var onRequest: (String) -> Unit = {}
-    override suspend fun write(bytes: ByteArray) { written += bytes; bytes.toString(Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.forEach(onRequest) }
+    /** Called with each write before it is recorded; a test blocks in it to hold a write the way a full SSH window does. */
+    @Volatile var beforeWrite: (ByteArray) -> Unit = {}
+    override suspend fun write(bytes: ByteArray) { beforeWrite(bytes); written += bytes; bytes.toString(Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.forEach(onRequest) }
     override suspend fun closeStdin() { stdinClosed = true }
     override suspend fun awaitExit(): Int = exit
     override suspend fun close() { closed = true; out.close() }

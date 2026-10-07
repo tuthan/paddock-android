@@ -284,6 +284,65 @@ class TerminalSessionTest {
         assertNull(s.view.value.notice); assertTrue(c.closed)
     }
 
+    /** Holds the controller's writes after the first, the way a full SSH window would, until [open] is counted down; counts what reached the wire. */
+    private class HeldWrites(val c: FakeStream) {
+        val open = CountDownLatch(1)
+        val reached = CountDownLatch(1)
+        init { c.beforeWrite = { reached.countDown(); open.await(20, TimeUnit.SECONDS) } }
+        fun inputs() = c.writtenText().lines().count { "terminal.input" in it }
+    }
+
+    @Test fun inputQueuedBehindAHeldWriteIsDroppedWhenTheAppLeaves() {
+        val host = TestHost(); val s = session(host); observing(host, s); val c = controlling(host, s)
+        val held = HeldWrites(c)
+        assertTrue(s.send("one".toByteArray()))
+        assertTrue(held.reached.await(5, TimeUnit.SECONDS), "the first write is on its way and stuck")
+        assertTrue(s.send("two".toByteArray())); assertTrue(s.send("three".toByteArray()))
+        s.suspend()
+        assertFalse(s.send("four".toByteArray()), "the moment the app leaves, nothing more is accepted")
+        held.open.countDown()
+        waitUntil("closed") { c.closed }
+        assertEquals(1, held.inputs(), "only the write that was already out reached the terminal; the queued ones did not: ${c.writtenText()}")
+        assertFalse("two" in c.writtenText() || Base64.getEncoder().encodeToString("two".toByteArray()) in c.writtenText())
+    }
+
+    @Test fun inputQueuedBehindAHeldWriteIsDroppedWhenTheUserReleases() {
+        val host = TestHost(); val s = session(host); observing(host, s); val c = controlling(host, s)
+        val held = HeldWrites(c)
+        assertTrue(s.send("one".toByteArray()))
+        assertTrue(held.reached.await(5, TimeUnit.SECONDS))
+        assertTrue(s.send("two".toByteArray())); assertTrue(s.send("three".toByteArray()))
+        s.release()
+        assertFalse(s.send("four".toByteArray()), "input stops when release is asked for, not when the host answers")
+        held.open.countDown()
+        waitUntil("release written") { c.writtenText().contains("terminal.release") }
+        assertEquals(1, held.inputs(), "the queued inputs never went out: ${c.writtenText()}")
+    }
+
+    @Test fun aLargePasteStopsAfterTheChunkInFlightWhenTheAppLeaves() {
+        val host = TestHost(); val s = session(host); observing(host, s); val c = controlling(host, s)
+        val held = HeldWrites(c)
+        assertTrue(s.send(ByteArray(TerminalLimits.INPUT_BYTES * 6) { 'a'.code.toByte() }))
+        assertTrue(held.reached.await(5, TimeUnit.SECONDS), "the first chunk is stuck")
+        s.suspend()
+        held.open.countDown()
+        waitUntil("closed") { c.closed }
+        assertEquals(1, held.inputs(), "one chunk was out; the other five were never written")
+    }
+
+    @Test fun inputIsAcceptedAgainAfterControlIsRequestedAfterARelease() {
+        val host = TestHost(); val s = session(host); observing(host, s); val c = controlling(host, s)
+        s.release()
+        c.feed(closed("detached"))
+        waitUntil("observer again") { host.observers.size == 2 }
+        host.observers.last().feed(full()); s.waitMode(TerminalMode.Observing)
+        s.requestControl()
+        waitUntil("controller again") { host.controllers.size == 2 }
+        host.controllers.last().feed(full()); s.waitMode(TerminalMode.Controlling)
+        assertTrue(s.send("back".toByteArray()))
+        waitUntil("written") { host.controllers.last().writtenText().contains("terminal.input") }
+    }
+
     @Test fun aReleaseThatIsNeverAnsweredIsClosedAnyway() {
         val host = TestHost(); val s = session(host); observing(host, s); val c = controlling(host, s)
         s.release()
@@ -394,6 +453,40 @@ class TerminalSessionTest {
         c.feed(frame(9, false, "x"))
         waitUntil("given back") { s.view.value.notice is TerminalNotice.ControlEnded }
         waitUntil("observer") { host.observers.size == 2 }; assertTrue(c.closed)
+    }
+
+    /** A frame of a few kilobytes whose every two bytes reset the screen: more work than any real frame asks for. */
+    private fun costlyFrame(seq: Long) = frame(seq, false, "${ESC}c".repeat(15_000))
+
+    @Test fun anObserverFrameThatRunsPastTheWorkBudgetIsNotShownAndTheStreamIsReopenedForAFullFrame() {
+        val host = TestHost(); val s = session(host); val o = observing(host, s)
+        o.feed(costlyFrame(2))
+        waitUntil("reopened") { host.observers.size == 2 }
+        assertEquals("hello", s.row0(), "the half-applied screen is never shown; the last good one stays")
+        assertTrue(s.view.value.notice == TerminalNotice.Resynced)
+        host.observers.last().feed(full(seq = 1, text = "${ESC}[2J${ESC}[1;1Hagain")); waitUntil("fresh screen") { s.row0() == "again" }
+        assertEquals(TerminalMode.Observing, s.mode())
+    }
+
+    @Test fun aControllerFrameThatRunsPastTheWorkBudgetAsksForAFullFrameLikeALostOne() {
+        val host = TestHost(); val s = session(host); observing(host, s); val c = controlling(host, s)
+        c.feed(costlyFrame(2))
+        waitUntil("asked for a full frame") { c.writtenText().contains("terminal.resize") }
+        assertEquals("hello", s.row0())
+        c.feed(frame(3, true, "${ESC}[2J${ESC}[1;1Hrepaired")); waitUntil("repaired") { s.row0() == "repaired" }
+        assertEquals(TerminalMode.Controlling, s.mode())
+    }
+
+    @Test fun anObserverThatKeepsSendingFramesPastTheWorkBudgetIsGivenUp() {
+        val host = TestHost(); val s = session(host); observing(host, s)
+        repeat(6) { i ->
+            val n = host.observers.size
+            // The first is a patch on the open stream; each reopened stream starts with a full frame, which is just as costly.
+            host.observers.last().feed(if (i == 0) costlyFrame(2) else frame(1, true, "${ESC}c".repeat(15_000)))
+            if (s.mode() !is TerminalMode.Ended) waitUntil("reopened or ended") { host.observers.size > n || s.mode() is TerminalMode.Ended }
+        }
+        waitUntil("ended") { s.mode() is TerminalMode.Ended }
+        assertTrue((s.mode() as TerminalMode.Ended).reason is EndReason.Failed)
     }
 
     @Test fun aRecordTypeWeDoNotKnowIsSkippedAndNothingElseChanges() {

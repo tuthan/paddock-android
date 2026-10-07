@@ -2,6 +2,7 @@ package io.github.tuthan.paddock.terminal
 
 import kotlin.random.Random
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
@@ -117,6 +118,24 @@ class VtEngineTest {
         e.send("$ESC[T"); assertEquals(listOf("a", "", "c", "d"), e.rows())
     }
 
+    @Test fun scrollsAndLineInsertsMoveByTheirCountInsideTheRegionAndAnyCountPastItClearsTheRegion() {
+        val e = engine(4, 6); e.send("1\r\n2\r\n3\r\n4\r\n5\r\n6$ESC[2;5r")
+        e.send("$ESC[2S"); assertEquals(listOf("1", "4", "5", "", "", "6"), e.rows())
+        e.send("$ESC[1T"); assertEquals(listOf("1", "", "4", "5", "", "6"), e.rows())
+        e.send("$ESC[3;1H$ESC[2L"); assertEquals(listOf("1", "", "", "", "4", "6"), e.rows(), "two lines in at the cursor push the rest of the region down")
+        e.send("$ESC[3;1H$ESC[1M"); assertEquals(listOf("1", "", "", "4", "", "6"), e.rows())
+        e.send("$ESC[44m$ESC[99S"); assertEquals(listOf("1", "", "", "", "", "6"), e.rows(), "a count past the region clears the region and nothing else")
+        assertEquals(TermColor.indexed(4), e.grid().bg(1, 0), "the rows that come in take the current background")
+        assertEquals(TermColor.Default, e.grid().bg(0, 0)); assertEquals(TermColor.Default, e.grid().bg(5, 0))
+        e.send("$ESC[0m$ESC[2;1H$ESC[99T$ESC[2;1H$ESC[99L$ESC[2;1H$ESC[99M"); assertEquals(listOf("1", "", "", "", "", "6"), e.rows())
+    }
+
+    @Test fun aScrollKeepsWideCharactersWholeAndTheRowsInOrder() {
+        val e = engine(6, 4); e.send("日日\r\nab\r\n日c\r\nz$ESC[2S")
+        assertEquals(listOf("日c", "z", "", ""), e.rows())
+        assertTrue(e.grid().isWide(0, 0) && e.grid().isContinuation(0, 1))
+    }
+
     @Test fun eraseUsesTheCurrentBackground() {
         val e = engine(4, 2); e.send("$ESC[44m$ESC[2J"); assertEquals(TermColor.indexed(4), e.grid().bg(1, 3))
     }
@@ -187,6 +206,24 @@ class VtEngineTest {
 
     @Test fun aWideCharacterThatDoesNotFitWrapsToTheNextRow() {
         val e = engine(5, 3); e.send("abcd日"); assertEquals(listOf("abcd", "日", ""), e.rows())
+    }
+
+    @Test fun aWideCharacterInAOneColumnGridIsNotDrawnAndNothingElseMoves() {
+        for (rows in listOf(1, 3)) {
+            val e = engine(1, rows)
+            e.send("日"); e.send("a日b日")
+            // Only what fits is drawn, one cell a row: the glyph that does not fit changes nothing, not even the pending wrap.
+            assertEquals(if (rows == 1) listOf("b") else listOf("a", "b", ""), e.rows(), "$rows rows")
+            val g = e.grid()
+            for (r in 0 until rows) assertFalse(g.isWide(r, 0) || g.isContinuation(r, 0), "no half of a wide character anywhere (row $r)")
+            assertTrue(e.cursor.row in 0 until rows && e.cursor.col == 0)
+        }
+    }
+
+    @Test fun aWideCharacterAtTheBottomRightWrapsAndScrollsWithoutLeavingTheGrid() {
+        val e = engine(3, 2); e.send("abc\r\nab日"); assertEquals(listOf("ab", "日"), e.rows().map { it.trimEnd() }.let { listOf(it[0], it[1]) })
+        val g = e.grid(); assertTrue(g.isWide(1, 0) && g.isContinuation(1, 1))
+        val one = engine(3, 1); one.send("ab日"); assertEquals("日", one.row(0)); assertTrue(one.grid().isWide(0, 0))
     }
 
     @Test fun combiningMarksJoinThePreviousCell() {
@@ -307,6 +344,13 @@ class VtEngineTest {
         val e = engine(6, 1); e.send("abcd日"); e.resize(5, 1); assertEquals("abcd", e.row(0)); assertFalse(e.grid().isWide(0, 4))
     }
 
+    @Test fun resizingToOneColumnLeavesNoHalfOfAWideCharacter() {
+        val e = engine(6, 3); e.send("日日日\r\n a日\r\nabcdef"); e.resize(1, 3)
+        val g = e.grid()
+        for (r in 0 until 3) assertFalse(g.isWide(r, 0) || g.isContinuation(r, 0), "row $r")
+        e.send("日x"); assertEquals(1, e.grid().cols)
+    }
+
     @Test fun clearForgetsContentModesAndPen() {
         val e = engine(); e.send("junk$ESC[1;31m$ESC[?25l"); e.clear(); assertEquals("", e.row(0)); assertEquals(Cursor(0, 0, true), e.cursor)
         e.send("X"); assertEquals(Triple(TermColor.Default, TermColor.Default, 0), style(e))
@@ -319,6 +363,37 @@ class VtEngineTest {
     @Test fun badGeometryIsRefused() {
         val e = engine(); for ((c, r) in listOf(0 to 5, 5 to 0, 1001 to 5)) { try { e.resize(c, r); error("accepted $c x $r") } catch (_: IllegalArgumentException) { } }
         try { VtEngine(0, 0); error("accepted 0x0") } catch (_: IllegalArgumentException) { }
+    }
+
+    // --- how much work a frame may ask for ---
+
+    @Test fun aFewBytesThatEachMoveAWholeScreenAreRefusedOnceTheFramesBudgetIsSpent() {
+        val amplifiers = mapOf(
+            "scroll up" to "$ESC[500S", "scroll down" to "$ESC[500T", "insert lines" to "$ESC[1;1H$ESC[500L", "delete lines" to "$ESC[1;1H$ESC[500M",
+            "erase display" to "$ESC[2J", "full reset" to "${ESC}c", "alternate screen" to "$ESC[?1049h$ESC[?1049l",
+            "insert characters" to "$ESC[1000@", "delete characters" to "$ESC[1;1H$ESC[1000P",
+        )
+        for ((what, unit) in amplifiers) {
+            val e = VtEngine(500, 500)
+            val frame = unit.repeat(1 + (TerminalLimits.FEED_WORK_CELLS / 250).toInt()).toByteArray()
+            assertTrue(frame.size <= TerminalLimits.FRAME_BYTES * 8L, "$what: the probe is a plausible size")
+            assertFailsWith<TerminalProtocolError.WorkLimit>(what) { e.feed(frame) }
+            // The engine is still a working engine afterwards: the caller clears it and the next frame is read as usual.
+            e.clear(); e.feed("${ESC}[1;1Hok".toByteArray()); assertEquals("ok", e.row(0), what)
+        }
+    }
+
+    @Test fun theBudgetIsPerFrameAndEveryRealFrameFitsInIt() {
+        val e = VtEngine(500, 500)
+        // A full repaint of the largest grid: clear, then every row written out with its line break.
+        val repaint = StringBuilder("$ESC[2J$ESC[1;1H")
+        repeat(500) { r -> repaint.append("x".repeat(500)); if (r < 499) repaint.append("\r\n") }
+        e.feed(repaint.toString().toByteArray())
+        // The frames after it start with a fresh budget, so a long session of ordinary frames never runs out of it.
+        repeat(2_000) { e.feed("$ESC[1;1H$ESC[2Kline".toByteArray()) }
+        // A screenful of line feeds at the bottom of a phone-sized grid, a thousand times over in one frame.
+        val phone = VtEngine(80, 50); phone.send("$ESC[50;1H"); phone.feed("\n".repeat(1_000).toByteArray())
+        assertEquals("", phone.row(49))
     }
 
     // --- robustness ---

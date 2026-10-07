@@ -80,11 +80,10 @@ fun SoftKeyboardInput(
         InputTransformation {
             val keys = SoftInput.keys(asCharSequence().toString())
             revertAllChanges()
-            for (k in keys) {
-                val e = SoftInput.encode(k, armedNow[0])
-                e.bytes?.let(send)
-                if (e.spent) { armedNow[0] = Mods.None; spent() }
-            }
+            // One edit is one send, however long a paste is: the terminal queues and writes it as a unit, and a release stops it as a unit.
+            val burst = SoftInput.encodeAll(keys, armedNow[0])
+            burst.bytes?.let(send)
+            if (burst.spent) { armedNow[0] = Mods.None; spent() }
         }
     }
     BasicTextField(

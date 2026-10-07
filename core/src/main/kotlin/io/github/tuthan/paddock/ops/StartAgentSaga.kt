@@ -164,8 +164,14 @@ object SagaRules {
  * Nothing is ever replayed. A failure leaves the ids it created in the record and a recovery card offering to open the pane, to
  * close what was created (each a confirmed operation of its own) or to leave it. The only second attempt is the user's, with a new
  * name, after herdr said the name was taken: the place is still there and was verified again first.
+ *
+ * One instance is bound to one host and one herdr session, for good: [host] talks to that session and no other, so every record it acts on must
+ * name the same pair ([owns]). The records of every host and session share one file; a record of another pair is shown to nobody and acted on by
+ * nothing here, since its ids (workspace, tab and pane ids are small numbers per session) would name something else, or nothing, in this one.
  */
 class StartAgentSaga(
+    private val hostId: HostProfileId,
+    private val sessionName: String,
     private val host: SagaHost,
     private val prompter: SagaPrompter?,
     private val journal: OperationJournal,
@@ -188,12 +194,16 @@ class StartAgentSaga(
 
     fun get(id: String): SagaRecord? = _sagas.value.firstOrNull { it.id == id }
 
+    /** Whether [rec] was made by a saga on this instance's host and herdr session: the only records its recovery operations touch. */
+    fun owns(rec: SagaRecord): Boolean = rec.host == hostId.value && rec.session == sessionName
+
     /**
      * What was asked for [id], to start again from the card (with trust, or past the availability check): from memory while the app has run
      * it, rebuilt from the record after a restart, when the first prompt's text is gone with the process.
      */
-    fun requestOf(id: String): SagaRequest? = synchronized(lock) { requests[id] } ?: get(id)?.let {
-        SagaRequest(HostProfileId(it.host), it.session, it.agentName, it.kind, it.workspaceId, it.branch, repository = it.repository, folder = it.folder)
+    fun requestOf(id: String): SagaRequest? {
+        val rec = get(id)?.takeIf(::owns) ?: return null
+        return synchronized(lock) { requests[id] } ?: SagaRequest(HostProfileId(rec.host), rec.session, rec.agentName, rec.kind, rec.workspaceId, rec.branch, repository = rec.repository, folder = rec.folder)
     }
 
     private fun recovered(rows: List<SagaRecord>): List<SagaRecord> = rows.map {
@@ -204,6 +214,8 @@ class StartAgentSaga(
     // ---- the saga ------------------------------------------------------------------------------------------------------
 
     suspend fun run(req: SagaRequest): SagaRecord {
+        // The transport is this instance's session; a request that names another would be created here and recorded there.
+        require(req.host == hostId && req.session == sessionName) { "That request is for another machine or session than the one this phone is watching." }
         SagaRules.problem(req)?.let { throw IllegalArgumentException(it) }
         val now = clock.nowMillis()
         val id = synchronized(lock) { "s$now-${++counter}" }
@@ -242,6 +254,7 @@ class StartAgentSaga(
      */
     suspend fun retryWithName(sagaId: String, newName: String): SagaRecord {
         val rec = get(sagaId) ?: throw NoSuchElementException("no saga $sagaId")
+        require(owns(rec)) { "That start belongs to another machine or session than the one this phone is watching." }
         require(rec.state == SagaState.Failed && rec.failure == SagaFailure.NAME_TAKEN && !rec.recovered) { "only a refused name can be retried" }
         SagaRules.nameProblem(newName)?.let { throw IllegalArgumentException(it) }
         val req = synchronized(lock) { requests[sagaId] } ?: SagaRequest(HostProfileId(rec.host), rec.session, newName, rec.kind, rec.workspaceId, rec.branch)
@@ -370,7 +383,7 @@ class StartAgentSaga(
 
     /** What "close what was created" would close for [rec], by its own words and its own ids; null when nothing is left to close. */
     fun closeTarget(rec: SagaRecord): CloseTarget? = when {
-        rec.recovered -> null
+        rec.recovered || !owns(rec) -> null
         rec.createdWorkspaceId != null && rec.branch != null -> CloseTarget.Workspace(rec.createdWorkspaceId)
         rec.createdTabId != null -> CloseTarget.Tab(rec.createdTabId)
         rec.createdPaneId != null -> CloseTarget.Pane(rec.createdPaneId)
@@ -381,29 +394,59 @@ class StartAgentSaga(
      * One confirmed close of what the saga created, as a journaled operation on that workspace, tab or pane. It never removes the
      * worktree checkout or the branch: those stay on the host and the card says so. A close herdr says no longer has a target
      * (`*_not_found`) counts as done, since the aim was that it be gone.
+     *
+     * Two checks come before anything is sent. The record must be this instance's ([owns]): another session's ids are not this session's, and the answer is
+     * [OperationResult.Stale], nothing sent, nothing recorded as done. And the pane the saga created is read again ([stillOurs]): ids are not identities, and a
+     * close of a tab that now holds something else would close someone's work.
      */
     suspend fun closeCreated(sagaId: String): OperationResult<Unit> {
         val rec = get(sagaId) ?: throw NoSuchElementException("no saga $sagaId")
+        if (!owns(rec)) return OperationResult.Stale(TerminalKey(TargetRef(HostProfileId(rec.host), rec.session, Subject.saga(rec.id)), epoch()))
         val target = closeTarget(rec) ?: throw IllegalStateException("nothing left to close")
         val (kind, subject) = when (target) {
             is CloseTarget.Workspace -> OperationKind.CloseWorkspace to Subject.workspace(target.id)
             is CloseTarget.Tab -> OperationKind.CloseTab to Subject.tab(target.id)
             is CloseTarget.Pane -> OperationKind.ClosePane to Subject.pane(target.id)
         }
-        val result = Operation.run(journal, TerminalKey(TargetRef(HostProfileId(rec.host), rec.session, subject), epoch()), kind,
+        val result = Operation.run(journal, TerminalKey(TargetRef(hostId, sessionName, subject), epoch()), kind,
             resolveTarget = { target.id },
+            preflight = { stillOurs(rec, target) },
             send = { id, before -> when (target) { is CloseTarget.Workspace -> host.closeWorkspace(id, before); is CloseTarget.Tab -> host.closeTab(id, before); is CloseTarget.Pane -> host.closePane(id, before) } })
         val gone = result is OperationResult.Acknowledged || (result is OperationResult.Rejected && result.code.endsWith("_not_found"))
         if (gone) write(rec.copy(recovered = true, message = if (result is OperationResult.Acknowledged) "Closed." else "Already gone."))
         return result
     }
 
-    /** The user chose to leave what a failed saga created. The card goes away; the ids stay in this record and in Activity. */
-    fun leave(sagaId: String) { get(sagaId)?.let { write(it.copy(recovered = true, message = "Left as it is.")) } }
+    /**
+     * Read just before a close: the saga's pane must still hold the terminal the saga created, in the tab and workspace it recorded. A pane id is not an identity
+     * (the saga's own verify step says the same), and herdr lets a pane be moved to another tab. A pane that is gone is fine to close when the pane is the target
+     * (herdr answers not-found, which is done); for a tab or workspace it means what is left there is not what the saga made, so nothing is closed. A read that
+     * fails stops the close as well (a [Preflight] that throws is a not-sent operation with the reason).
+     */
+    private suspend fun stillOurs(rec: SagaRecord, target: CloseTarget): Preflight {
+        val pane = rec.createdPaneId ?: return Preflight.Go()
+        val f = host.inspectPane(pane)
+        val what = when (target) { is CloseTarget.Workspace -> "workspace"; is CloseTarget.Tab -> "tab"; is CloseTarget.Pane -> "pane" }
+        return when {
+            !f.exists ->
+                if (target is CloseTarget.Pane) Preflight.Go()
+                else Preflight.Refuse(CloseRefusal.PANE_GONE, "The pane this start created is gone, so the $what ${target.id} may now hold other work. Nothing was closed.")
+            f.terminalId != null && rec.createdTerminalId != null && f.terminalId != rec.createdTerminalId ->
+                Preflight.Refuse(CloseRefusal.PANE_CHANGED, "The pane $pane now holds another terminal, so the $what ${target.id} is not what this start created. Nothing was closed.")
+            target is CloseTarget.Tab && f.tabId != null && f.tabId != target.id ->
+                Preflight.Refuse(CloseRefusal.PANE_MOVED, "The pane $pane was moved to tab ${f.tabId}, so the tab ${target.id} may now hold other work. Nothing was closed.")
+            target is CloseTarget.Workspace && f.workspaceId != null && f.workspaceId != target.id ->
+                Preflight.Refuse(CloseRefusal.PANE_MOVED, "The pane $pane was moved to workspace ${f.workspaceId}, so the workspace ${target.id} may now hold other work. Nothing was closed.")
+            else -> Preflight.Go()
+        }
+    }
+
+    /** The user chose to leave what a failed saga created. The card goes away; the ids stay in this record and in Activity. Another session's record is not this instance's to touch. */
+    fun leave(sagaId: String) { get(sagaId)?.takeIf(::owns)?.let { write(it.copy(recovered = true, message = "Left as it is.")) } }
 
     // ---- bookkeeping -----------------------------------------------------------------------------------------------------
 
-    private fun key(sagaId: String) = TerminalKey(TargetRef(HostProfileId(get(sagaId)!!.host), get(sagaId)!!.session, Subject.saga(sagaId)), epoch())
+    private fun key(sagaId: String) = TerminalKey(TargetRef(hostId, sessionName, Subject.saga(sagaId)), epoch())
 
     /** Records [rec] and makes it durable; throws an [java.io.IOException] when it cannot be. */
     private fun write(rec: SagaRecord, add: Boolean = false): SagaRecord {
@@ -438,6 +481,13 @@ class StartAgentSaga(
     private inline fun Step.next(stop: (SagaRecord) -> Nothing): SagaRecord = when (this) { is Step.Next -> rec; is Step.Stop -> stop(rec) }
 
     private fun reason(e: Throwable) = (e.message ?: e.javaClass.simpleName).lineSequence().first().take(120)
+}
+
+/** Why a close of what a saga created was not sent, as the journal keeps it ([OperationRecord.code]); the presenter has a sentence for each. */
+object CloseRefusal {
+    const val PANE_GONE = "saga_pane_gone"
+    const val PANE_CHANGED = "saga_pane_changed"
+    const val PANE_MOVED = "saga_pane_moved"
 }
 
 sealed interface CloseTarget {

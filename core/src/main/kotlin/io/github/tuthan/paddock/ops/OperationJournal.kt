@@ -252,8 +252,10 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
     private fun find(id: Long) = data.records.firstOrNull { it.id == id } ?: throw NoSuchElementException("no operation $id")
     private fun replace(next: OperationRecord) = data.copy(records = data.records.map { if (it.id == next.id) next else it })
 
-    private fun commit(next: JournalData, mustPersist: Boolean) {
+    private fun commit(state: JournalData, mustPersist: Boolean) {
         check(_unreadable.value == null) { "the saved journal is unreadable; nothing may be written over it" }
+        // Retention is a property of what is kept, not of the next load: a process that stays up for weeks must not grow past the cap, and an old kept prompt must not outlive its age.
+        val next = pruned(state)
         if (mustPersist) { try { store.save(next) } catch (e: IOException) { throw JournalWriteFailed(e) } }
         else persistQuietly(next)
         data = next
@@ -272,10 +274,10 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
         }
     })
 
-    /** Rows older than 30 days or beyond 5,000 go, oldest first; an unknown row, resolved or not, is never dropped. */
+    /** Rows older than 30 days or beyond 5,000 go, oldest first; an unknown row, resolved or not, and a row still in flight are never dropped. */
     private fun pruned(d: JournalData): JournalData {
         val now = clock.nowMillis()
-        val keepers = d.records.filter { it.outcome == OperationOutcome.Unknown }.map { it.id }.toSet()
+        val keepers = d.records.filter { it.outcome == OperationOutcome.Unknown || it.inFlight }.map { it.id }.toSet()
         val fresh = d.records.filter { it.id in keepers || now - it.requestedAt <= MAX_AGE_MILLIS }
         val removable = fresh.count { it.id !in keepers } - MAX_ROWS
         if (removable <= 0) return d.copy(records = fresh)

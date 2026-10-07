@@ -148,7 +148,7 @@ class AnswerHost(
 
 /**
  * The text the user pastes on the host, shown in full before it can be copied: the hook's configuration (written only if none exists, so
- * nothing the user set is overwritten) and, per agent, how to register the hook. Paddock edits no agent's settings.
+ * nothing the user set is overwritten, and in the folder the hook reads: `$XDG_CONFIG_HOME/paddock`, else `~/.config/paddock`) and, per agent, how to register the hook. Paddock edits no agent's settings.
  */
 object AnswerSetupText {
     const val MAX_WINDOW_SECONDS = 300
@@ -163,10 +163,13 @@ object AnswerSetupText {
         require(windowSeconds in 1..MAX_WINDOW_SECONDS) { "the window is 1 to $MAX_WINDOW_SECONDS seconds" }
         require(codexWindowSeconds in 0..MAX_WINDOW_SECONDS) { "Codex's window is 0 to $MAX_WINDOW_SECONDS seconds" }
         return buildString {
-            appendLine("# Paddock: how long a phone has to answer an agent's permission prompt (0 turns it off). Codex has a shorter window of its own.")
-            appendLine("mkdir -p ~/.config/paddock")
-            appendLine("[ -e ~/.config/paddock/hook.toml ] || printf 'window_seconds = $windowSeconds\\ncodex_window_seconds = $codexWindowSeconds\\n' > ~/.config/paddock/hook.toml")
-            append("chmod 600 ~/.config/paddock/hook.toml")
+            appendLine("# Paddock: how long a phone has to answer a permission prompt from an agent (0 turns it off). Codex has a shorter window of its own.")
+            // The folder the hook reads (`config_path()` in paddock-claude-permission-hook.py): $XDG_CONFIG_HOME when it is set and not empty, else ~/.config.
+            // Run by `sh`, so the same words work from bash, zsh or fish, whatever the user's login shell is.
+            appendLine("sh -c 'd=\"\${XDG_CONFIG_HOME:-\$HOME/.config}/paddock\"")
+            appendLine("mkdir -p \"\$d\"")
+            appendLine("[ -e \"\$d/hook.toml\" ] || printf \"window_seconds = $windowSeconds\\ncodex_window_seconds = $codexWindowSeconds\\n\" > \"\$d/hook.toml\"")
+            append("chmod 600 \"\$d/hook.toml\"'")
         }
     }
 

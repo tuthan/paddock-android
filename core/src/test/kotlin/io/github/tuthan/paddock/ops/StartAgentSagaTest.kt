@@ -19,6 +19,7 @@ private fun facts(terminal: String, revision: Long, cwd: String, hasAgent: Boole
 
 /** The start-agent saga with a failure injected at every step: what is created, what is persisted, what is never repeated. */
 class StartAgentSagaTest {
+    private companion object { const val SESSION = "paddock-test-2" }
     private var now = 8_000_000L
     private val journal = OperationJournal(InMemoryJournalStore()) { now }
     private val store = InMemorySagaStore()
@@ -51,11 +52,11 @@ class StartAgentSagaTest {
 
     private val host = Host()
     private var prompter: SagaPrompter? = null
-    private fun saga(sagaStore: SagaStore = store, window: Long = 10_000) =
-        StartAgentSaga(host, prompter, journal, sagaStore, { now }, verifyWindowMillis = window, pollMillis = 500, pause = { now += it })
+    private fun saga(sagaStore: SagaStore = store, window: Long = 10_000, on: HostProfileId = h, session: String = SESSION) =
+        StartAgentSaga(on, session, host, prompter, journal, sagaStore, { now }, verifyWindowMillis = window, pollMillis = 500, pause = { now += it })
 
     private fun req(branch: String? = null, name: String = "worker", kind: String = "claude", prompt: String? = null, skip: Boolean = false, trust: Boolean = false, folder: String? = null) =
-        SagaRequest(h, "paddock-test-2", name, kind, "w1", branch, trust, prompt, skip, repository = "repo", folder = folder)
+        SagaRequest(h, SESSION, name, kind, "w1", branch, trust, prompt, skip, repository = "repo", folder = folder)
 
     private fun rows(kind: OperationKind) = journal.records.value.filter { it.kind == kind }
 
@@ -194,16 +195,65 @@ class StartAgentSagaTest {
         assertTrue(card.lines.any { "Nothing was created" in it })
     }
 
-    /** The app showed no card at all for a start that stopped before creating anything, so "not installed" and "no such folder" were silent. */
-    @Test fun aStartThatCreatedNothingShowsACardOnlyForTheAttemptJustMade() = runBlocking<Unit> {
+    /**
+     * The route shows `mine.filter { it.showsCard(now) }`. A start that stopped before creating anything (an executable that is not there) was silent once and
+     * then shown only to the attempt made "just now", which a tab switch forgot: its card must not depend on how the user got to the tab.
+     */
+    @Test fun aStartThatCreatedNothingKeepsItsCardForADayOrUntilItIsDismissed() = runBlocking<Unit> {
         host.available = { false }
         val rec = saga().run(req(kind = "maki"))
         assertFalse(rec.needsRecovery)
-        assertTrue(rec.showsCard(attemptSince = rec.startedAt))
-        assertFalse(rec.showsCard(attemptSince = null))
-        assertFalse(rec.showsCard(attemptSince = rec.updatedAt + 1), "an older failure stays in Activity")
+        assertTrue(rec.showsCard(now), "shown the moment it fails")
+        assertTrue(rec.showsCard(rec.updatedAt + 60 * 60 * 1000), "and on a later visit, whatever the screen remembers")
+        assertFalse(rec.showsCard(rec.updatedAt + SagaRecord.QUIET_AFTER_MILLIS + 1), "an old refusal is left to Activity")
         saga().leave(rec.id)
-        assertFalse(store.load().records.single().showsCard(attemptSince = rec.startedAt), "dismissed")
+        assertFalse(store.load().records.single().showsCard(now), "dismissed")
+    }
+
+    @Test fun everyWayAStartCanStopBeforeCreatingAnythingShowsACardWithItsWayOn() = runBlocking<Unit> {
+        // executable missing
+        host.available = { false }
+        val missing = saga().run(req(kind = "maki", name = "a"))
+        assertTrue(missing.showsCard(now)); assertTrue(SagaCard.of(missing).actions.contains(CardAction.StartAnyway))
+        host.available = { true }
+        // trust required
+        host.worktree = { throw HerdrError("worktree_create_failed", "repository is not trusted: dubious ownership") }
+        val trust = saga().run(req(branch = "feat", name = "b"))
+        assertTrue(trust.showsCard(now)); assertTrue(SagaCard.of(trust).actions.any { it is CardAction.TrustRepository })
+        // folder missing, and a host that could not be asked
+        host.folder = { null }
+        val folder = saga().run(req(folder = "/srv/nothing", name = "c"))
+        assertTrue(folder.showsCard(now)); assertEquals(SagaFailure.FOLDER_MISSING, folder.failure)
+        host.folder = { throw IOException("reset") }
+        val unreachable = saga().run(req(folder = "/srv/x", name = "d"))
+        assertTrue(unreachable.showsCard(now)); assertEquals(SagaFailure.HOST_UNREACHABLE, unreachable.failure)
+        // the same four, read back from disk by a new instance after a restart
+        val after = saga().sagas.value
+        assertEquals(4, after.count { it.showsCard(now) })
+    }
+
+    @Test fun aCreateWhoseAnswerWasLostKeepsItsCardAndSaysItDoesNotKnowWhetherAnythingExists() = runBlocking<Unit> {
+        host.tab = { throw IOException("connection reset") }
+        val rec = saga().run(req())
+        assertEquals(SagaFailure.PLACE_UNKNOWN, rec.failure)
+        assertFalse(rec.needsRecovery); assertTrue(rec.createUnknown)
+        val later = rec.updatedAt + SagaRecord.QUIET_AFTER_MILLIS * 10
+        assertTrue(rec.showsCard(later), "an unknown outcome is not quietly dropped with the refusals")
+        val card = SagaCard.of(rec)
+        assertTrue(card.lines.none { "Nothing was created" in it }, "it does not say nothing was created: ${card.lines}")
+        assertTrue(card.lines.any { "not known" in it }, "${card.lines}")
+        assertEquals(listOf(CardAction.Leave("Dismiss")), card.actions)
+        saga().leave(rec.id)
+        assertFalse(store.load().records.single().showsCard(later))
+    }
+
+    @Test fun aSagaThatWasCreatingWhenTheAppEndedIsUnknownToo() = runBlocking<Unit> {
+        val running = SagaRecord("s1", "h1", SESSION, "worker", "claude", "w1", null, null, SagaStep.Place, SagaState.Running, startedAt = 1, updatedAt = 2)
+        val rec = saga(InMemorySagaStore(SagaData(listOf(running)))).get("s1")!!
+        assertEquals(SagaFailure.APP_ENDED, rec.failure)
+        assertTrue(rec.createUnknown && rec.showsCard(Long.MAX_VALUE / 2))
+        val early = running.copy(id = "s2", step = SagaStep.Availability)
+        assertFalse(saga(InMemorySagaStore(SagaData(listOf(early)))).get("s2")!!.createUnknown, "before the create request there is nothing unknown")
     }
 
     @Test fun startAnywaySkipsOnlyTheAvailabilityCheck() = runBlocking<Unit> {
@@ -456,6 +506,120 @@ class StartAgentSagaTest {
         assertFalse(s.get(rec.id)!!.recovered)
         assertIs<OperationResult.NeedsReread>(s.closeCreated(rec.id))
         assertEquals(1, host.calls.count { it.startsWith("close") })
+    }
+
+    // ---- one saga instance, one host, one session ----------------------------------------------------------------------------
+
+    /** A failed saga with a tab and a pane, as another host or another session of the same machine left it in the shared file. */
+    private fun foreign(id: String, on: String = "h1", session: String = "paddock-other", failure: String = SagaFailure.PANE_NOT_READY) =
+        SagaRecord(id, on, session, "worker", "claude", "w1", null, null, SagaStep.Verify, SagaState.Failed, failure = failure, message = "x",
+            createdTabId = "w1:t7", createdPaneId = "w1:p7", createdTerminalId = "term_tab", startedAt = 1, updatedAt = now)
+
+    @Test fun aRecordOfAnotherSessionOrAnotherMachineIsNotOwnedAndNothingIsDoneForIt() = runBlocking<Unit> {
+        val otherSession = foreign("sa"); val otherHost = foreign("sb", on = "h2", session = SESSION)
+        val s = saga(InMemorySagaStore(SagaData(listOf(otherSession, otherHost, foreign("sc", session = SESSION)))))
+        assertFalse(s.owns(otherSession)); assertFalse(s.owns(otherHost)); assertTrue(s.owns(s.get("sc")!!))
+        for (rec in listOf(otherSession, otherHost)) {
+            assertNull(s.closeTarget(rec), "nothing is offered to close for another session's ids")
+            val r = s.closeCreated(rec.id)
+            assertIs<OperationResult.Stale>(r)
+            s.leave(rec.id)
+            assertFalse(s.get(rec.id)!!.recovered, "it was not dismissed, and not marked as dealt with")
+            assertNull(s.requestOf(rec.id))
+        }
+        assertTrue(host.calls.isEmpty(), "no call reached this session's host: ${host.calls}")
+        assertTrue(journal.records.value.isEmpty(), "and no operation was recorded against either")
+    }
+
+    @Test fun aNameRetryOfAnotherSessionsSagaIsRefused() = runBlocking<Unit> {
+        val taken = foreign("sa", failure = SagaFailure.NAME_TAKEN)
+        val s = saga(InMemorySagaStore(SagaData(listOf(taken))))
+        assertFailsWith<IllegalArgumentException> { s.retryWithName("sa", "fresh") }
+        assertTrue(host.calls.isEmpty())
+    }
+
+    @Test fun aRequestForAnotherSessionOrMachineIsRefusedBeforeAnythingIsCreated() = runBlocking<Unit> {
+        val s = saga()
+        assertFailsWith<IllegalArgumentException> { s.run(req().copy(session = "paddock-other")) }
+        assertFailsWith<IllegalArgumentException> { s.run(req().copy(host = HostProfileId("h2"))) }
+        assertTrue(host.calls.isEmpty()); assertTrue(store.load().records.isEmpty()); assertTrue(journal.records.value.isEmpty())
+    }
+
+    /** The finding: the same small ids in two sessions. Closing in B must never be answered by A's card, nor the other way round. */
+    @Test fun twoSessionsWithTheSameIdsEachCloseOnlyTheirOwnAndTheJournalNamesTheSessionItActedIn() = runBlocking<Unit> {
+        host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        // One instance at a time, as in the app (a profile that changes its session gets a new instance, which reads what the file already holds).
+        val inA = saga(session = "paddock-a", window = 1_000).run(req().copy(session = "paddock-a"))
+        val b = saga(session = "paddock-b", window = 1_000)
+        val inB = b.run(req(name = "other").copy(session = "paddock-b"))
+        assertEquals(inA.createdTabId, inB.createdTabId, "the fake gives both the same tab id, as two real sessions can")
+        assertEquals(CloseTarget.Tab("w1:t7"), b.closeTarget(inB)); assertNull(b.closeTarget(inA))
+        assertIs<OperationResult.Stale>(b.closeCreated(inA.id))
+        assertTrue(host.calls.none { it.startsWith("close") })
+        assertIs<OperationResult.Acknowledged<*>>(b.closeCreated(inB.id))
+        assertTrue(b.get(inB.id)!!.recovered); assertFalse(b.get(inA.id)!!.recovered, "A's card is still A's")
+        assertEquals(listOf("paddock-b"), journal.records.value.filter { it.kind == OperationKind.CloseTab }.map { it.session })
+    }
+
+    // ---- a close checks that what it closes is still what the saga made ---------------------------------------------------------
+
+    private fun failedWithPane(workspace: Boolean = false): SagaRecord = runBlocking {
+        if (workspace) host.pane = { facts("term_wt", 0, "/wt/feat", atShellPrompt = false) } else host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        val s = saga(window = 1_000)
+        s.run(req(branch = if (workspace) "feat" else null)).also { assertTrue(it.needsRecovery) }
+    }
+
+    private fun assertRefused(r: OperationResult<Unit>, code: String) {
+        assertIs<OperationResult.NotSent>(r); assertEquals(code, r.reason)
+        assertTrue(host.calls.none { it.startsWith("close") }, "nothing was closed: ${host.calls}")
+        assertEquals(OperationOutcome.NotSent, journal.records.value.last().outcome); assertEquals(code, journal.records.value.last().code)
+    }
+
+    @Test fun aPaneThatNowHoldsAnotherTerminalIsNotClosedAndTheCardStays() = runBlocking<Unit> {
+        val rec = failedWithPane()
+        host.pane = { facts("term_someone_elses", 4, "/work", tab = "w1:t7", ws = "w1") }
+        val s = saga()
+        assertRefused(s.closeCreated(rec.id), CloseRefusal.PANE_CHANGED)
+        assertFalse(s.get(rec.id)!!.recovered, "nothing was dealt with")
+        assertTrue("another terminal" in OperationPresenter().line(OperationKind.CloseTab, s.closeCreated(rec.id)).text)
+    }
+
+    @Test fun aPaneMovedToAnotherTabLeavesTheTabAndTheWorkspaceAlone() = runBlocking<Unit> {
+        val rec = failedWithPane()
+        host.pane = { facts("term_tab", 1, "/work", tab = "w1:t9", ws = "w1") }
+        assertRefused(saga().closeCreated(rec.id), CloseRefusal.PANE_MOVED)
+        val wt = failedWithPane(workspace = true)
+        host.pane = { facts("term_wt", 1, "/wt/feat", tab = "w9:t1", ws = "w3") }
+        assertRefused(saga().closeCreated(wt.id), CloseRefusal.PANE_MOVED)
+    }
+
+    @Test fun aPaneThatIsGoneStopsTheCloseOfItsTabButNotTheCloseOfThePaneItself() = runBlocking<Unit> {
+        val rec = failedWithPane()
+        host.pane = { PaneFacts(exists = false) }
+        val s = saga()
+        assertRefused(s.closeCreated(rec.id), CloseRefusal.PANE_GONE)
+        assertTrue("may now hold other work" in OperationPresenter().line(OperationKind.CloseTab, s.closeCreated(rec.id)).text)
+        // A saga whose record holds only the pane (the pane was moved while it was checked) closes the pane: herdr says not found, which is done.
+        val onlyPane = foreign("sp", session = SESSION).copy(createdTabId = null)
+        val p = saga(InMemorySagaStore(SagaData(listOf(onlyPane))))
+        host.close = { throw HerdrError("pane_not_found", "no such pane") }
+        assertIs<OperationResult.Rejected>(p.closeCreated("sp"))
+        assertEquals(listOf("closePane w1:p7"), host.calls.filter { it.startsWith("close") })
+        assertTrue(p.get("sp")!!.recovered)
+    }
+
+    @Test fun aPaneThatCannotBeReadJustBeforeTheCloseStopsTheCloseAndSaysSo() = runBlocking<Unit> {
+        val rec = failedWithPane()
+        host.pane = { throw IOException("reset") }
+        val r = saga().closeCreated(rec.id)
+        assertRefused(r, "preflight_failed")
+    }
+
+    @Test fun aPaneThatIsStillTheSagasOwnIsClosedAsBefore() = runBlocking<Unit> {
+        val rec = failedWithPane()
+        host.pane = { facts("term_tab", 7, "/work", tab = "w1:t7", ws = "w1", atShellPrompt = true) }
+        assertIs<OperationResult.Acknowledged<*>>(saga().closeCreated(rec.id))
+        assertEquals(listOf("closeTab w1:t7"), host.calls.filter { it.startsWith("close") })
     }
 
     @Test fun leavingItDismissesTheCardButKeepsTheIds() = runBlocking<Unit> {

@@ -991,12 +991,13 @@ private fun SpacesRoute(graph: AppGraph, onNotice: (String) -> Unit, onOpenAgent
     // The list is read when the tab opens and whenever the connection to the machine changes; every operation reads it again after itself.
     LaunchedEffect(spaces) { spaces?.refresh() }
 
-    val mine = sagas.filter { it.host == profile?.hostId?.value }
+    // Host and session both: the saga file holds every machine's and every session's attempts, and its ids mean something only in the session they came from.
+    val mine = sagas.filter { saga?.owns(it) == true }
     // updatedAt, not startedAt: a retry under a new name runs in the saga that began earlier.
     val progress = progressSince?.let { since -> mine.filter { it.updatedAt >= since && it.state != SagaState.Failed }.maxByOrNull { it.updatedAt } }?.let {
         SagaProgress(it.id, it.agentName, it.kind, it.step.label, done = it.state == SagaState.Succeeded, terminalId = it.terminalId, note = it.promptNote)
     }
-    val cards = mine.filter { it.showsCard(progressSince) }.map { SagaCard.of(it, name) }
+    val cards = mine.filter { it.showsCard(now) }.map { SagaCard.of(it, name) }
     val start = when {
         saga == null || host == null -> StartAvailability.Unavailable("Starting an agent needs this phone to be watching a live session on $name.")
         else -> StartAvailability.Available(

@@ -9,6 +9,7 @@ import io.github.tuthan.paddock.ports.TerminalEngine
 import io.github.tuthan.paddock.relay.RelayInstaller
 import io.github.tuthan.paddock.relay.RelayState
 import io.github.tuthan.paddock.relay.lines
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -151,8 +152,15 @@ class TerminalSession(
     private val _view = MutableStateFlow(TerminalView())
     val view: StateFlow<TerminalView> = _view.asStateFlow()
 
-    /** Set by the actor, read by [send] on the caller's thread. */
+    /** Set by the actor, read by [send] on the caller's thread. [release], [suspend] and [close] clear it at once, on the caller's thread. */
     @Volatile private var controlling = false
+
+    /**
+     * Counts the times input was revoked ([release], [suspend], [close]). Every [Cmd.Input] carries the number it was sent under and is written only if that is still
+     * the current one, so whatever is queued, or still being written in chunks, when the user releases or leaves stops there, however long the queue was and
+     * whatever stands in front of the lifecycle command in it.
+     */
+    private val inputGen = AtomicInteger()
 
     private sealed interface Cmd {
         data class Open(val cols: Int, val rows: Int) : Cmd
@@ -160,7 +168,8 @@ class TerminalSession(
         data class Control(val takeover: Boolean) : Cmd
         data object InstallThenControl : Cmd
         data object Release : Cmd
-        class Input(val bytes: ByteArray) : Cmd
+        /** [gen] is [inputGen] when the screen sent it; an input from before a release or a suspend is not written. */
+        class Input(val bytes: ByteArray, val gen: Int) : Cmd
         data class Resize(val cols: Int, val rows: Int) : Cmd
         data object Suspend : Cmd
         data object DismissNotice : Cmd
@@ -243,17 +252,24 @@ class TerminalSession(
     /** The user agreed to install the helper shown in [TerminalNotice.HelperNeeded]; control is requested once it is there. */
     fun installHelper() { commands.trySend(Cmd.InstallThenControl) }
 
-    fun release() { commands.trySend(Cmd.Release) }
+    /** Stops input at once: what is queued and not yet written is dropped (a paste that was still draining stops), then the release goes to the host. */
+    fun release() { revokeInput(); commands.trySend(Cmd.Release) }
 
     /** The user closed the notice (or it timed out on the screen). Changes nothing else: a refused request stays refused. */
     fun dismissNotice() { commands.trySend(Cmd.DismissNotice) }
 
-    /** Sends [bytes] to the terminal as input. Returns false, sending nothing, unless this phone is controlling. */
+    /**
+     * Sends [bytes] to the terminal as input, in order and in one piece: a paste is one call, not one per character. Returns false, sending nothing, unless this
+     * phone is controlling. A true is "queued": a [release] or [suspend] that follows drops it if it has not been written yet.
+     */
     fun send(bytes: ByteArray): Boolean {
+        val gen = inputGen.get()   // read before the check: a revoke in between makes this input stale, never live
         if (!controlling || bytes.isEmpty()) return false
-        commands.trySend(Cmd.Input(bytes))
+        commands.trySend(Cmd.Input(bytes, gen))
         return true
     }
+
+    private fun revokeInput() { controlling = false; inputGen.incrementAndGet() }
 
     /** Changes the terminal's size to [cols] x [rows], for every client including the desktop. The screen warns first. */
     fun resizeToFit(cols: Int, rows: Int): Boolean {
@@ -263,14 +279,14 @@ class TerminalSession(
     }
 
     /** The app left the foreground: control is released, the channel closed and the screen forgotten. */
-    fun suspend() { commands.trySend(Cmd.Suspend) }
+    fun suspend() { revokeInput(); commands.trySend(Cmd.Suspend) }
 
     /** The app is back: observing again, never control. */
     fun resume() { commands.trySend(Cmd.Resume) }
 
     /** Ends the session for good: releases control, closes the channel, clears the engine and the grid. */
     fun close() {
-        controlling = false
+        revokeInput()
         linkWatch.cancel()
         commands.close()
         actor.cancel()
@@ -288,7 +304,7 @@ class TerminalSession(
                 is Cmd.Control -> requestControl(cmd.takeover)
                 Cmd.InstallThenControl -> installThenControl()
                 Cmd.Release -> release0()
-                is Cmd.Input -> input(cmd.bytes)
+                is Cmd.Input -> input(cmd.bytes, cmd.gen)
                 is Cmd.Resize -> if (kind == Kind.Control && established) write(ControlEncoder.resize(cmd.cols, cmd.rows))
                 Cmd.Suspend -> suspend0()
                 Cmd.DismissNotice -> notice(null)
@@ -353,10 +369,11 @@ class TerminalSession(
         }
     }
 
-    private suspend fun input(bytes: ByteArray) {
+    private suspend fun input(bytes: ByteArray, gen: Int) {
         if (kind != Kind.Control || !established || releasing) return
         var at = 0
-        while (at < bytes.size) {
+        // Checked before every chunk: a release or a suspend that arrives while a large paste is going out ends it after the chunk in flight.
+        while (at < bytes.size && gen == inputGen.get()) {
             val n = minOf(TerminalLimits.INPUT_BYTES, bytes.size - at)
             write(ControlEncoder.input(bytes.copyOfRange(at, at + n)))
             at += n
@@ -459,14 +476,17 @@ class TerminalSession(
         }
     }
 
-    private suspend fun protocolFailure(e: TerminalProtocolError) {
-        // Nothing of the record is shown. A stream that keeps producing them is given up on.
+    /**
+     * Nothing of the record is shown. A stream that keeps producing them is given up on. [applied] says the engine already took part of the frame (it ran past its
+     * work budget), so its screen is not to be trusted: a full frame replaces it, whichever kind of channel this is.
+     */
+    private suspend fun protocolFailure(e: TerminalProtocolError, applied: Boolean = false) {
         if (++protocolErrors > MAX_PROTOCOL_ERRORS) {
             if (kind == Kind.Control) backToObserving(TerminalNotice.ControlEnded("the control stream was unreadable"))
             else end(EndReason.Failed("the terminal stream is unreadable (${e.javaClass.simpleName})"))
             return
         }
-        if (kind == Kind.Observe) connect(Kind.Observe, probe = false)
+        if (applied) resync() else if (kind == Kind.Observe) connect(Kind.Observe, probe = false)
     }
 
     private suspend fun frame(f: TerminalRecord.Frame) {
@@ -481,7 +501,7 @@ class TerminalSession(
             if (engine.cols != f.width || engine.rows != f.height) engine.resize(f.width, f.height)
             engine.clear()
         } else if (engine.cols != f.width || engine.rows != f.height) return resync()
-        engine.feed(f.bytes)
+        try { engine.feed(f.bytes) } catch (e: TerminalProtocolError) { return protocolFailure(e, applied = true) }
         protocolErrors = 0
         val first = !established
         established = true

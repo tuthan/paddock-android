@@ -139,6 +139,9 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
             answer != null -> ResultLine("${answer.sentence} Nothing was sent.", ResultTone.Refused, opensTerminal = true)
             notReady != null -> ResultLine("${notReady.sentence} Nothing was sent.", ResultTone.Refused, opensTerminal = notReady == NotReadyReason.Blocked)
             r.reason == "pane_moved" -> ResultLine("This agent's pane now holds another terminal. Re-read, then try again. Nothing was sent.", ResultTone.Problem)
+            // A close of what a start created, stopped because the pane no longer is what the start created: the message names the ids; there is nothing to retry.
+            r.reason == CloseRefusal.PANE_GONE || r.reason == CloseRefusal.PANE_CHANGED || r.reason == CloseRefusal.PANE_MOVED ->
+                ResultLine("${r.message} Look at the herd, then leave this card.", ResultTone.Refused)
             r.reason == "preflight_failed" -> ResultLine("Could not read the agent just before sending, so nothing was sent. (${r.message})", ResultTone.Problem)
             r.reason == "transport_failed" -> ResultLine("Could not reach the machine, so nothing was sent. (${r.message})", ResultTone.Problem)
             r.reason == "journal_unwritable" -> ResultLine("Nothing was sent: the operation record could not be written on this phone.", ResultTone.Problem)
@@ -149,5 +152,5 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
 
     private fun reasonWords(code: String): String? =
         NotReadyReason.entries.firstOrNull { it.code == code }?.let { it.name.replace(Regex("(?<=[a-z])(?=[A-Z])"), " ").lowercase() }
-            ?: when (code) { "pane_moved" -> "pane moved"; "transport_failed" -> "host unreachable"; "preflight_failed" -> "agent not readable"; "app_restarted" -> "app ended first"; else -> null }
+            ?: when (code) { "pane_moved" -> "pane moved"; CloseRefusal.PANE_GONE -> "pane gone"; CloseRefusal.PANE_CHANGED -> "pane changed"; CloseRefusal.PANE_MOVED -> "pane moved"; "transport_failed" -> "host unreachable"; "preflight_failed" -> "agent not readable"; "app_restarted" -> "app ended first"; else -> null }
 }

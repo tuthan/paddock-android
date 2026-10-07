@@ -107,6 +107,7 @@ class MonitoredHost(
      * journal or a saga store.
      */
     val saga: io.github.tuthan.paddock.ops.StartAgentSaga? = if (journal != null && sagaStore != null) io.github.tuthan.paddock.ops.StartAgentSaga(
+        profile.hostId, sessionName,
         io.github.tuthan.paddock.ops.RelaySagaHost(relay, session, HerdrCli(herdr, sessionName)), { terminalId, text -> promptNewAgent(terminalId, text) }, journal, sagaStore, clock,
         epoch = { reconciler.installed.value?.epoch ?: 0L },
     ) else null

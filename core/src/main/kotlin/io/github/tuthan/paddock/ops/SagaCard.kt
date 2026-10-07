@@ -67,6 +67,7 @@ object SagaCard {
         val lines = buildList {
             add(rec.message)
             if (rec.createdSomething) add("Created on $hostName: ${ids.joinToString(" · ") { "${it.first.lowercase()} ${it.second}" }}.")
+            else if (rec.createUnknown) add("Whether anything was created on $hostName is not known, so no ids are shown. Look at the Spaces list before starting again.")
             else add("Nothing was created on $hostName.")
             if (rec.worktreePath != null) add("The worktree folder and its branch stay on the host even if the workspace is closed.")
             if (rec.failure == SagaFailure.NAME_TAKEN) add("Nothing in the new pane was changed; the agent is simply not started.")

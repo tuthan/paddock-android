@@ -112,4 +112,27 @@ class SoftInputTest {
     @Test fun aCodePointATerminalCannotTakeEncodesToNothing() {
         assertNull(SoftInput.encode(SoftKey.Char(0x7F), Mods.None).bytes)
     }
+
+    // ---- a whole edit as one write ----
+
+    @Test fun aPasteIsOneArrayInOrderNotOneSendPerCharacter() {
+        val text = "echo héllo\n😀"
+        val burst = SoftInput.encodeAll(SoftInput.keys(s + text), Mods.None)
+        assertContentEquals("echo héllo\r😀".toByteArray(), burst.bytes)
+        assertFalse(burst.spent)
+        val big = SoftInput.encodeAll(SoftInput.keys(s + "x".repeat(20_000)), Mods.None)
+        assertEquals(20_000, big.bytes!!.size)
+    }
+
+    @Test fun armedModifiersAreSpentOnTheFirstKeyOfTheEditOnly() {
+        val ctrl = Mods(ctrl = true)
+        val burst = SoftInput.encodeAll(chars('c'.code, 'c'.code), ctrl)
+        assertTrue(burst.spent)
+        assertContentEquals(byteArrayOf(0x03, 'c'.code.toByte()), burst.bytes, "Ctrl+C for the first key, a plain c for the second")
+    }
+
+    @Test fun anEditWithNoKeysIsNoBytesAndSpendsNothing() {
+        val burst = SoftInput.encodeAll(emptyList(), Mods(ctrl = true))
+        assertNull(burst.bytes); assertFalse(burst.spent)
+    }
 }

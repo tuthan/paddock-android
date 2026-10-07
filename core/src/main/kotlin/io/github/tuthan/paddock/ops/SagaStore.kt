@@ -60,12 +60,27 @@ data class SagaRecord(
     val createdSomething get() = createdWorkspaceId != null || createdTabId != null || createdPaneId != null
     val needsRecovery get() = state == SagaState.Failed && !recovered && createdSomething
 
+    /** A failed attempt nobody has dealt with yet (closed, left or dismissed): what a card is for, whether or not anything was created. */
+    val unresolved get() = state == SagaState.Failed && !recovered
+
     /**
-     * Whether the Spaces tab shows a card for it: it left something to deal with, or it is the attempt the user made just now ([attemptSince], the time
-     * they pressed Start) and stopped before creating anything (an executable or folder that is not there). The second kind has nothing to close, but it
-     * is the only place that says why nothing started, and where "Start anyway" is. Older ones of that kind stay quiet; they are in Activity.
+     * The create request left (or may have: the app ended while it was out) and no answer came back, so something may exist on the host that this phone has no
+     * id for. Not the same as nothing created: the card says it is not known, and it stays until the user has looked and dismissed it.
      */
-    fun showsCard(attemptSince: Long?) = needsRecovery || (state == SagaState.Failed && !recovered && attemptSince != null && updatedAt >= attemptSince)
+    val createUnknown get() = !createdSomething && (failure == SagaFailure.PLACE_UNKNOWN || (failure == SagaFailure.APP_ENDED && step == SagaStep.Place))
+
+    /**
+     * Whether the Spaces tab shows a card for it: every failed attempt that is not dealt with is, until the user dismisses it. One that left something
+     * ([createdSomething]) or whose create outcome is not known ([createUnknown]) stays as long as it takes. One that stopped before creating anything (an
+     * executable or a folder that is not there, a refusal herdr gave) is a certain "nothing happened": it has a card for [QUIET_AFTER_MILLIS] after it
+     * failed, long enough to be seen on the next visit and to use "Start anyway", and is then left to Activity, so a pile of old refusals does not sit on the
+     * tab. The screen does not decide this: it must not depend on how the user got to the tab, or a failure shown a second ago is gone after a tab switch.
+     */
+    fun showsCard(nowMillis: Long) = unresolved && (createdSomething || createUnknown || nowMillis - updatedAt <= QUIET_AFTER_MILLIS)
+
+    companion object {
+        const val QUIET_AFTER_MILLIS: Long = 24L * 60 * 60 * 1000
+    }
 }
 
 @Serializable

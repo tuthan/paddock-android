@@ -76,11 +76,28 @@ class VtEngine(cols: Int = 80, rows: Int = 24) : TerminalEngine {
     private var intermediates = StringBuilder()
     private var stringIsOsc = false
 
+    /**
+     * Throws [TerminalProtocolError.WorkLimit] when the bytes ask for more screen work than [TerminalLimits.FEED_WORK_CELLS] cells (scrolls,
+     * erases, inserts, resets: a few bytes can ask for a whole screen each), and the screen is then partly changed: the caller shows nothing of it and asks for a full frame.
+     */
     override fun feed(bytes: ByteArray, offset: Int, length: Int) {
         require(offset >= 0 && length >= 0 && offset + length <= bytes.size) { "range outside the array" }
-        for (i in offset until offset + length) step(bytes[i].toInt() and 0xFF)
-        // A frame is self-contained: whatever is still open at its end is dropped with it.
-        state = State.Ground; utf8Need = 0
+        work = 0
+        try {
+            for (i in offset until offset + length) step(bytes[i].toInt() and 0xFF)
+        } finally {
+            // A frame is self-contained: whatever is still open at its end is dropped with it.
+            state = State.Ground; utf8Need = 0
+        }
+    }
+
+    /** Cells touched by the work of this [feed] so far; see [spend]. */
+    private var work = 0L
+
+    /** Charges [cells] cells of screen work to the frame being fed. A sequence of a few bytes can cost a whole screen; the frame's byte cap alone does not bound that. */
+    private fun spend(cells: Int) {
+        work += cells
+        if (work > TerminalLimits.FEED_WORK_CELLS) throw TerminalProtocolError.WorkLimit(TerminalLimits.FEED_WORK_CELLS)
     }
 
     override fun resize(cols: Int, rows: Int) {
@@ -217,6 +234,7 @@ class VtEngine(cols: Int = 80, rows: Int = 24) : TerminalEngine {
     }
 
     private fun fullReset() {
+        spend(4 * cols * rows)   // two fresh screens
         val c = cols; val r = rows
         clear(); this.cols = c; this.rows = r
     }
@@ -308,8 +326,8 @@ class VtEngine(cols: Int = 80, rows: Int = 24) : TerminalEngine {
             'P' -> deleteChars(param(0, 1))
             '@' -> insertChars(param(0, 1))
             'X' -> eraseChars(param(0, 1))
-            'S' -> repeat(minOf(param(0, 1), rows)) { scrollUp(scrollTop, scrollBottom) }
-            'T' -> repeat(minOf(param(0, 1), rows)) { scrollDown(scrollTop, scrollBottom) }
+            'S' -> scrollUp(scrollTop, scrollBottom, param(0, 1))
+            'T' -> scrollDown(scrollTop, scrollBottom, param(0, 1))
             'm' -> sgr()
             'r' -> {
                 val top = (param(0, 1) - 1).coerceIn(0, rows - 1)
@@ -342,6 +360,7 @@ class VtEngine(cols: Int = 80, rows: Int = 24) : TerminalEngine {
         if (toAlt == altScreen) return
         if (toAlt) {
             if (save) altSaved = Saved(row, col, penFg, penBg, penFlags, pendingWrap, autowrap)
+            spend(cols * rows)
             alt = Screen(cols, rows); screen = alt; altScreen = true
         } else {
             screen = primary; altScreen = false
@@ -417,6 +436,8 @@ class VtEngine(cols: Int = 80, rows: Int = 24) : TerminalEngine {
     private fun put(cp: Int) {
         val w = CellWidth.of(cp)
         if (w == 0) { combine(cp); return }
+        // A double-width glyph needs two cells in a row: in a one-column grid there is no place for it, so it is not drawn (and nothing else moves).
+        if (w == 2 && cols < 2) return
         if (pendingWrap) { if (autowrap) { col = 0; index() }; pendingWrap = false }
         if (w == 2 && col == cols - 1) {
             if (!autowrap) return
@@ -473,39 +494,51 @@ class VtEngine(cols: Int = 80, rows: Int = 24) : TerminalEngine {
 
     private fun reverseIndex() { if (row == scrollTop) scrollDown(scrollTop, scrollBottom) else if (row > 0) row-- }
 
-    private fun scrollUp(top: Int, bottom: Int) {
+    /** The rows [top]..[bottom] move up by [n] (as many as there are), the rows that come in at the bottom are blank. One move of the rows that stay, however large [n] is. */
+    private fun scrollUp(top: Int, bottom: Int, n: Int = 1) {
         val s = screen
-        for (r in top until bottom) copyRow(s, r + 1, r)
-        blankRow(s, bottom)
+        val count = minOf(n, bottom - top + 1)
+        if (count <= 0) return
+        val keep = bottom - top + 1 - count
+        if (keep > 0) copyRows(s, top + count, top, keep)
+        for (r in bottom - count + 1..bottom) blankRow(s, r)
     }
 
-    private fun scrollDown(top: Int, bottom: Int) {
+    /** The mirror of [scrollUp]: rows move down, blank rows come in at [top]. */
+    private fun scrollDown(top: Int, bottom: Int, n: Int = 1) {
         val s = screen
-        for (r in bottom downTo top + 1) copyRow(s, r - 1, r)
-        blankRow(s, top)
+        val count = minOf(n, bottom - top + 1)
+        if (count <= 0) return
+        val keep = bottom - top + 1 - count
+        if (keep > 0) copyRows(s, top, top + count, keep)
+        for (r in top until top + count) blankRow(s, r)
     }
 
-    private fun copyRow(s: Screen, from: Int, to: Int) {
-        System.arraycopy(s.text, from * cols, s.text, to * cols, cols); System.arraycopy(s.fg, from * cols, s.fg, to * cols, cols)
-        System.arraycopy(s.bg, from * cols, s.bg, to * cols, cols); System.arraycopy(s.flags, from * cols, s.flags, to * cols, cols)
+    /** [n] whole rows from [from] to [to]; the ranges may overlap (`arraycopy` behaves as if through a temporary array). */
+    private fun copyRows(s: Screen, from: Int, to: Int, n: Int) {
+        val len = n * cols
+        spend(len)
+        System.arraycopy(s.text, from * cols, s.text, to * cols, len); System.arraycopy(s.fg, from * cols, s.fg, to * cols, len)
+        System.arraycopy(s.bg, from * cols, s.bg, to * cols, len); System.arraycopy(s.flags, from * cols, s.flags, to * cols, len)
     }
 
-    private fun blankRow(s: Screen, r: Int) { for (c in 0 until cols) blankCell(s, r * cols + c, penBg) }
+    private fun blankRow(s: Screen, r: Int) { spend(cols); for (c in 0 until cols) blankCell(s, r * cols + c, penBg) }
 
     private fun insertLines(n: Int) {
         if (row !in scrollTop..scrollBottom) return
-        repeat(minOf(n, scrollBottom - row + 1)) { scrollDown(row, scrollBottom) }
+        scrollDown(row, scrollBottom, n)
         col = 0; pendingWrap = false
     }
 
     private fun deleteLines(n: Int) {
         if (row !in scrollTop..scrollBottom) return
-        repeat(minOf(n, scrollBottom - row + 1)) { scrollUp(row, scrollBottom) }
+        scrollUp(row, scrollBottom, n)
         col = 0; pendingWrap = false
     }
 
     private fun insertChars(n: Int) {
         val s = screen; val count = minOf(n, cols - col); val base = row * cols
+        spend(cols)
         for (c in cols - 1 downTo col + count) moveCell(s, base + c - count, base + c)
         for (c in col until col + count) blankCell(s, base + c, penBg)
         fixPairsInRow(row); pendingWrap = false
@@ -513,12 +546,14 @@ class VtEngine(cols: Int = 80, rows: Int = 24) : TerminalEngine {
 
     private fun deleteChars(n: Int) {
         val s = screen; val count = minOf(n, cols - col); val base = row * cols
+        spend(cols)
         for (c in col until cols - count) moveCell(s, base + c + count, base + c)
         for (c in cols - count until cols) blankCell(s, base + c, penBg)
         fixPairsInRow(row); pendingWrap = false
     }
 
     private fun eraseChars(n: Int) {
+        spend(minOf(n, cols))
         val base = row * cols
         for (c in col until minOf(col + n, cols)) { clearWidePair(base + c); blankCell(screen, base + c, penBg) }
         pendingWrap = false
@@ -537,6 +572,7 @@ class VtEngine(cols: Int = 80, rows: Int = 24) : TerminalEngine {
     }
 
     private fun eraseLine(mode: Int) {
+        spend(cols)
         val base = row * cols
         val range = when (mode) { 1 -> 0..col; 2 -> 0 until cols; else -> col until cols }
         for (c in range) { clearWidePair(base + c); blankCell(screen, base + c, penBg) }
