@@ -9,7 +9,7 @@ The 32 dp tile on every agent row (the herd, the expanded blocked card) shows wh
 | The table (kind to code, and glyph for ten kinds), aliases, fallback | `core/.../attention/AgentMarks.kt` |
 | The glyph paths (24-unit grid, 1.8 stroke, round caps, no fill; same builder as `PaddockIcons`) | `app/.../ui/theme/PaddockAgentGlyphs.kt` |
 | The tile, the `LocalAgentGlyphs` switch, the row's spoken text | `app/.../ui/components/Components.kt` (`AgentMarkTile`, `rowDescription`) |
-| The setting | `AppSettings.agentGlyphs`, `AppGraph.setAgentGlyphs`, provided once in `PaddockRoot` |
+| The setting | `AppSettings.agentGlyphs`, `SettingsController.setAgentGlyphs`, provided once in `PaddockRoot` |
 | What herdr 0.9.1 calls each kind | `fixtures/herdr-0.9.1/agent-start-kinds.txt` and `agent-kind-strings.tsv`, written by `tools/capture-agent-kinds.sh` |
 
 ## Rules

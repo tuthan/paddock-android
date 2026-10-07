@@ -20,8 +20,8 @@ A widget redraw reads that file and nothing else. No widget holds a socket, a co
 
 Who writes it:
 
-- **The open app**, whenever the herd's counts or blocked rows change, and at most once a minute when they do not (`AppGraph.trackWidgetCache`). Writing redraws the widgets.
-- **The refresh job**, `WidgetRefreshJobService`, a `JobScheduler` periodic job at the 15-minute floor, network any, not persisted. It runs `AppGraph.refreshWidgetCache`: if the app is in the foreground it does nothing; if the cache has no read of a machine yet it does nothing (the first read is the app's); otherwise it opens one SSH connection to that machine, runs `herdr --session S api snapshot`, builds the same counts the herd shows, writes the cache and releases the connection. A read that fails leaves the cache as it was, so the widgets go on saying when their numbers are from. It installs nothing on the host.
+- **The open app**, whenever the herd's counts or blocked rows change, and at most once a minute when they do not (`WidgetService.track`). Writing redraws the widgets.
+- **The refresh job**, `WidgetRefreshJobService`, a `JobScheduler` periodic job at the 15-minute floor, network any, not persisted. It runs `WidgetService.refresh`: if the app is in the foreground it does nothing; if the cache has no read of a machine yet it does nothing (the first read is the app's); otherwise it opens one SSH connection to that machine, runs `herdr --session S api snapshot`, builds the same counts the herd shows, writes the cache and releases the connection. A read that fails leaves the cache as it was, so the widgets go on saying when their numbers are from. It installs nothing on the host.
 - The job is scheduled when a widget is added and on every `onUpdate` (the system sends one after a reboot); it is cancelled when the last widget of the three kinds is removed. It is not persisted, because surviving a reboot would need a boot receiver and its permission; the reboot's `onUpdate` does the same.
 
 ## Taps
