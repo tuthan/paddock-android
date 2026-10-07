@@ -158,6 +158,16 @@ class PairingCoordinatorTest {
 
     private suspend fun PairingCoordinator.start() = start("box", 4000, SID, KEY, "SHA256:abc")
 
+    @Test fun aLiveConnectionToThatDesktopEndsTheRequestButAnotherMachinesDoesNot() = runBlocking {
+        val c = coordinator(Script({ reply(PairingReply.Pending) }, { reply(PairingReply.Pending) }))
+        c.start()
+        c.connectedTo("elsewhere")
+        assertNotNull(c.state.value.pendingOrNull, "another machine's connection says nothing about this request")
+        c.connectedTo("  BOX ")
+        assertEquals(PairingState.Idle, c.state.value)
+        assertNull(store.load())
+    }
+
     private suspend fun PairingCoordinator.terminal(): PairingState = withTimeout(5_000) { state.first { it.isTerminal } }
 
     @Test fun theRecordIsOnDiskBeforeTheFirstByteIsSent() = runBlocking {

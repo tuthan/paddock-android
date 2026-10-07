@@ -59,6 +59,13 @@ data class HostProfile(
 
     fun toTarget() = SshTarget(id, host, port, user)
 
+    /**
+     * Whether a connection made for this profile is still the one [other] needs. What was read about waking the machine, and the icon (read or
+     * picked), change without the user touching the connection and are no reason to reconnect; anything else, the name included (the label the answer
+     * host writes), is.
+     */
+    fun sameConnectionAs(other: HostProfile): Boolean = copy(wake = null, os = null, detectedOs = null) == other.copy(wake = null, os = null, detectedOs = null)
+
     companion object {
         /** Also the imported-key id rule, so a profile id can name its key. */
         val ID = Regex("[a-z0-9][a-z0-9-]{0,40}")

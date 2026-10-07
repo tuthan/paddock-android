@@ -53,6 +53,7 @@ import io.github.tuthan.paddock.lifecycle.ConnectionOwner
 import io.github.tuthan.paddock.lifecycle.SessionFactory
 import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.live.HostSessionController
+import io.github.tuthan.paddock.live.HostWatcher
 import io.github.tuthan.paddock.live.MonitoredHost
 import io.github.tuthan.paddock.ops.FileJournalStore
 import io.github.tuthan.paddock.ops.FileSnippetStore
@@ -155,7 +156,6 @@ class AppGraph(private val app: Application) {
         watchedProfile = { _profile.value?.id },
         hideOnLockScreen = { runCatching { prefs.stored().hidePromptOnLockScreen }.getOrDefault(true) },
     )
-    @Volatile private var alertWatcher: Job? = null
 
     /** What the home-screen widgets draw (Phase 10): the last read of the watched machine, written by the open app and by [WidgetService.refresh]. */
     val widgets = WidgetService(
@@ -167,10 +167,6 @@ class AppGraph(private val app: Application) {
         watchedProfileId = { prefs.stored().watchedProfileId }, inForeground = { triggers.foreground.value }, removing = { it in removing },
         locked = { io.github.tuthan.paddock.widget.PaddockWidgets.locked(app) }, redraw = { io.github.tuthan.paddock.widget.PaddockWidgets.updateAll(app) },
     )
-    @Volatile private var widgetWatcher: Job? = null
-    @Volatile private var wakeWatcher: Job? = null
-    @Volatile private var osWatcher: Job? = null
-    @Volatile private var pairingWatcher: Job? = null
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
     val owner = ConnectionOwner(scope, SessionFactory { profile -> connect(profile) }, clock)
@@ -200,7 +196,7 @@ class AppGraph(private val app: Application) {
 
     /** One change to the saved machines at a time: add, switch and remove each read and write the profile store and the watched machine. */
     private val machineLock = kotlinx.coroutines.sync.Mutex()
-    /** Machines being removed: nothing may start watching them (a foreground flip does `watch(_profile.value)`, and the removed machine is still that until the end). */
+    /** Machines being removed: nothing may start watching them (a foreground flip does `hostWatcher.watch(_profile.value)`, and the removed machine is still that until the end). */
     private val removing: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     private val _removingMachine = MutableStateFlow<String?>(null)
@@ -234,11 +230,32 @@ class AppGraph(private val app: Application) {
         clock, settings = { prefs.value }, interactive = { triggers.interactive.value }, show = { notifier.show(it) },
         switchTo = { id -> watchProfile(id, chosen = false) }, monitored = hostUi.view.map { (it.phase as? HostPhase.Monitoring)?.host },
     )
+    /** The one machine watched now: its connection controller, and what follows that controller's phases and readings ([HostWatcher]). */
+    val hostWatcher = HostWatcher(
+        scope, isRemoving = { it in removing },
+        create = { profile ->
+            HostSessionController(
+                scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, hostScripts.relay, hostScripts.relaySha256, sessionName = profile.session,
+                controlScript = hostScripts.control, controlSha256 = hostScripts.controlSha256, journal = journal, alertScript = hostScripts.alert, alertSha256 = hostScripts.alertSha256,
+                decideScript = hostScripts.decide, decideSha256 = hostScripts.decideSha256, hookScript = hostScripts.hook, hookSha256 = hostScripts.hookSha256,
+                opencodeScript = hostScripts.opencode, opencodeSha256 = hostScripts.opencodeSha256, sagaStore = sagaStore,
+                wakeCapture = { session -> io.github.tuthan.paddock.wake.WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) },
+                osProbe = { session -> io.github.tuthan.paddock.hostprofile.HostOsProbe.read(session) },
+            )
+        },
+        attach = { hostUi.attach(it) }, detach = { hostUi.detach() }, becameWatched = { wakes.watching(it) },
+        stopped = { wakes.forgetWatched(); widgets.stopTracking() },
+        follows = listOf(
+            { c -> c.phase.collectLatest { p -> if (p is HostPhase.Monitoring) alertService.raise(p.host) } },
+            { c -> c.phase.collectLatest { p -> if (p is HostPhase.Monitoring) widgets.track(p.host) } },
+            { c -> c.wake.filterNotNull().collect { saveWake(c.profile, it) } },
+            { c -> c.os.filterNotNull().collect { saveDetectedOs(c.profile, it) } },
+            // A live connection ends any pairing request: the key is no longer what stands between this phone and the machine.
+            { c -> c.phase.collectLatest { p -> if (p is HostPhase.Monitoring) pairingCoordinator.connectedTo(p.host.profile.host) } },
+        ),
+    )
     /** The open terminal session, kept through a rotation so turning the phone does not release control. */
     val terminals = io.github.tuthan.paddock.host.Retained<io.github.tuthan.paddock.terminal.TerminalSession>(scope) { it.close() }
-    private val lock = Any()
-    /** Lives while its machine is watched: paused when the app is hidden, resumed when it returns, replaced only for another machine. */
-    @Volatile private var controller: HostSessionController? = null
 
     /** Settings and the user's snippets, and what writes them ([SettingsController]). */
     val prefs = SettingsController(scope, FileAppSettingsStore(File(files, "settings.json")), FileSnippetStore(File(files, "snippets.json")), appLock)
@@ -289,7 +306,7 @@ class AppGraph(private val app: Application) {
             // The connection is claimed while the app is visible and released when it is not (the owner closes it after its grace).
             // Held while the app is visible and uncovered: behind the lock screen nothing connects, so nothing asks a question (a host key, a key) the user cannot see.
             kotlinx.coroutines.flow.combine(triggers.foreground, appLock.locked) { visible, locked -> visible && !locked }.distinctUntilChanged()
-                .collectLatest { active -> if (active) _profile.value?.let { watch(it) } else controller?.pause() }
+                .collectLatest { active -> if (active) _profile.value?.let { hostWatcher.watch(it) } else hostWatcher.pause() }
         }
     }
 
@@ -327,7 +344,7 @@ class AppGraph(private val app: Application) {
         prefs.save()
         _profile.value = profile
         _boot.value = Boot.Ready
-        if (triggers.foreground.value) watch(profile)
+        if (triggers.foreground.value) hostWatcher.watch(profile)
     }
 
     /**
@@ -351,19 +368,6 @@ class AppGraph(private val app: Application) {
                 },
             ),
         ) { id -> profiles.remove(id) }
-    }
-
-    /** The connection to the watched machine and everything that follows it, stopped (Remove of the machine being watched). */
-    private fun stopWatching() = synchronized(lock) {
-        controller?.stop(); controller = null
-        alertWatcher?.cancel(); alertWatcher = null
-        widgetWatcher?.cancel(); widgetWatcher = null
-        wakeWatcher?.cancel(); wakeWatcher = null
-        osWatcher?.cancel(); osWatcher = null
-        pairingWatcher?.cancel(); pairingWatcher = null
-        wakes.forgetWatched()
-        widgets.stopTracking()
-        hostUi.detach()
     }
 
     /**
@@ -401,13 +405,13 @@ class AppGraph(private val app: Application) {
         // From here nothing may start watching it, and its connection (and the grace after it) is closed now: a reconnect would raise a first-trust prompt for a key just forgotten.
         removing += id
         try {
-            if (wasWatched) stopWatching()
+            if (wasWatched) hostWatcher.stop()
             owner.drop(id)
             val result = removal.remove(id)
             refreshMachines()
             if (result != MachineRemoval.Result.Removed) {
                 removing -= id
-                if (wasWatched && before != null && triggers.foreground.value) watch(before)
+                if (wasWatched && before != null && triggers.foreground.value) hostWatcher.watch(before)
                 return@withLock result
             }
             // Its Wake facts and their flow go with it: a later machine with the same id starts with none.
@@ -419,7 +423,7 @@ class AppGraph(private val app: Application) {
                 prefs.saveQuietly()
                 _profile.value = next
                 hostUi.reset()
-                if (next == null) _boot.value = Boot.NoMachines else if (triggers.foreground.value) watch(next)
+                if (next == null) _boot.value = Boot.NoMachines else if (triggers.foreground.value) hostWatcher.watch(next)
             } else {
                 val chosen = MachineRoster.chosen(_machines.value, prefs.value.chosenProfileId, _profile.value?.id)
                 if (chosen != prefs.value.chosenProfileId) {
@@ -448,51 +452,15 @@ class AppGraph(private val app: Application) {
         if (switching) {
             _profile.value = profile
             // At the switch, not only when its connection starts (watch runs only in the foreground): from now on this machine's facts are the watched
-            // tap's, and its send-only "not watching this machine" line is no longer true. watch() says it again for a controller it replaces; twice is harmless.
+            // tap's, and its send-only "not watching this machine" line is no longer true. hostWatcher.watch() says it again for a controller it replaces; twice is harmless.
             wakes.watching(profile.id)
-            if (triggers.foreground.value) watch(profile)
+            if (triggers.foreground.value) hostWatcher.watch(profile)
         }
         profile
     }
 
     /** The saved sagas, for Activity while no host is being monitored (a restart, a lost connection). */
     fun savedSagas(): List<io.github.tuthan.paddock.ops.SagaRecord> = runCatching { sagaStore.load().records }.getOrDefault(emptyList())
-
-    /** Resumes the controller already watching [profile]; for any other profile, stops it and starts a new one. */
-    private fun watch(profile: HostProfile) = synchronized(lock) {
-        if (profile.id in removing) return@synchronized
-        val c = controller
-        // What was read about waking the machine, and the icon (read or picked), change without the user touching the connection and are no reason to reconnect.
-        if (c != null && c.profile.copy(wake = null, os = null, detectedOs = null) == profile.copy(wake = null, os = null, detectedOs = null)) { c.resume(); return@synchronized }
-        c?.stop()
-        // The watched tap's facts were about the machine before; this machine's send-only facts said it was not watched (MachineWake.watching).
-        if (c?.profile?.id != profile.id) wakes.watching(profile.id)
-        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, hostScripts.relay, hostScripts.relaySha256, sessionName = profile.session, controlScript = hostScripts.control, controlSha256 = hostScripts.controlSha256, journal = journal, alertScript = hostScripts.alert, alertSha256 = hostScripts.alertSha256,
-            decideScript = hostScripts.decide, decideSha256 = hostScripts.decideSha256, hookScript = hostScripts.hook, hookSha256 = hostScripts.hookSha256, opencodeScript = hostScripts.opencode, opencodeSha256 = hostScripts.opencodeSha256, sagaStore = sagaStore,
-            wakeCapture = { session -> io.github.tuthan.paddock.wake.WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) },
-            osProbe = { session -> io.github.tuthan.paddock.hostprofile.HostOsProbe.read(session) })
-        controller = next
-        hostUi.attach(next)
-        next.start()
-        alertWatcher?.cancel()
-        alertWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) alertService.raise(p.host) } }
-        widgetWatcher?.cancel()
-        widgetWatcher = scope.launch { next.phase.collectLatest { p -> if (p is HostPhase.Monitoring) widgets.track(p.host) } }
-        wakeWatcher?.cancel()
-        wakeWatcher = scope.launch { next.wake.filterNotNull().collect { saveWake(next.profile, it) } }
-        osWatcher?.cancel()
-        osWatcher = scope.launch { next.os.filterNotNull().collect { saveDetectedOs(next.profile, it) } }
-        // A live connection ends any pairing request: the key is no longer what stands between this phone and the machine.
-        pairingWatcher?.cancel()
-        // Only this machine's: another machine coming up (a reconnect after a Wi-Fi blip) says nothing about a request made for a different desktop.
-        pairingWatcher = scope.launch {
-            next.phase.collectLatest { p ->
-                if (p !is HostPhase.Monitoring) return@collectLatest
-                val pending = pairingCoordinator.state.value.pendingOrNull ?: return@collectLatest
-                if (pending.host.trim().equals(p.host.profile.host.trim(), ignoreCase = true)) pairingCoordinator.clear()
-            }
-        }
-    }
 
     /**
      * Keeps what a bring-up read about waking the machine, with the relay the user saved. Skipped when the stored profile is no longer
@@ -529,7 +497,7 @@ class AppGraph(private val app: Application) {
     suspend fun renameMachine(profileId: String, name: String): Boolean {
         val written = profiles.update(profileId) { stored -> stored.copy(name = name) }
         if (written == null) return profiles.get(profileId)?.name == name
-        if (_profile.value?.id == written.id) { _profile.value = written; watch(written) }
+        if (_profile.value?.id == written.id) { _profile.value = written; hostWatcher.watch(written) }
         machineWritten(written)
         return true
     }
@@ -575,10 +543,10 @@ class AppGraph(private val app: Application) {
 
     /** "Try again": a setup problem on a healthy connection runs the setup again; anything else refreshes the connection. */
     fun retry() {
-        if (controller?.retrySetup() == true) return
+        if (hostWatcher.retrySetup()) return
         _profile.value?.let { owner.refresh(it.id) }
     }
-    fun installRelay() { controller?.installRelay() }
+    fun installRelay() { hostWatcher.installRelay() }
 
     /**
      * Replaces the pin with the key the user was shown ([shown], the warning the dialog drew), then reconnects, so the new pin

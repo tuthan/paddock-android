@@ -98,6 +98,15 @@ class PairingCoordinator(
         storeLock.withLock { store.save(null) }
     }
 
+    /**
+     * A live connection to [host] ends a request made for that desktop: the key is no longer what stands between this phone and the machine. Only that
+     * machine's: another machine coming up (a reconnect after a Wi-Fi blip) says nothing about a request made for a different desktop.
+     */
+    suspend fun connectedTo(host: String) {
+        val pending = state.value.pendingOrNull ?: return
+        if (pending.host.trim().equals(host.trim(), ignoreCase = true)) clear()
+    }
+
     /** The first successful connect after pairing: the request is done with. */
     suspend fun clear() {
         synchronized(lock) { generation++; job?.cancel(); _state.value = PairingState.Idle }

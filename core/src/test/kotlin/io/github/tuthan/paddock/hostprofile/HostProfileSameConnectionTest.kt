@@ -1,0 +1,26 @@
+package io.github.tuthan.paddock.hostprofile
+
+import io.github.tuthan.paddock.wake.WakeTarget
+import kotlin.test.Test
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+/** Which edits to a saved machine need a new connection (what the graph decided in `watch`). */
+class HostProfileSameConnectionTest {
+    private val base = HostProfile("alpha", "Alpha", "10.0.0.2", 22, "jdoe")
+
+    @Test fun whatWasReadAboutWakingAndTheIconNeverReconnect() {
+        val read = base.copy(wake = WakeTarget(available = true, mac = "02:00:5e:10:00:01", iface = "wlp0s20f3", capturedAtMillis = 1), os = HostOs.Linux, detectedOs = HostOs.Mac)
+        assertTrue(base.sameConnectionAs(read))
+        assertTrue(read.sameConnectionAs(base))
+        assertTrue(base.sameConnectionAs(base))
+    }
+
+    @Test fun everythingThatShapesTheConnectionOrItsLabelDoes() {
+        for (changed in listOf(
+            base.copy(name = "Alpha 2"), base.copy(host = "10.0.0.3"), base.copy(port = 2222), base.copy(user = "other"),
+            base.copy(session = "work"), base.copy(key = KeyKind.Imported, importedKeyId = "imported"),
+        )) assertFalse(base.sameConnectionAs(changed), changed.toString())
+        assertFalse(base.sameConnectionAs(base.copy(id = "beta")))
+    }
+}
