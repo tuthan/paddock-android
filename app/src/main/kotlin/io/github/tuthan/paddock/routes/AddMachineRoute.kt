@@ -21,19 +21,29 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import io.github.tuthan.paddock.AppGraph
+import io.github.tuthan.paddock.discovery.FinderController
 import io.github.tuthan.paddock.host.ConnectAttempt
+import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.hostkey.HostKeyBroker
 import io.github.tuthan.paddock.hostprofile.AddMachineForm
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
+import io.github.tuthan.paddock.hostprofile.HostProfileStore
 import io.github.tuthan.paddock.hostprofile.KeyKind
+import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.hostprofile.MachineRoster
 import io.github.tuthan.paddock.hostprofile.PairingCopy
 import io.github.tuthan.paddock.hostprofile.PairingLink
 import io.github.tuthan.paddock.hostprofile.PairingResult
 import io.github.tuthan.paddock.net.LocalNetworkPolicy
+import io.github.tuthan.paddock.pairing.PairingCoordinator
 import io.github.tuthan.paddock.pairing.PairingState
 import io.github.tuthan.paddock.pairing.PairingText
 import io.github.tuthan.paddock.pairing.pendingOrNull
+import io.github.tuthan.paddock.settings.SettingsController
+import io.github.tuthan.paddock.ssh.ImportCheck
 import io.github.tuthan.paddock.ssh.ImportedKeyInfo
+import io.github.tuthan.paddock.ssh.LocalNetworkGate
+import io.github.tuthan.paddock.ssh.PhoneKey
 import io.github.tuthan.paddock.ui.commandShareIntent
 import io.github.tuthan.paddock.ui.screens.ADD_MACHINE_INTRO
 import io.github.tuthan.paddock.ui.screens.AUTHORIZE_INTRO
@@ -49,15 +59,33 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * What the Add machine screens use from the app (the form, Find on the network, Scan and Import key share it): one holder because the screens forward most of
+ * it to each other. [of] is the only place this file knows the app graph.
+ */
+internal class AddMachineDeps(
+    val machineBook: MachineBook, val profiles: HostProfileStore, val broker: HostKeyBroker, val hostUi: HostUiModel, val gate: LocalNetworkGate,
+    val finder: FinderController, val pairingCoordinator: PairingCoordinator, val phoneKey: PhoneKey, val prefs: SettingsController,
+    val retry: () -> Unit, val createPhoneKey: suspend () -> Unit, val sendPairingKey: suspend (host: String, port: Int, sid: String) -> Boolean,
+    val importedKey: suspend () -> ImportedKeyInfo?, val importKey: suspend (pem: String, passphrase: String) -> ImportCheck,
+) {
+    companion object {
+        fun of(graph: AppGraph) = AddMachineDeps(
+            graph.machineBook, graph.profiles, graph.broker, graph.hostUi, graph.gate, graph.finder, graph.pairingCoordinator, graph.phoneKey, graph.prefs,
+            graph::retry, graph::createPhoneKey, graph::sendPairingKey, graph::importedKey, graph::importKey,
+        )
+    }
+}
+
 @Composable
 internal fun AddMachineRoute(
-    graph: AppGraph, editing: Boolean, pairing: PairingLink?, onBack: () -> Unit,
+    deps: AddMachineDeps, editing: Boolean, pairing: PairingLink?, onBack: () -> Unit,
     attempt: ConnectAttempt?, onAttempt: (ConnectAttempt?) -> Unit, authorizeIntro: Boolean,
     onPairing: (PairingLink) -> Unit, onNotice: (String) -> Unit,
     picked: AddMachineInput?, onPicked: (AddMachineInput?) -> Unit,
 ) {
     val ctx = LocalContext.current
-    val watched by graph.machineBook.profile.collectAsState()
+    val watched by deps.machineBook.profile.collectAsState()
     // Setting up the key keeps the machine (its id, so its pinned host key and history) while it is the same host and port.
     val fixing = watched.takeIf { editing }
     val scope = rememberCoroutineScope()
@@ -66,7 +94,7 @@ internal fun AddMachineRoute(
     // The refusal is the dialog's answer, not the live state: the grant can be turned on in the app's system settings, so it is
     // read again on every return, and a banner saying "access is off" never outlives the grant.
     val resumes = rememberResumes()
-    LaunchedEffect(resumes) { if (denied && !graph.gate.lanAccessMissing()) denied = false }
+    LaunchedEffect(resumes) { if (denied && !deps.gate.lanAccessMissing()) denied = false }
     var pending by remember { mutableStateOf<AddMachineInput?>(null) }
     // Send the key waits for the local-network grant the way Connect does; kept here so the answer to the dialog can pick it up.
     // It keeps the offer it was asked for with the form: the dialog can stay up while another link arrives, and the key goes to the desktop that was tapped, never to whichever link is current when the dialog is answered.
@@ -77,17 +105,17 @@ internal fun AddMachineRoute(
     fun finish(input: AddMachineInput) {
         scope.launch {
             // The same machine (host, port and user, or the one being fixed) stays one profile: its id, name and wake facts carry over.
-            val known = graph.profiles.list()
+            val known = deps.profiles.list()
             val profile = AddMachineForm.resolve(input, known, fixing) ?: return@launch
             val already = known.any { it.id == profile.id }
             // Set or cleared on every Connect: a link's fingerprints are compared with the key this machine presents, and never outlive the form that carried them.
-            graph.broker.expectPairing(profile.id, input.pairedFingerprints)
+            deps.broker.expectPairing(profile.id, input.pairedFingerprints)
             // What is on screen now is the last attempt's: only a phase that is not that one can be this attempt's answer.
-            graph.hostUi.beginAttempt()
+            deps.hostUi.beginAttempt()
             // Setting up the watched machine's key keeps the user's choice where it was: an alert may have moved the phone to this machine.
-            graph.machineBook.add(profile, chosen = MachineRoster.choosesOnAdd(profile, fixing))
+            deps.machineBook.add(profile, chosen = MachineRoster.choosesOnAdd(profile, fixing))
             // The same profile is resumed, not rebuilt: ask for the reconnect that picks up the new key.
-            if (already) graph.retry()
+            if (already) deps.retry()
             // Stay on the form: the root follows the connection and either leaves for Home or shows what went wrong here.
             onAttempt(ConnectAttempt(profile.id))
         }
@@ -96,7 +124,7 @@ internal fun AddMachineRoute(
         val port = offer.pairPort ?: return
         val sid = offer.sid ?: return
         sentInput = input
-        scope.launch { if (!graph.sendPairingKey(offer.host, port, sid)) onNotice("Create this phone's key first, then send it.") }
+        scope.launch { if (!deps.sendPairingKey(offer.host, port, sid)) onNotice("Create this phone's key first, then send it.") }
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         denied = !granted
@@ -112,39 +140,39 @@ internal fun AddMachineRoute(
     // Keystore entry, corrupt store) reads as "no key" here; connecting reports it with its own recovery.
     val key by produceState<Pair<String, io.github.tuthan.paddock.ssh.KeyBacking>?>(null, keyTick) {
         value = withContext(Dispatchers.Default) {
-            runCatching { if (graph.phoneKey.exists()) graph.phoneKey.publicLine("paddock@phone") to graph.phoneKey.info().backing else null }.getOrNull()
+            runCatching { if (deps.phoneKey.exists()) deps.phoneKey.publicLine("paddock@phone") to deps.phoneKey.info().backing else null }.getOrNull()
         }
     }
     var importedTick by remember { mutableIntStateOf(0) }
-    val imported by produceState<ImportedKeyInfo?>(null, importedTick) { value = runCatching { graph.importedKey() }.getOrNull() }
+    val imported by produceState<ImportedKeyInfo?>(null, importedTick) { value = runCatching { deps.importedKey() }.getOrNull() }
     var importing by rememberSaveable { mutableStateOf(false) }
     // The form is kept by the holder while the import screen is up, so typed values are still there on return.
     val holder = rememberSaveableStateHolder()
     if (importing) {
         // Back from the import screen returns to the form, not past it.
         BackHandler { importing = false }
-        ImportKeyRoute(graph, onDone = { importedTick++; importing = false }, onBack = { importing = false })
+        ImportKeyRoute(deps.prefs, deps.importKey, onDone = { importedTick++; importing = false }, onBack = { importing = false })
         return
     }
     // The same for the scanner: opening it leaves the form's typed values under the holder, and a code read replaces them with the link's.
     var scanning by rememberSaveable { mutableStateOf(false) }
     if (scanning) {
         BackHandler { scanning = false }
-        ScanRoute(graph, onLink = { onPairing(it); scanning = false }, onBack = { scanning = false })
+        ScanRoute(deps.gate, onLink = { onPairing(it); scanning = false }, onBack = { scanning = false })
         return
     }
     // The same for Find on this network: the form (and what was typed in it) waits under the holder while the finder is up.
     var finding by rememberSaveable { mutableStateOf(false) }
     if (finding) {
         BackHandler { finding = false }
-        FindRoute(graph, onPick = { onAttempt(null); onPicked(it); finding = false }, onBack = { finding = false })
+        FindRoute(deps.finder, deps.gate, onPick = { onAttempt(null); onPicked(it); finding = false }, onBack = { finding = false })
         return
     }
     val state = AddMachineState(
-        route = { host -> AddMachineForm.route(host, graph.gate.decide(AddMachineForm.normalizeHost(host))) },
+        route = { host -> AddMachineForm.route(host, deps.gate.decide(AddMachineForm.normalizeHost(host))) },
         resolveRoute = { host ->
             val h = AddMachineForm.normalizeHost(host)
-            val (endpoint, grant) = graph.gate.resolvedRoute(h)
+            val (endpoint, grant) = deps.gate.resolvedRoute(h)
             AddMachineForm.route(host, grant, endpoint)
         },
         publicKeyLine = key?.first,
@@ -157,7 +185,7 @@ internal fun AddMachineRoute(
         connectError = attempt?.error,
         connectFix = attempt?.fix,
     )
-    val pairState by graph.pairingCoordinator.state.collectAsState()
+    val pairState by deps.pairingCoordinator.state.collectAsState()
     val pairNow = rememberNow()
     val pairView = PairingText.view(pairState, pairNow)
     // Approved: the key is authorized on the machine, so connect with the form as it was sent. The request is done with either way.
@@ -165,19 +193,19 @@ internal fun AddMachineRoute(
         val approved = pairState as? PairingState.Approved ?: return@LaunchedEffect
         val input = sentInput
         sentInput = null
-        graph.pairingCoordinator.clear()
+        deps.pairingCoordinator.clear()
         if (input != null) finish(input) else onNotice("The desktop approved this phone's key. Press Connect to sign in.")
     }
     if (pairView != null && !pairView.approved) {
         val p = pairState.pendingOrNull
         // The system Back gesture is the header arrow's twin: a request that is still going is cancelled (so a late approval cannot connect a
         // phone that has left this page), a finished one is dismissed.
-        BackHandler { scope.launch { if (pairView.active) graph.pairingCoordinator.cancel() else graph.pairingCoordinator.clear() } }
+        BackHandler { scope.launch { if (pairView.active) deps.pairingCoordinator.cancel() else deps.pairingCoordinator.clear() } }
         PairWithDesktop(
             pairView, PairingTarget(p?.let { "${it.host}:${it.port}" }.orEmpty(), p?.fingerprint.orEmpty()),
-            onCancel = { scope.launch { graph.pairingCoordinator.cancel() } },
-            onBack = { scope.launch { graph.pairingCoordinator.clear() } },
-            onConnect = { val input = sentInput; sentInput = null; scope.launch { graph.pairingCoordinator.clear() }; if (input != null) finish(input) },
+            onCancel = { scope.launch { deps.pairingCoordinator.cancel() } },
+            onBack = { scope.launch { deps.pairingCoordinator.clear() } },
+            onConnect = { val input = sentInput; sentInput = null; scope.launch { deps.pairingCoordinator.clear() }; if (input != null) finish(input) },
         )
         return
     }
@@ -187,15 +215,15 @@ internal fun AddMachineRoute(
             state,
             onConnect = { input ->
                 // Decided from where the name resolves (a LAN hostname needs the grant too); the lookup is bounded and off the main thread.
-                scope.launch { if (graph.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input) }
+                scope.launch { if (deps.gate.needsRequest(AddMachineForm.normalizeHost(input.host))) { pending = input; permission.launch(LocalNetworkPolicy.PERMISSION) } else finish(input) }
             },
             onSendKey = onSendKey@{ input ->
                 // The offer is read now, at the tap: what is sent and to whom is what was on screen when it was pressed.
                 val offer = pairing?.takeIf { it.pairPort != null && it.sid != null } ?: return@onSendKey
                 // The TCP connect to the desktop is a LAN connection like Connect's: ask for the local-network grant first, then send.
-                scope.launch { if (graph.gate.needsRequest(AddMachineForm.normalizeHost(offer.host))) { pendingSend = input to offer; permission.launch(LocalNetworkPolicy.PERMISSION) } else beginSend(input, offer) }
+                scope.launch { if (deps.gate.needsRequest(AddMachineForm.normalizeHost(offer.host))) { pendingSend = input to offer; permission.launch(LocalNetworkPolicy.PERMISSION) } else beginSend(input, offer) }
             },
-            onGenerateKey = { scope.launch { graph.createPhoneKey(); keyTick++ } },
+            onGenerateKey = { scope.launch { deps.createPhoneKey(); keyTick++ } },
             onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },
             onCopyCommand = { command -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock authorize command", command)) },
             onShareCommand = { command -> ctx.startActivity(Intent.createChooser(commandShareIntent(command), "Share the command")) },
@@ -205,7 +233,7 @@ internal fun AddMachineRoute(
                     is PairingResult.Rejected -> onNotice(PairingCopy.invalid(r.reason))
                 }
             },
-            onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
+            onOpenSettings = { ctx.startActivity(deps.gate.settingsIntent()) },
             onBack = onBack,
             onImportKey = { importing = true },
             // Not while a key is being set up for the watched machine, or under a pairing link: the host there is already decided.

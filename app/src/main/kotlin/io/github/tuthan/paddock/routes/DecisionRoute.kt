@@ -15,7 +15,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import io.github.tuthan.paddock.AppGraph
 import io.github.tuthan.paddock.answers.AnswerController
 import io.github.tuthan.paddock.answers.AnswerGate
 import io.github.tuthan.paddock.answers.Behavior
@@ -24,6 +23,9 @@ import io.github.tuthan.paddock.answers.DecisionModel
 import io.github.tuthan.paddock.answers.DecisionPresenter
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.billing.ProCapabilities
+import io.github.tuthan.paddock.billing.ProService
+import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
 import io.github.tuthan.paddock.live.HostPhase
@@ -33,6 +35,7 @@ import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationPresenter
 import io.github.tuthan.paddock.ops.SendBlock
 import io.github.tuthan.paddock.reconcile.Freshness
+import io.github.tuthan.paddock.settings.SettingsController
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.ScreenHeader
@@ -108,14 +111,14 @@ internal fun decisionNotice(settled: String?, readError: String?, locked: Boolea
  * button acts on the request on screen; a newer one is only offered. Leaving it for the terminal is always one tap.
  */
 @Composable
-internal fun DecisionRoute(graph: AppGraph, terminalId: String?, onBack: () -> Unit, onOpenTerminal: () -> Unit, onSetUp: () -> Unit) {
-    val view by graph.hostUi.view.collectAsState()
-    val settings by graph.settings.collectAsState()
+internal fun DecisionRoute(hostUi: HostUiModel, prefs: SettingsController, machineBook: MachineBook, proService: ProService, terminalId: String?, onBack: () -> Unit, onOpenTerminal: () -> Unit, onSetUp: () -> Unit) {
+    val view by hostUi.view.collectAsState()
+    val settings by prefs.settings.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
-    val profile by graph.machineBook.profile.collectAsState()
+    val profile by machineBook.profile.collectAsState()
     // Pro gates setting guarded answers up, never the request already on screen: Yes and No work as they did.
-    val pro by graph.proService.view.collectAsState()
-    val setUpLocked = graph.proService.locked(ProCapabilities.GUARDED_ANSWERS, pro)
+    val pro by proService.view.collectAsState()
+    val setUpLocked = proService.locked(ProCapabilities.GUARDED_ANSWERS, pro)
     val unavailable: @Composable (String) -> Unit = { what ->
         Column(Modifier.fillMaxSize()) {
             ScreenHeader("Permission request", onBack = onBack, compact = true)

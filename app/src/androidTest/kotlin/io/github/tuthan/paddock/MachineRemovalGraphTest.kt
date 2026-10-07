@@ -42,7 +42,7 @@ class MachineRemovalGraphTest {
     private var before: String? = null
     private var chosenBefore: String? = null
 
-    @Before fun remember() { before = graph.machineBook.profile.value?.id; chosenBefore = graph.settings.value.chosenProfileId }
+    @Before fun remember() { before = graph.machineBook.profile.value?.id; chosenBefore = graph.prefs.value.chosenProfileId }
 
     @After fun restore() = runBlocking {
         graph.machineBook.remove(a.id); graph.machineBook.remove(b.id); graph.machineBook.remove(c.id)
@@ -75,7 +75,7 @@ class MachineRemovalGraphTest {
         assertTrue("another machine's rows are not", graph.ledger.observations().any { it.host == a.id })
         assertNotEquals("a removed machine is not the watched one", b.id, graph.machineBook.profile.value?.id)
         assertNotNull("some saved machine is watched, since others remain", graph.machineBook.profile.value)
-        assertNotEquals(b.id, graph.settings.value.watchedProfileId)
+        assertNotEquals(b.id, graph.prefs.value.watchedProfileId)
     }
 
     @Test fun removingAMachineThatIsNotWatchedLeavesTheWatchedOneAlone() = runBlocking {
@@ -133,9 +133,9 @@ class MachineRemovalGraphTest {
 
     @Test fun addingAMachineMakesItTheChosenOne() = runBlocking {
         graph.machineBook.add(a)
-        assertEquals(a.id, graph.settings.value.chosenProfileId)
+        assertEquals(a.id, graph.prefs.value.chosenProfileId)
         graph.machineBook.add(b)
-        assertEquals(b.id, graph.settings.value.chosenProfileId)
+        assertEquals(b.id, graph.prefs.value.chosenProfileId)
         assertEquals("and it is saved", b.id, savedSettings.chosenProfileId)
     }
 
@@ -144,10 +144,10 @@ class MachineRemovalGraphTest {
         // What an alert for a does (freshHerd): the default, not chosen.
         assertEquals(a.id, graph.machineBook.watch(a.id)?.id)
         assertEquals(a.id, graph.machineBook.profile.value?.id)
-        assertEquals(a.id, graph.settings.value.watchedProfileId)
-        assertEquals("the user chose b", b.id, graph.settings.value.chosenProfileId)
+        assertEquals(a.id, graph.prefs.value.watchedProfileId)
+        assertEquals("the user chose b", b.id, graph.prefs.value.chosenProfileId)
         assertEquals("on disk too", b.id, savedSettings.chosenProfileId)
-        val rows = MachineRoster.rows(graph.machineBook.machines.value, graph.machineBook.profile.value?.id, graph.settings.value.chosenProfileId)
+        val rows = MachineRoster.rows(graph.machineBook.machines.value, graph.machineBook.profile.value?.id, graph.prefs.value.chosenProfileId)
         assertEquals("the list offers b as the free return", listOf(b.id), rows.filter { it.returnFree }.map { it.id })
     }
 
@@ -155,10 +155,10 @@ class MachineRemovalGraphTest {
         graph.machineBook.add(a); graph.machineBook.add(b)
         graph.machineBook.watch(a.id)
         assertEquals(b.id, graph.machineBook.watch(b.id, chosen = true)?.id)
-        assertEquals("back on the choice", b.id, graph.settings.value.chosenProfileId)
+        assertEquals("back on the choice", b.id, graph.prefs.value.chosenProfileId)
         assertEquals(b.id, graph.machineBook.profile.value?.id)
         graph.machineBook.watch(a.id, chosen = true)
-        assertEquals("a switch the user made moves the choice", a.id, graph.settings.value.chosenProfileId)
+        assertEquals("a switch the user made moves the choice", a.id, graph.prefs.value.chosenProfileId)
         assertEquals(a.id, graph.machineBook.profile.value?.id)
         assertEquals(a.id, savedSettings.chosenProfileId)
     }
@@ -168,20 +168,20 @@ class MachineRemovalGraphTest {
         assertEquals(MachineRemoval.Result.Removed, graph.machineBook.remove(b.id))
         val next = graph.machineBook.profile.value?.id
         assertNotNull("a machine is left to watch", next)
-        assertEquals(next, graph.settings.value.watchedProfileId)
-        assertEquals("the machine the dialog said Paddock then watches is the choice", next, graph.settings.value.chosenProfileId)
+        assertEquals(next, graph.prefs.value.watchedProfileId)
+        assertEquals("the machine the dialog said Paddock then watches is the choice", next, graph.prefs.value.chosenProfileId)
     }
 
     @Test fun removingTheMachineAnAlertMovedThePhoneToGoesBackToTheChosenOne() = runBlocking {
         graph.machineBook.add(a); graph.machineBook.add(b); graph.machineBook.add(c)
         // The user chose c; an alert moved the phone to b. "A machine under test" sorts before c, so the first by name would be a (or a real machine).
-        assertEquals(c.id, graph.settings.value.chosenProfileId)
+        assertEquals(c.id, graph.prefs.value.chosenProfileId)
         graph.machineBook.watch(b.id)
         assertEquals(b.id, graph.machineBook.profile.value?.id)
-        assertEquals(c.id, MachineRoster.after(graph.machineBook.machines.value, b.id, graph.settings.value.chosenProfileId)?.id)
+        assertEquals(c.id, MachineRoster.after(graph.machineBook.machines.value, b.id, graph.prefs.value.chosenProfileId)?.id)
         assertEquals(MachineRemoval.Result.Removed, graph.machineBook.remove(b.id))
         assertEquals("the chosen machine is watched again, not the first by name", c.id, graph.machineBook.profile.value?.id)
-        assertEquals(c.id, graph.settings.value.chosenProfileId)
+        assertEquals(c.id, graph.prefs.value.chosenProfileId)
         assertEquals(c.id, savedSettings.chosenProfileId)
     }
 
@@ -219,11 +219,11 @@ class MachineRemovalGraphTest {
         val fixed = a.copy(user = "tester2")
         graph.machineBook.add(fixed, chosen = MachineRoster.choosesOnAdd(fixed, fixing = a))
         assertEquals(a.id, graph.machineBook.profile.value?.id)
-        assertEquals("fixing a key is not choosing the machine", b.id, graph.settings.value.chosenProfileId)
+        assertEquals("fixing a key is not choosing the machine", b.id, graph.prefs.value.chosenProfileId)
         assertEquals(b.id, savedSettings.chosenProfileId)
         // A plain add still is.
         graph.machineBook.add(c)
-        assertEquals(c.id, graph.settings.value.chosenProfileId)
+        assertEquals(c.id, graph.prefs.value.chosenProfileId)
     }
 
     @Test fun theRemovalMarkIsTheGraphsWhileItRunsAndGoneAfter() = runBlocking {
@@ -261,9 +261,9 @@ class MachineRemovalGraphTest {
     @Test fun removingTheChosenMachineWhileAnotherIsWatchedMakesTheWatchedOneTheChoice() = runBlocking {
         graph.machineBook.add(a); graph.machineBook.add(b)
         graph.machineBook.watch(a.id)
-        assertEquals(b.id, graph.settings.value.chosenProfileId)
+        assertEquals(b.id, graph.prefs.value.chosenProfileId)
         assertEquals(MachineRemoval.Result.Removed, graph.machineBook.remove(b.id))
         assertEquals("still watching a", a.id, graph.machineBook.profile.value?.id)
-        assertEquals("a removed machine is never the choice", a.id, graph.settings.value.chosenProfileId)
+        assertEquals("a removed machine is never the choice", a.id, graph.prefs.value.chosenProfileId)
     }
 }

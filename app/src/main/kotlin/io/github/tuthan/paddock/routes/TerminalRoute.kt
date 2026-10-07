@@ -12,7 +12,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
-import io.github.tuthan.paddock.AppGraph
+import io.github.tuthan.paddock.host.Retained
+import io.github.tuthan.paddock.terminal.TerminalSession
 import io.github.tuthan.paddock.ui.screens.TerminalActions
 import io.github.tuthan.paddock.ui.screens.TerminalTab
 
@@ -22,9 +23,9 @@ import io.github.tuthan.paddock.ui.screens.TerminalTab
  * phone must not hand the terminal back.
  */
 @Composable
-internal fun TerminalRoute(graph: AppGraph, host: io.github.tuthan.paddock.live.MonitoredHost, terminalId: String) {
+internal fun TerminalRoute(terminals: Retained<TerminalSession>, host: io.github.tuthan.paddock.live.MonitoredHost, terminalId: String) {
     var attempt by rememberSaveable { mutableIntStateOf(0) }
-    val session = remember(host, terminalId, attempt) { graph.terminals.acquire(Triple(host, terminalId, attempt)) { host.terminalSession(terminalId) } }
+    val session = remember(host, terminalId, attempt) { terminals.acquire(Triple(host, terminalId, attempt)) { host.terminalSession(terminalId) } }
     val view by session.view.collectAsState()
     val ctx = LocalContext.current
     val activity = remember(ctx) { generateSequence(ctx) { (it as? android.content.ContextWrapper)?.baseContext }.firstOrNull { it is android.app.Activity } as? android.app.Activity }
@@ -41,12 +42,12 @@ internal fun TerminalRoute(graph: AppGraph, host: io.github.tuthan.paddock.live.
         owner?.lifecycle?.addObserver(observer)
         onDispose {
             owner?.lifecycle?.removeObserver(observer)
-            graph.terminals.release(session, recreating = activity?.isChangingConfigurations == true)
+            terminals.release(session, recreating = activity?.isChangingConfigurations == true)
         }
     }
     val actions = remember(session) {
         TerminalActions(
-            onViewport = { cols, rows -> if (graph.terminals.firstUse(session)) session.open(cols, rows) else session.setViewport(cols, rows) },
+            onViewport = { cols, rows -> if (terminals.firstUse(session)) session.open(cols, rows) else session.setViewport(cols, rows) },
             onRequestControl = session::requestControl, onTakeOver = session::takeOver, onInstallHelper = session::installHelper,
             onDismissNotice = session::dismissNotice, onRelease = session::release,
             onResizeToFit = { cols, rows -> session.resizeToFit(cols, rows) }, onKey = { session.send(it) },

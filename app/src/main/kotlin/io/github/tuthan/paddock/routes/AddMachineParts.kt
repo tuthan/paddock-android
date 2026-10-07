@@ -17,7 +17,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import io.github.tuthan.paddock.AppGraph
+import io.github.tuthan.paddock.discovery.FinderController
 import io.github.tuthan.paddock.discovery.FinderPhase
 import io.github.tuthan.paddock.discovery.FinderText
 import io.github.tuthan.paddock.hostprofile.AddMachineInput
@@ -26,7 +26,9 @@ import io.github.tuthan.paddock.hostprofile.PairingLink
 import io.github.tuthan.paddock.hostprofile.PairingLinks
 import io.github.tuthan.paddock.hostprofile.PairingResult
 import io.github.tuthan.paddock.net.LocalNetworkPolicy
+import io.github.tuthan.paddock.settings.SettingsController
 import io.github.tuthan.paddock.ssh.ImportCheck
+import io.github.tuthan.paddock.ssh.LocalNetworkGate
 import io.github.tuthan.paddock.ui.components.SecureWindow
 import io.github.tuthan.paddock.ui.screens.FindOnNetwork
 import io.github.tuthan.paddock.ui.screens.ImportKey
@@ -71,7 +73,7 @@ internal fun WelcomeRoute(onEnterAddress: () -> Unit, onFind: () -> Unit, onScan
  * paste buttons elsewhere, so the camera is never the only way.
  */
 @Composable
-internal fun ScanRoute(graph: AppGraph, onLink: (PairingLink) -> Unit, onBack: () -> Unit) {
+internal fun ScanRoute(gate: LocalNetworkGate, onLink: (PairingLink) -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
     var notice by remember { mutableStateOf<String?>(null) }
     var tick by remember { mutableIntStateOf(0) }
@@ -83,7 +85,7 @@ internal fun ScanRoute(graph: AppGraph, onLink: (PairingLink) -> Unit, onBack: (
     ScanLink(
         cameraGranted = granted,
         onRequestCamera = { permission.launch(android.Manifest.permission.CAMERA) },
-        onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
+        onOpenSettings = { ctx.startActivity(gate.settingsIntent()) },
         onPayload = { text ->
             when (val r = PairingLinks.fromText(text)) {
                 is PairingResult.Valid -> onLink(r.link)
@@ -100,41 +102,41 @@ internal fun ScanRoute(graph: AppGraph, onLink: (PairingLink) -> Unit, onBack: (
     )
 }
 
-/** The finder page over [AppGraph.finder]. Nothing runs until Start; leaving the page stops whatever runs and releases the network. */
+/** The finder page over [FinderController]. Nothing runs until Start; leaving the page stops whatever runs and releases the network. */
 @Composable
-internal fun FindRoute(graph: AppGraph, onPick: (AddMachineInput) -> Unit, onBack: () -> Unit) {
+internal fun FindRoute(finder: FinderController, gate: LocalNetworkGate, onPick: (AddMachineInput) -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val state by graph.finder.state.collectAsState()
+    val state by finder.state.collectAsState()
     var port by rememberSaveable { mutableStateOf("") }
     var denied by rememberSaveable { mutableStateOf(false) }
     val typed = FinderText.port(port).port
     val resumes = rememberResumes()
     // Said again when the port changes (the sentence names the ports), and when the grant is turned on in the system settings and the user returns.
-    LaunchedEffect(port) { graph.finder.refresh(typed) }
-    LaunchedEffect(resumes) { if (graph.finder.state.value.phase == FinderPhase.Idle) { if (denied && !graph.gate.lanAccessMissing()) denied = false; graph.finder.refresh(typed) } }
-    DisposableEffect(Unit) { onDispose { graph.finder.close() } }
+    LaunchedEffect(port) { finder.refresh(typed) }
+    LaunchedEffect(resumes) { if (finder.state.value.phase == FinderPhase.Idle) { if (denied && !gate.lanAccessMissing()) denied = false; finder.refresh(typed) } }
+    DisposableEffect(Unit) { onDispose { finder.close() } }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         denied = !granted
-        graph.finder.refresh(typed)
+        finder.refresh(typed)
     }
     FindOnNetwork(
         state, port, { port = it.take(5) },
-        onStart = { graph.finder.start(typed) },
-        onCancel = { scope.launch { graph.finder.cancel() } },
+        onStart = { finder.start(typed) },
+        onCancel = { scope.launch { finder.cancel() } },
         onAllow = { permission.launch(LocalNetworkPolicy.PERMISSION) },
         onPick = { row -> onPick(AddMachineInput(host = row.address, port = row.port.toString(), name = row.name)) },
         onBack = onBack,
         accessDenied = denied,
-        onOpenSettings = { ctx.startActivity(graph.gate.settingsIntent()) },
+        onOpenSettings = { ctx.startActivity(gate.settingsIntent()) },
     )
 }
 
 @Composable
-internal fun ImportKeyRoute(graph: AppGraph, onDone: () -> Unit, onBack: () -> Unit) {
+internal fun ImportKeyRoute(prefs: SettingsController, importKey: suspend (pem: String, passphrase: String) -> ImportCheck, onDone: () -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val settings by graph.settings.collectAsState()
+    val settings by prefs.settings.collectAsState()
     SecureWindow(settings.protectSensitiveScreens)
     // Held in plain remember state on purpose: key text must not reach saved instance state.
     var picked by remember { mutableStateOf<PickedKeyFile?>(null) }
@@ -158,7 +160,7 @@ internal fun ImportKeyRoute(graph: AppGraph, onDone: () -> Unit, onBack: () -> U
             busy = true
             val pasted = picked == null
             scope.launch {
-                val check = graph.importKey(pem, pass)
+                val check = importKey(pem, pass)
                 busy = false
                 result = check
                 if (check is ImportCheck.Ready) {

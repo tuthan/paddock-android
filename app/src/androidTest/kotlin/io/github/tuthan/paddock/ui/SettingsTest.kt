@@ -594,8 +594,11 @@ class SettingsTest {
     private fun showRoute() {
         rule.setContent {
             PaddockTheme(darkTheme = true) {
-                SettingsRoute(graph, onBack = {}, onMachines = {}, onEditSnippets = {}, onAlertRelay = {})
-                ProGateHost(graph, pendingAnswerOnScreen = false)
+                SettingsRoute(
+                    graph.prefs, graph.machineBook, graph.hostUi, graph.proService, graph.gate, graph.journal, graph.notificationAccess, graph.appLock, graph.clock,
+                    onBack = {}, onMachines = {}, onEditSnippets = {}, onAlertRelay = {},
+                )
+                ProGateHost(graph.proService, graph.manualInput, graph.journal, graph.entitlements, pendingAnswerOnScreen = false)
             }
         }
     }

@@ -19,18 +19,24 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
-import io.github.tuthan.paddock.AppGraph
 import io.github.tuthan.paddock.attention.AgentRowModel
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.billing.ProCapabilities
+import io.github.tuthan.paddock.billing.ProService
+import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.host.Retained
+import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
 import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.live.MonitoredHost
 import io.github.tuthan.paddock.ops.FocusRules
+import io.github.tuthan.paddock.ops.ManualInputMode
 import io.github.tuthan.paddock.ops.OperationGate
 import io.github.tuthan.paddock.output.OutputState
 import io.github.tuthan.paddock.reconcile.Freshness
+import io.github.tuthan.paddock.settings.SettingsController
+import io.github.tuthan.paddock.terminal.TerminalSession
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.ScreenHeader
@@ -46,10 +52,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 @Composable
-internal fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, onTab: (AgentTab) -> Unit, onBack: () -> Unit, onCompose: () -> Unit, onDecision: () -> Unit) {
-    val view by graph.hostUi.view.collectAsState()
-    val settings by graph.settings.collectAsState()
-    val profile by graph.machineBook.profile.collectAsState()
+internal fun OutputRoute(
+    hostUi: HostUiModel, prefs: SettingsController, machineBook: MachineBook, proService: ProService, manualInput: ManualInputMode, terminals: Retained<TerminalSession>,
+    terminalId: String?, tab: AgentTab, onTab: (AgentTab) -> Unit, onBack: () -> Unit, onCompose: () -> Unit, onDecision: () -> Unit) {
+    val view by hostUi.view.collectAsState()
+    val settings by prefs.settings.collectAsState()
+    val profile by machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     if (terminalId == null || host == null) {
         // The connection is not up (or the app was restored without one): say so and offer the way back.
@@ -90,18 +98,18 @@ internal fun OutputRoute(graph: AppGraph, terminalId: String?, tab: AgentTab, on
     // A permission request the hook published for this agent: the entry above the output opens the sheet. Nothing here can answer it.
     // The entry is the only reader of the request, and it is not offered without Pro (below), so without Pro the host's request files are not polled over SSH
     // and there is no decision here at all. `locked` is read from state: when Pro appears the watch starts without the screen restarting.
-    val pro by graph.proService.view.collectAsState()
-    val answersLocked = graph.proService.locked(ProCapabilities.GUARDED_ANSWERS, pro)
+    val pro by proService.view.collectAsState()
+    val answersLocked = proService.locked(ProCapabilities.GUARDED_ANSWERS, pro)
     val decision = rememberDecision(host, terminalId, now, watch = !answersLocked)?.takeIf { !answersLocked }
     // The tap checks the gate again, as for the keys; the first time ever it asks what focus does.
-    FocusGuard(settings.desktopFocusConfirmed, onConfirmed = graph.prefs::setDesktopFocusConfirmed, focus = { focus.key?.takeIf { focus.gate is OperationGate.Open }?.let { host.sends?.focus(it) } }) { requestFocus ->
+    FocusGuard(settings.desktopFocusConfirmed, onConfirmed = prefs::setDesktopFocusConfirmed, focus = { focus.key?.takeIf { focus.gate is OperationGate.Open }?.let { host.sends?.focus(it) } }) { requestFocus ->
         val manual = rememberManualInput(
-            graph, host, terminalId, focus.gate, now, (output as? OutputState.Showing)?.lines?.map { it.text },
+            manualInput, host, terminalId, focus.gate, now, (output as? OutputState.Showing)?.lines?.map { it.text },
             onOpenTerminal = { onTab(AgentTab.Terminal) }, onFocus = requestFocus,
         )
         AgentOutput(
             header, output, following, now, tab, onTab, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() },
-            terminal = { TerminalRoute(graph, host, terminalId) },
+            terminal = { TerminalRoute(terminals, host, terminalId) },
             onCompose = if (host.sends != null) onCompose else null,
             manualInput = manual?.first, manualActions = manual?.second,
             // Tapping the entry is the user choosing to look at the newest request: it becomes the one on the sheet before the sheet is up.

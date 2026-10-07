@@ -14,9 +14,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import io.github.tuthan.paddock.AppGraph
 import io.github.tuthan.paddock.answers.AnswerSetupText
+import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.live.HostPhase
+import io.github.tuthan.paddock.relay.PinnedHostScripts
 import io.github.tuthan.paddock.ui.screens.GuardedAgent
 import io.github.tuthan.paddock.ui.screens.GuardedAnswers
 import io.github.tuthan.paddock.ui.screens.GuardedAnswersUi
@@ -29,9 +31,9 @@ import kotlinx.coroutines.launch
  * install of exactly those files, and the texts to paste. Nothing here registers the hook or edits any agent's settings.
  */
 @Composable
-internal fun GuardedAnswersRoute(graph: AppGraph, onBack: () -> Unit) {
-    val view by graph.hostUi.view.collectAsState()
-    val profile by graph.machineBook.profile.collectAsState()
+internal fun GuardedAnswersRoute(hostUi: HostUiModel, machineBook: MachineBook, hostScripts: PinnedHostScripts, onBack: () -> Unit) {
+    val view by hostUi.view.collectAsState()
+    val profile by machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val answerHost = host?.answerHost
     val ctx = LocalContext.current
@@ -63,9 +65,9 @@ internal fun GuardedAnswersRoute(graph: AppGraph, onBack: () -> Unit) {
     }
     GuardedAnswers(
         GuardedAnswersUi(
-            profile?.name ?: "this machine", answerHost?.decideSha256 ?: graph.hostScripts.decideSha256, answerHost?.hookSha256 ?: graph.hostScripts.hookSha256,
+            profile?.name ?: "this machine", answerHost?.decideSha256 ?: hostScripts.decideSha256, answerHost?.hookSha256 ?: hostScripts.hookSha256,
             hostState, installing, installError, window, config, snippet, copied,
-            opencodeSha256 = answerHost?.opencodeSha256 ?: graph.hostScripts.opencodeSha256, codexWindowSeconds = codexWindow,
+            opencodeSha256 = answerHost?.opencodeSha256 ?: hostScripts.opencodeSha256, codexWindowSeconds = codexWindow,
             codexSnippet = codexSnippet, opencodeCommand = opencodeCommand,
         ),
         onBack = onBack,

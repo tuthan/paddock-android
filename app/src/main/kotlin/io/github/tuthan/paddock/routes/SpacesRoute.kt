@@ -8,8 +8,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import io.github.tuthan.paddock.AppGraph
 import io.github.tuthan.paddock.billing.ProCapabilities
+import io.github.tuthan.paddock.billing.ProService
+import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.live.SpacesState
 import io.github.tuthan.paddock.ops.CardAction
@@ -24,19 +26,20 @@ import io.github.tuthan.paddock.ui.screens.SpacesScreen
 import io.github.tuthan.paddock.ui.screens.SpacesScreenState
 import io.github.tuthan.paddock.ui.screens.StartAvailability
 import io.github.tuthan.paddock.ui.screens.WorkspaceChoice
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** The Spaces tab (Phase 09): the watched machine's sessions, the start-agent flow and its recovery cards. */
 @Composable
-internal fun SpacesRoute(graph: AppGraph, onNotice: (String) -> Unit, onOpenAgent: (terminalId: String) -> Unit) {
-    val profile by graph.machineBook.profile.collectAsState()
-    val view by graph.hostUi.view.collectAsState()
-    val pro by graph.proService.view.collectAsState()
+internal fun SpacesRoute(machineBook: MachineBook, hostUi: HostUiModel, proService: ProService, appScope: CoroutineScope, onNotice: (String) -> Unit, onOpenAgent: (terminalId: String) -> Unit) {
+    val profile by machineBook.profile.collectAsState()
+    val view by hostUi.view.collectAsState()
+    val pro by proService.view.collectAsState()
     val spaces = view.spaces
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val saga = host?.saga
-    val scope = graph.scope
+    val scope = appScope
     val name = profile?.name ?: "this machine"
     val listState by (spaces?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow<SpacesState>(SpacesState.Loading) }).collectAsState()
     val notice by (spaces?.notice ?: remember { kotlinx.coroutines.flow.MutableStateFlow<String?>(null) }).collectAsState()
@@ -78,10 +81,10 @@ internal fun SpacesRoute(graph: AppGraph, onNotice: (String) -> Unit, onOpenAgen
             hostName = name, hostStatus = when (health) { HostHealth.Live -> "live"; HostHealth.Connecting -> "connecting"; else -> "not live" }, health = health,
             list = if (spaces == null) SpacesState.Failed("No connection to $name yet, so its sessions cannot be read.") else listState,
             notice = notice, watchedSession = host?.sessionName, cards = cards, progress = progress, start = start, refreshing = refreshing,
-            locked = listOf(ProCapabilities.START_AGENT, ProCapabilities.MANAGE_SESSIONS).filter { graph.proService.locked(it, pro) }.map { it.id }.toSet(),
+            locked = listOf(ProCapabilities.START_AGENT, ProCapabilities.MANAGE_SESSIONS).filter { proService.locked(it, pro) }.map { it.id }.toSet(),
         ),
         SpacesActions(
-            onChoose = { id -> graph.proService.requestCapability(id, pendingAnswerOnScreen = false) },
+            onChoose = { id -> proService.requestCapability(id, pendingAnswerOnScreen = false) },
             onRefresh = { refreshing = true; scope.launch { try { spaces?.refresh() } finally { refreshing = false } } },
             onStop = { e -> scope.launch { spaces?.stop(e) } },
             onDelete = { e -> scope.launch { spaces?.delete(e) } },

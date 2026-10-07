@@ -17,28 +17,32 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import io.github.tuthan.paddock.applock.AppLock
 import io.github.tuthan.paddock.applock.AppLockCopy
 import io.github.tuthan.paddock.applock.AuthResult
 import io.github.tuthan.paddock.applock.DeviceLock
 import io.github.tuthan.paddock.applock.findActivity
 import io.github.tuthan.paddock.applock.rememberDeviceAuth
+import io.github.tuthan.paddock.lifecycle.AndroidTriggers
+import io.github.tuthan.paddock.settings.SettingsController
 import io.github.tuthan.paddock.ui.components.SecureWindow
 import io.github.tuthan.paddock.ui.screens.AppLockScreen
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * Covers the app with the lock screen while [AppGraph.appLock] says so, and asks the phone for the user's credential. The screens stay composed underneath
+ * Covers the app with the lock screen while [AppLock] says so, and asks the phone for the user's credential. The screens stay composed underneath
  * (the route, the draft and the open terminal are where the user left them) but nothing reaches them: the lock is a dialog window above every other window,
- * it takes focus and the keyboard, and the connection is released while it is up ([AppGraph]), so nothing underneath keeps working or asking.
+ * it takes focus and the keyboard, and the connection is released while it is up (AppGraph), so nothing underneath keeps working or asking.
  *
  * It asks once each time the app comes to the front covered, not on every resume: a user who backs out of the prompt is left on the lock screen with its
  * button, and the credential screen of Android 8 to 10, which pauses and resumes this activity, cannot loop. A phone whose screen lock was removed while
  * the lock was on has nothing to ask, so the app opens and the lock is turned off, with one line saying so.
  */
 @Composable
-internal fun AppLockGate(graph: AppGraph, content: @Composable () -> Unit) {
-    val locked by graph.appLock.locked.collectAsState()
-    val settings by graph.settings.collectAsState()
+internal fun AppLockGate(appLock: AppLock, prefs: SettingsController, triggers: AndroidTriggers, appScope: CoroutineScope, content: @Composable () -> Unit) {
+    val locked by appLock.locked.collectAsState()
+    val settings by prefs.settings.collectAsState()
     val ctx = LocalContext.current
     val auth = rememberDeviceAuth()
     val scope = rememberCoroutineScope()
@@ -55,14 +59,14 @@ internal fun AppLockGate(graph: AppGraph, content: @Composable () -> Unit) {
 
     fun ask() {
         asking = true; message = null
-        graph.appLock.authenticating()
+        appLock.authenticating()
         auth.authenticate(AppLockCopy.UNLOCK_TITLE, AppLockCopy.CONFIRM_SUBTITLE) { result ->
             asking = false
             when (result) {
-                AuthResult.Success -> graph.appLock.unlocked()
-                AuthResult.Cancelled -> graph.appLock.cancelled()
-                AuthResult.NoLock -> { graph.appLock.cancelled(); dropLock(graph, ctx) }
-                is AuthResult.Failed -> { graph.appLock.cancelled(); message = AppLockCopy.failed(result.message) }
+                AuthResult.Success -> appLock.unlocked()
+                AuthResult.Cancelled -> appLock.cancelled()
+                AuthResult.NoLock -> { appLock.cancelled(); dropLock(appScope, prefs, appLock, ctx) }
+                is AuthResult.Failed -> { appLock.cancelled(); message = AppLockCopy.failed(result.message) }
             }
         }
     }
@@ -72,16 +76,16 @@ internal fun AppLockGate(graph: AppGraph, content: @Composable () -> Unit) {
     }
     // Each time the app leaves the front, the next return may ask again on its own. Not while the phone's prompt is what took it to the back: on Android 8 to 10
     // that prompt is a full-screen activity that stops this one, and a user who cancels it would be asked again at once, for ever, instead of reaching Unlock.
-    LaunchedEffect(graph) { graph.triggers.foreground.collect { visible -> if (!visible && !asking) attempted = false } }
+    LaunchedEffect(triggers) { triggers.foreground.collect { visible -> if (!visible && !asking) attempted = false } }
     LaunchedEffect(locked, resumed) {
         if (!locked || !resumed || attempted || asking) return@LaunchedEffect
         attempted = true
-        if (auth.lock() == DeviceLock.NotSet) dropLock(graph, ctx) else ask()
+        if (auth.lock() == DeviceLock.NotSet) dropLock(appScope, prefs, appLock, ctx) else ask()
     }
 
     if (locked) {
         AppLockScreen(
-            message = message, busy = asking, onUnlock = { if (!asking) { attempted = true; if (auth.lock() == DeviceLock.NotSet) dropLock(graph, ctx) else ask() } },
+            message = message, busy = asking, onUnlock = { if (!asking) { attempted = true; if (auth.lock() == DeviceLock.NotSet) dropLock(appScope, prefs, appLock, ctx) else ask() } },
             onLeave = { ctx.findActivity()?.moveTaskToBack(true) },
         )
     }
@@ -90,8 +94,8 @@ internal fun AppLockGate(graph: AppGraph, content: @Composable () -> Unit) {
 private fun clear(focus: FocusManager) = focus.clearFocus(force = true)
 
 /** The phone's screen lock is gone, so nothing can be asked: open the app and turn the lock off rather than leave the user outside their own app. */
-private fun dropLock(graph: AppGraph, ctx: android.content.Context) {
-    graph.scope.launch { graph.prefs.setAppLock(false); graph.appLock.unlocked() }
+private fun dropLock(appScope: CoroutineScope, prefs: SettingsController, appLock: AppLock, ctx: android.content.Context) {
+    appScope.launch { prefs.setAppLock(false); appLock.unlocked() }
     Toast.makeText(ctx, AppLockCopy.DROPPED, Toast.LENGTH_LONG).show()
 }
 

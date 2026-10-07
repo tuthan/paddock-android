@@ -17,13 +17,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import io.github.tuthan.paddock.AppGraph
 import io.github.tuthan.paddock.attention.StateWord
+import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
 import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.ops.ComposerRules
+import io.github.tuthan.paddock.ops.ManualInputMode
 import io.github.tuthan.paddock.ops.OperationGate
+import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationPresenter
 import io.github.tuthan.paddock.ops.OperationResult
@@ -34,6 +37,7 @@ import io.github.tuthan.paddock.ops.SendGate
 import io.github.tuthan.paddock.ops.Snippets
 import io.github.tuthan.paddock.ops.TextCheck
 import io.github.tuthan.paddock.reconcile.Freshness
+import io.github.tuthan.paddock.settings.SettingsController
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.ScreenHeader
@@ -66,12 +70,13 @@ internal val PromptDraftSaver = listSaver<PromptDraft, Any>(
  */
 @Composable
 internal fun ComposeRoute(
-    graph: AppGraph, terminalId: String?, draft: PromptDraft, onDraft: ((PromptDraft) -> PromptDraft) -> Unit,
+    hostUi: HostUiModel, prefs: SettingsController, machineBook: MachineBook, journal: OperationJournal, manualInput: ManualInputMode,
+    terminalId: String?, draft: PromptDraft, onDraft: ((PromptDraft) -> PromptDraft) -> Unit,
     onBack: () -> Unit, onOpenTerminal: () -> Unit, onEditSnippets: () -> Unit,
 ) {
-    val view by graph.hostUi.view.collectAsState()
-    val settings by graph.settings.collectAsState()
-    val profile by graph.machineBook.profile.collectAsState()
+    val view by hostUi.view.collectAsState()
+    val settings by prefs.settings.collectAsState()
+    val profile by machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val sends = host?.sends
     if (terminalId == null || host == null || sends == null) {
@@ -92,7 +97,7 @@ internal fun ComposeRoute(
     val running by sends.running.collectAsState()
     val rereads by sends.rereads.collectAsState()
     val home by host.home.collectAsState()
-    val snippets by graph.snippets.collectAsState()
+    val snippets by prefs.snippets.collectAsState()
     val now = rememberNow()
     val presenter = remember { OperationPresenter() }
     val text = draft.textFor(terminalId)
@@ -122,7 +127,7 @@ internal fun ComposeRoute(
     val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
     val block = (gate as? SendGate.Closed)?.block
     val stale = block == SendBlock.Stale
-    val manual = manualView(graph, host, terminalId)
+    val manual = manualView(manualInput, host, terminalId)
     val keyGate = manual.gate
     // A re-read looks at the agent as it is now, so it takes the epoch now installed, not the one this screen opened in.
     val reread = { liveEpoch?.let { sends.reread(TerminalKey(key.target, it)) }; Unit }
@@ -142,7 +147,7 @@ internal fun ComposeRoute(
         onGateAction = {
             when {
                 stale -> { openedEpoch = liveEpoch; openedAt = System.currentTimeMillis(); host.refresh() }
-                block == SendBlock.JournalUnreadable -> graph.journal.retryLoad()
+                block == SendBlock.JournalUnreadable -> journal.retryLoad()
                 else -> reread()
             }
         },
@@ -155,14 +160,14 @@ internal fun ComposeRoute(
             OperationGate.Open -> null
         },
         onEsc = {
-            if (keyGate == null) enterManual(graph, host, terminalId, liveEpoch)
+            if (keyGate == null) enterManual(manualInput, host, terminalId, liveEpoch)
             else manual.key?.takeIf { keyGate is OperationGate.Open }?.let { sends.sendKey(it, OperationKind.Esc) }
         },
     )
 }
 
 @Composable
-internal fun SnippetsRoute(graph: AppGraph, onBack: () -> Unit) {
-    val snippets by graph.snippets.collectAsState()
-    SnippetEditor(snippets, onChange = { graph.prefs.setSnippets(it) }, onBack = onBack)
+internal fun SnippetsRoute(prefs: SettingsController, onBack: () -> Unit) {
+    val snippets by prefs.snippets.collectAsState()
+    SnippetEditor(snippets, onChange = { prefs.setSnippets(it) }, onBack = onBack)
 }

@@ -57,7 +57,6 @@ import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.probe.MachineProbe
 import io.github.tuthan.paddock.probe.ProbeTargets
 import io.github.tuthan.paddock.relay.PinnedHostScripts
-import io.github.tuthan.paddock.settings.AppSettings
 import io.github.tuthan.paddock.settings.FileAppSettingsStore
 import io.github.tuthan.paddock.settings.SettingsController
 import io.github.tuthan.paddock.ssh.AuthorizedKey
@@ -82,7 +81,6 @@ import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -182,8 +180,6 @@ class AppGraph(private val app: Application) {
 
     /** Settings and the user's snippets, and what writes them ([SettingsController]). */
     val prefs = SettingsController(scope, FileAppSettingsStore(File(files, "settings.json")), FileSnippetStore(File(files, "snippets.json")), appLock)
-    val settings: StateFlow<AppSettings> get() = prefs.settings
-    val snippets: StateFlow<List<String>> get() = prefs.snippets
 
     /** Pro: the store, the gate and the sheet that asks for it (Phase 13). */
     val proService = ProService(entitlements, scope, clock, manualInput, journal, Distribution.UNLOCKED)

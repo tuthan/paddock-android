@@ -26,6 +26,7 @@ import io.github.tuthan.paddock.nav.NavState
 import io.github.tuthan.paddock.nav.Route
 import io.github.tuthan.paddock.ops.PromptDraft
 import io.github.tuthan.paddock.routes.ActivityRoute
+import io.github.tuthan.paddock.routes.AddMachineDeps
 import io.github.tuthan.paddock.routes.AddMachineRoute
 import io.github.tuthan.paddock.routes.AlertRelayRoute
 import io.github.tuthan.paddock.routes.ComposeRoute
@@ -70,8 +71,8 @@ private val NAV = listOf(NavItem("Herd", PaddockIcons.Herd), NavItem("Spaces", P
 @Composable
 fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
     // One provider for every agent tile in the app, so Settings > Agent icons redraws the herd at once without threading it through each screen.
-    val agentGlyphs by remember(graph) { graph.settings.map { it.agentGlyphs }.distinctUntilChanged() }.collectAsState(true)
-    CompositionLocalProvider(LocalAgentGlyphs provides agentGlyphs) { AppLockGate(graph) { PaddockRootContent(graph, modifier) } }
+    val agentGlyphs by remember(graph) { graph.prefs.settings.map { it.agentGlyphs }.distinctUntilChanged() }.collectAsState(true)
+    CompositionLocalProvider(LocalAgentGlyphs provides agentGlyphs) { AppLockGate(graph.appLock, graph.prefs, graph.triggers, graph.scope) { PaddockRootContent(graph, modifier) } }
 }
 
 @Composable
@@ -87,10 +88,10 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     // The composer's text lives here, above the route: leaving the composer (Edit snippets, Back) or a reconnect that swaps it for "not available" must not lose it.
     var draft by rememberSaveable(stateSaver = PromptDraftSaver) { mutableStateOf(PromptDraft()) }
 
-    AlertEvents(graph, nav, boot)
-    PairingEvents(graph, nav, boot)
-    RemovalOutcomes(graph, nav)
-    FollowConnectAttempt(graph, nav)
+    AlertEvents(graph.alerts, graph.alertService, graph.hostUi, graph.proService, nav, boot)
+    PairingEvents(graph.pairing, nav, boot)
+    RemovalOutcomes(graph.machineBook, nav)
+    FollowConnectAttempt(graph.broker, graph.hostUi, nav)
 
     val effective = nav.effective(boot)
     LaunchedEffect(nav.onAgent(effective), nav.terminalId) { if (nav.onAgent(effective)) graph.manualInput.leaveUnless(nav.terminalId) else graph.manualInput.leave() }
@@ -101,7 +102,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     BackHandler(enabled = boot == Boot.NoMachines && add.attempt == null && (add.welcomeChoice || add.pairing != null)) { nav.backToWelcome() }
     BackHandler(enabled = add.welcomeFinder && effective == Route.Welcome) { add.welcomeFinder = false }
     BackHandler(enabled = add.welcomeScan && effective == Route.Welcome) { add.welcomeScan = false }
-    ProGateHost(graph, pendingAnswerOnScreen = effective == Route.Decision || effective == Route.GuardedAnswers)
+    ProGateHost(graph.proService, graph.manualInput, graph.journal, graph.entitlements, pendingAnswerOnScreen = effective == Route.Decision || effective == Route.GuardedAnswers)
     Column(modifier.fillMaxSize().safeDrawingPadding()) {
     nav.alertNotice?.let { NoticeBar(it, onDismiss = { nav.alertNotice = null }, modifier = Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 8.dp)) }
     // Why a tap on a Pro control did nothing (the gate never opens over a busy screen); the graph clears it after a few seconds.
@@ -112,9 +113,9 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
             Boot.Loading -> Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title, modifier = Modifier.padding(PaddockTokens.spacing.gutter))
             else -> when (effective) {
                 Route.Welcome -> if (add.welcomeFinder) FindRoute(
-                    graph, onPick = { add.found = it; add.welcomeFinder = false; add.welcomeChoice = true }, onBack = { add.welcomeFinder = false },
+                    graph.finder, graph.gate, onPick = { add.found = it; add.welcomeFinder = false; add.welcomeChoice = true }, onBack = { add.welcomeFinder = false },
                 ) else if (add.welcomeScan) ScanRoute(
-                    graph, onLink = { add.pairing = it; add.welcomeScan = false; add.welcomeChoice = true }, onBack = { add.welcomeScan = false },
+                    graph.gate, onLink = { add.pairing = it; add.welcomeScan = false; add.welcomeChoice = true }, onBack = { add.welcomeScan = false },
                 ) else WelcomeRoute(
                     onEnterAddress = { add.welcomeChoice = true }, onFind = { add.welcomeFinder = true }, onScan = { add.welcomeScan = true },
                     onPairing = { add.pairing = it; add.welcomeChoice = true },
@@ -122,57 +123,60 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                 Route.Home, Route.Spaces, Route.Activity -> Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f)) {
                         if (effective == Route.Spaces) SpacesRoute(
-                            graph, onNotice = { nav.alertNotice = it },
+                            graph.machineBook, graph.hostUi, graph.proService, graph.scope, onNotice = { nav.alertNotice = it },
                             onOpenAgent = { nav.openAgent(it) },
                         ) else if (effective == Route.Home) HomeRoute(
-                            graph, nav.relayDismissed, { nav.relayDismissed = it }, { nav.reviewKey = true },
+                            graph.machineBook, graph.hostUi, graph.wakes, graph.prefs, graph.proService, graph.probe, graph.gate, graph.scope,
+                            retry = graph::retry, installRelay = graph::installRelay,
+                            relayDismissed = nav.relayDismissed, setRelayDismissed = { nav.relayDismissed = it }, onReviewKey = { nav.reviewKey = true },
                             onOpen = { nav.openAgent(it) },
                             // Review prompt: the Output tab (the request entry) when the phone can answer this agent, else its Terminal tab, observing.
-                            onReviewPrompt = { nav.openAgent(it, reviewTab(graph, it)) },
+                            onReviewPrompt = { nav.openAgent(it, reviewTab(graph.hostUi, graph.proService, it)) },
                             onSettings = { nav.route = Route.Settings },
                             onSetUpKey = { nav.openAddMachineForKey(showCommand = false) },
                             onShowCommand = { nav.openAddMachineForKey(showCommand = true) },
                             onNotice = { nav.alertNotice = it },
                             onMachines = { nav.openMachines(Route.Home) },
-                        ) else ActivityRoute(graph, onOpenAgent = { nav.openAgent(it) })
+                        ) else ActivityRoute(graph.ledger, graph.journal, graph.hostUi, graph.machineBook, graph::savedSagas, onOpenAgent = { nav.openAgent(it) })
                     }
                     PaddockNavBar(NAV, when (effective) { Route.Home -> 0; Route.Spaces -> 1; else -> 2 }, { nav.route = when (it) { 0 -> Route.Home; 1 -> Route.Spaces; else -> Route.Activity } })
                 }
-                Route.Output -> OutputRoute(graph, nav.terminalId, nav.outputTab, { nav.outputTab = it }, onBack = { nav.route = Route.Home }, onCompose = { nav.route = Route.Compose }, onDecision = { nav.route = Route.Decision })
+                Route.Output -> OutputRoute(graph.hostUi, graph.prefs, graph.machineBook, graph.proService, graph.manualInput, graph.terminals, nav.terminalId, nav.outputTab, { nav.outputTab = it }, onBack = { nav.route = Route.Home }, onCompose = { nav.route = Route.Compose }, onDecision = { nav.route = Route.Decision })
                 Route.Decision -> DecisionRoute(
-                    graph, nav.terminalId, onBack = { nav.route = Route.Output },
+                    graph.hostUi, graph.prefs, graph.machineBook, graph.proService, nav.terminalId, onBack = { nav.route = Route.Output },
                     onOpenTerminal = { nav.outputTab = AgentTab.Terminal; nav.route = Route.Output },
                     // Locked, the sheet does not offer Set up at all (decisionSetUp): the gate may not open over a request, so a button here would be a dead one.
                     // The check stays for the moment Pro goes away between the frame and the tap; the next frame already shows the locked sheet.
                     onSetUp = { if (graph.proService.requestCapability(ProCapabilities.GUARDED_ANSWERS.id, pendingAnswerOnScreen = true)) nav.openGuardedAnswers(Route.Decision) },
                 )
                 Route.Compose -> ComposeRoute(
-                    graph, nav.terminalId, draft, { change -> draft = change(draft) }, onBack = { nav.route = Route.Output },
+                    graph.hostUi, graph.prefs, graph.machineBook, graph.journal, graph.manualInput, nav.terminalId, draft, { change -> draft = change(draft) }, onBack = { nav.route = Route.Output },
                     onOpenTerminal = { nav.outputTab = AgentTab.Terminal; nav.route = Route.Output },
                     onEditSnippets = { nav.openSnippets(Route.Compose) },
                 )
-                Route.Snippets -> SnippetsRoute(graph, onBack = { nav.route = nav.snippetsFrom })
+                Route.Snippets -> SnippetsRoute(graph.prefs, onBack = { nav.route = nav.snippetsFrom })
                 Route.Settings -> SettingsRoute(
-                    graph, onBack = { nav.route = Route.Home }, onMachines = { nav.openMachines(Route.Settings) },
+                    graph.prefs, graph.machineBook, graph.hostUi, graph.proService, graph.gate, graph.journal, graph.notificationAccess, graph.appLock, graph.clock,
+                    onBack = { nav.route = Route.Home }, onMachines = { nav.openMachines(Route.Settings) },
                     onEditSnippets = { nav.openSnippets(Route.Settings) },
                     onAlertRelay = { nav.openAlertRelay(Route.Settings) },
                 )
-                Route.AlertRelay -> AlertRelayRoute(graph, onBack = { nav.route = nav.alertRelayFrom })
+                Route.AlertRelay -> AlertRelayRoute(graph.hostUi, graph.machineBook, graph.push, graph.alertSetups, graph.hostScripts, graph.clock, onBack = { nav.route = nav.alertRelayFrom })
                 Route.Machines -> MachinesRoute(
-                    graph, busy = removingId != null, onBack = { nav.route = nav.machinesFrom },
+                    graph.machineBook, graph.prefs, graph.hostUi, graph.proService, graph.push, graph.wakes, graph.scope, graph.clock, busy = removingId != null, onBack = { nav.route = nav.machinesFrom },
                     onOpen = { nav.openMachine(it.id) },
                     onAdd = { nav.openAddMachineFromMachines() },
                     onNotice = { nav.alertNotice = it },
                 )
                 Route.Machine -> MachineRoute(
-                    graph, nav.machineId, removingId, onBack = { nav.route = Route.Machines },
+                    graph.machineBook, graph.prefs, graph.hostUi, graph.proService, graph.push, graph.wakes, graph.scope, graph.clock, graph.lanPaths, nav.machineId, removingId, onBack = { nav.route = Route.Machines },
                     onAlertRelay = { nav.openAlertRelay(Route.Machine) },
                     onGuardedAnswers = { if (graph.proService.requestCapability(ProCapabilities.GUARDED_ANSWERS.id, pendingAnswerOnScreen = false)) nav.openGuardedAnswers(Route.Machine) },
                     onNotice = { nav.alertNotice = it },
                 )
-                Route.GuardedAnswers -> GuardedAnswersRoute(graph, onBack = { nav.route = nav.guardedFrom })
+                Route.GuardedAnswers -> GuardedAnswersRoute(graph.hostUi, graph.machineBook, graph.hostScripts, onBack = { nav.route = nav.guardedFrom })
                 Route.AddMachine -> AddMachineRoute(
-                    graph, editing = add.editing && boot == Boot.Ready, pairing = add.pairing,
+                    remember(graph) { AddMachineDeps.of(graph) }, editing = add.editing && boot == Boot.Ready, pairing = add.pairing,
                     // With no machine the header arrow is the system Back: it returns to Welcome.
                     onBack = { nav.leaveAddMachine(boot, backTo) },
                     attempt = add.attempt, onAttempt = { add.attempt = it }, authorizeIntro = add.authorizeIntro,
@@ -182,7 +186,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                 )
             }
         }
-        HostKeyDialogs(graph, nav.reviewKey) { nav.reviewKey = false }
+        HostKeyDialogs(graph.broker, graph.machineBook, graph::replaceKey, nav.reviewKey) { nav.reviewKey = false }
     }
     }
 }

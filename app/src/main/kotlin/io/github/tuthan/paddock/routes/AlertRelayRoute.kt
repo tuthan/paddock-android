@@ -14,11 +14,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import io.github.tuthan.paddock.AppGraph
 import io.github.tuthan.paddock.alerts.AlertSetup
 import io.github.tuthan.paddock.alerts.AlertSetupCopy
 import io.github.tuthan.paddock.alerts.AlertSetupRunner
 import io.github.tuthan.paddock.alerts.AlertSetupScript
+import io.github.tuthan.paddock.alerts.AlertSetupStore
 import io.github.tuthan.paddock.alerts.DeliveryMode
 import io.github.tuthan.paddock.alerts.NtfyServer
 import io.github.tuthan.paddock.alerts.ServicePlatform
@@ -26,8 +26,13 @@ import io.github.tuthan.paddock.alerts.SetupOutcome
 import io.github.tuthan.paddock.alerts.SetupRun
 import io.github.tuthan.paddock.alerts.SetupStep
 import io.github.tuthan.paddock.alerts.StepState
+import io.github.tuthan.paddock.host.HostUiModel
 import io.github.tuthan.paddock.hostprofile.HostProfile
+import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.live.HostPhase
+import io.github.tuthan.paddock.notify.UnifiedPushConnector
+import io.github.tuthan.paddock.ports.Clock
+import io.github.tuthan.paddock.relay.PinnedHostScripts
 import io.github.tuthan.paddock.ui.screens.AlertForm
 import io.github.tuthan.paddock.ui.screens.AlertRelay
 import io.github.tuthan.paddock.ui.screens.AlertRelayHostState
@@ -43,12 +48,15 @@ import kotlinx.coroutines.launch
 /**
  * Locked-phone alerts on the watched machine, in one step: the form's two choices, one confirmation, then `AlertSetupRunner` does the rest over the live
  * connection (registers with the ntfy app when Paddock shows the alerts, installs the pinned relay, writes the configuration, checks it, enables the unit).
- * What was chosen is remembered per machine (`AppGraph.alertSetups`) so the subscribe link can be shown again and a second run keeps the topic.
+ * What was chosen is remembered per machine (`alertSetups`) so the subscribe link can be shown again and a second run keeps the topic.
  */
 @Composable
-internal fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
-    val view by graph.hostUi.view.collectAsState()
-    val profile by graph.machineBook.profile.collectAsState()
+internal fun AlertRelayRoute(
+    hostUi: HostUiModel, machineBook: MachineBook, push: UnifiedPushConnector, alertSetups: AlertSetupStore, hostScripts: PinnedHostScripts, clock: Clock,
+    onBack: () -> Unit,
+) {
+    val view by hostUi.view.collectAsState()
+    val profile by machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val relay = host?.alertRelay
     val ctx = LocalContext.current
@@ -67,12 +75,12 @@ internal fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
     var platform by remember(profile?.id) { mutableStateOf(ServicePlatform.of(profile?.detectedOs ?: profile?.os)) }
     LaunchedEffect(relay) { if (relay != null) platform = try { relay.platform() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Throwable) { platform } }
     // The registrations and the distributors on the phone, read again on every return (an app may have been installed meanwhile).
-    val registrations by graph.push.registrations.collectAsState()
-    val pushNotice by graph.push.notice.collectAsState()
+    val registrations by push.registrations.collectAsState()
+    val pushNotice by push.notice.collectAsState()
     val resumes = rememberResumes()
-    LaunchedEffect(Unit) { graph.push.refresh() }
+    LaunchedEffect(Unit) { push.refresh() }
     // The ntfy app first: it is the distributor most people have, so it is the one picked unless the user picks another.
-    val distributors = remember(resumes, registrations) { graph.push.distributors().sortedByDescending { it.packageName == NTFY_PACKAGE } }
+    val distributors = remember(resumes, registrations) { push.distributors().sortedByDescending { it.packageName == NTFY_PACKAGE } }
     var onHost by remember(relay, tick) { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(relay, tick) { onHost = if (relay == null) null else try { relay.hasPushEndpoint() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Throwable) { null } }
     val reg = registrations.firstOrNull { it.profile == profile?.id }
@@ -88,7 +96,7 @@ internal fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
     val machineId = profile?.id
     var saved by remember(machineId, tick) { mutableStateOf<io.github.tuthan.paddock.alerts.SavedAlertSetup?>(null) }
     var savedRead by remember(machineId) { mutableStateOf(false) }
-    LaunchedEffect(machineId, tick) { saved = machineId?.let { runCatching { graph.alertSetups.get(it) }.getOrNull() }; savedRead = true }
+    LaunchedEffect(machineId, tick) { saved = machineId?.let { runCatching { alertSetups.get(it) }.getOrNull() }; savedRead = true }
     var modeName by rememberSaveable(machineId) { mutableStateOf<String?>(null) }
     var ownServer by rememberSaveable(machineId) { mutableStateOf(false) }
     var ownUrl by rememberSaveable(machineId) { mutableStateOf("") }
@@ -117,21 +125,21 @@ internal fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
             platform = platform,
         )
     }
-    val script = setupOrNull()?.let { s -> runCatching { AlertSetupScript.build(graph.hostScripts.alertUnit, s, graph.hostScripts.alertSha256) }.getOrNull() }
+    val script = setupOrNull()?.let { s -> runCatching { AlertSetupScript.build(hostScripts.alertUnit, s, hostScripts.alertSha256) }.getOrNull() }
 
     suspend fun obtainEndpoint(p: HostProfile): String? {
         val pkg = form.distributor?.takeIf { d -> distributors.any { it.packageName == d } } ?: distributors.firstOrNull()?.packageName ?: return null
-        val existing = graph.push.registrations.value.firstOrNull { it.profile == p.id }
+        val existing = push.registrations.value.firstOrNull { it.profile == p.id }
         if (existing != null && existing.distributor == pkg && existing.endpoint != null) return existing.endpoint
-        graph.push.register(p.id, p.name, pkg)
+        push.register(p.id, p.name, pkg)
         return kotlinx.coroutines.withTimeoutOrNull(20_000) {
-            graph.push.registrations.first { all -> all.firstOrNull { it.profile == p.id }?.endpoint != null }.first { it.profile == p.id }.endpoint
+            push.registrations.first { all -> all.firstOrNull { it.profile == p.id }?.endpoint != null }.first { it.profile == p.id }.endpoint
         }
     }
 
     AlertRelay(
         AlertRelayUi(
-            profile?.name ?: "this machine", profile?.id ?: "", graph.hostScripts.alertSha256, hostState,
+            profile?.name ?: "this machine", profile?.id ?: "", hostScripts.alertSha256, hostState,
             saved = saved?.takeIf { it.enabled },
             push = PushUi(
                 distributors = distributors.map { PushDistributorUi(it.packageName, it.label) },
@@ -161,15 +169,15 @@ internal fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
             val steps = (if (setup.mode == DeliveryMode.Push) SetupStep.entries else SetupStep.entries.filter { it != SetupStep.Register && it != SetupStep.SendAddress })
             run = SetupRunUi(steps = steps.map { it to StepState.Pending }, running = true); result = null; copied = false
             scope.launch {
-                val outcome = AlertSetupRunner(r, graph.hostScripts.alertUnit, graph.hostScripts.alertSha256).run(setup, { obtainEndpoint(p) }) { step, state ->
+                val outcome = AlertSetupRunner(r, hostScripts.alertUnit, hostScripts.alertSha256).run(setup, { obtainEndpoint(p) }) { step, state ->
                     run = run.copy(steps = run.steps.map { if (it.first == step) step to state else it })
                 }
                 when (outcome) {
                     is SetupRun.Done -> {
                         runCatching {
-                            graph.alertSetups.put(p.id, io.github.tuthan.paddock.alerts.SavedAlertSetup(setup.mode, setup.ntfyUrl, setup.ntfyTopic, setup.ntfyToken, graph.clock.nowMillis()))
-                            if (setup.mode == DeliveryMode.Push) graph.push.markShared(p.id)
-                            else if (reg != null) { graph.push.unregister(p.id); runCatching { r.removePushEndpoint() } } // the earlier way is gone: no stale address left behind
+                            alertSetups.put(p.id, io.github.tuthan.paddock.alerts.SavedAlertSetup(setup.mode, setup.ntfyUrl, setup.ntfyTopic, setup.ntfyToken, clock.nowMillis()))
+                            if (setup.mode == DeliveryMode.Push) push.markShared(p.id)
+                            else if (reg != null) { push.unregister(p.id); runCatching { r.removePushEndpoint() } } // the earlier way is gone: no stale address left behind
                         }
                         run = run.copy(running = false, finished = true, note = outcome.lingerNote)
                     }
@@ -186,9 +194,9 @@ internal fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
                 try {
                     when (val o = r.turnOff()) {
                         is SetupOutcome.Done -> {
-                            runCatching { graph.push.unregister(p.id) }
+                            runCatching { push.unregister(p.id) }
                             // Kept with its topic, but off: turning alerts on again changes nothing the ntfy app subscribed to.
-                            saved?.let { s -> runCatching { graph.alertSetups.put(p.id, s.copy(enabled = false)) } }
+                            saved?.let { s -> runCatching { alertSetups.put(p.id, s.copy(enabled = false)) } }
                             result = "Alerts are off for ${p.name}."; resultIsProblem = false
                         }
                         SetupOutcome.NoSystemd -> { result = AlertSetupCopy.NO_SYSTEMD; resultIsProblem = true }

@@ -7,17 +7,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import io.github.tuthan.paddock.alerts.AlertCopy
 import io.github.tuthan.paddock.alerts.AlertEvent
+import io.github.tuthan.paddock.alerts.AlertInbox
 import io.github.tuthan.paddock.alerts.AlertOutcome
+import io.github.tuthan.paddock.alerts.AlertService
 import io.github.tuthan.paddock.alerts.AlertState
 import io.github.tuthan.paddock.answers.AnswerRules
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.billing.ProCapabilities
+import io.github.tuthan.paddock.billing.ProService
 import io.github.tuthan.paddock.host.ConnectAttempt
 import io.github.tuthan.paddock.host.ConnectOutcome
 import io.github.tuthan.paddock.host.ConnectOutcomes
+import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.hostkey.HostKeyBroker
 import io.github.tuthan.paddock.hostprofile.Boot
+import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.hostprofile.PairingCopy
 import io.github.tuthan.paddock.hostprofile.PairingEvent
+import io.github.tuthan.paddock.hostprofile.PairingInbox
 import io.github.tuthan.paddock.live.ConnectFix
 import io.github.tuthan.paddock.live.DownReasonText
 import io.github.tuthan.paddock.live.HostPhase
@@ -39,39 +46,39 @@ private const val CONNECT_WAIT_MILLIS = 45_000L
  * Where Review lands for [terminalId]: the Output tab, which carries the Yes/No entry, when this machine can answer that agent's prompts from the phone
  * ([AnswerRules.canAnswerFromPhone]); otherwise the Terminal tab, observing. Read when the tap happens, from what the app knows then.
  */
-internal fun reviewTab(graph: AppGraph, terminalId: String): AgentTab {
-    val host = (graph.hostUi.view.value.phase as? HostPhase.Monitoring)?.host ?: return AgentTab.Terminal
+internal fun reviewTab(hostUi: HostUiModel, proService: ProService, terminalId: String): AgentTab {
+    val host = (hostUi.view.value.phase as? HostPhase.Monitoring)?.host ?: return AgentTab.Terminal
     val kind = host.reconciler.installed.value?.snapshot?.agents?.firstOrNull { it.terminalId == terminalId }?.agent
-    return if (AnswerRules.canAnswerFromPhone(kind, wired = host.answers != null, locked = graph.proService.locked(ProCapabilities.GUARDED_ANSWERS))) AgentTab.Output else AgentTab.Terminal
+    return if (AnswerRules.canAnswerFromPhone(kind, wired = host.answers != null, locked = proService.locked(ProCapabilities.GUARDED_ANSWERS))) AgentTab.Output else AgentTab.Terminal
 }
 
 /** What an alert tap leads to. The herd shows while the connection and the read come up; the alert is resolved against that read, never a cached one. */
 @Composable
-internal fun AlertEvents(graph: AppGraph, nav: NavState, boot: Boot) {
-    val alertEvent by graph.alerts.event.collectAsState()
+internal fun AlertEvents(alerts: AlertInbox, alertService: AlertService, hostUi: HostUiModel, proService: ProService, nav: NavState, boot: Boot) {
+    val alertEvent by alerts.event.collectAsState()
     LaunchedEffect(alertEvent, boot) {
         val e = alertEvent ?: return@LaunchedEffect
         if (boot == Boot.Loading) return@LaunchedEffect
         when (e) {
-            is AlertEvent.Invalid -> { nav.alertNotice = AlertCopy.INVALID_LINK; graph.alerts.consume(e) }
+            is AlertEvent.Invalid -> { nav.alertNotice = AlertCopy.INVALID_LINK; alerts.consume(e) }
             is AlertEvent.MachineWoke -> {
                 // A push that named no terminal: the herd of that machine, read fresh, and what that read says in counts.
                 nav.alertNotice = AlertCopy.OPENING
                 nav.route = Route.Home
-                val r = graph.alertService.resolveMachine(e)
+                val r = alertService.resolveMachine(e)
                 val machineOutcome = r.outcome
                 nav.alertNotice = when {
                     r.unknownMachine -> AlertCopy.UNKNOWN_MACHINE
                     machineOutcome == null -> AlertCopy.unreachable(r.machine)
                     else -> AlertCopy.machineNotice(machineOutcome, r.machine)
                 }
-                graph.alerts.consume(e)
+                alerts.consume(e)
             }
             is AlertEvent.Arrived -> {
                 // The herd shows while the connection and the read come up; the alert is resolved against that read, never a cached one.
                 nav.alertNotice = AlertCopy.OPENING
                 nav.route = Route.Home
-                val resolved = graph.alertService.resolveAlert(e)
+                val resolved = alertService.resolveAlert(e)
                 val outcome = resolved.outcome
                 if (outcome == null) nav.alertNotice = AlertCopy.unreachable(resolved.machine)
                 else {
@@ -81,13 +88,13 @@ internal fun AlertEvents(graph: AppGraph, nav: NavState, boot: Boot) {
                             // Opening a Done from its alert is the user acknowledging it, as tapping its row is.
                             if (outcome.state == AlertState.Done) resolved.row?.takeIf { it.state == StateWord.Done }?.let { resolved.host?.markSeen(it) }
                             // A blocked agent opens where Review prompt does: its Output tab when the phone can answer it, else its Terminal tab, observing.
-                            nav.openAgent(outcome.terminalId, if (outcome.state == AlertState.Blocked) reviewTab(graph, outcome.terminalId) else AgentTab.Output)
+                            nav.openAgent(outcome.terminalId, if (outcome.state == AlertState.Blocked) reviewTab(hostUi, proService, outcome.terminalId) else AgentTab.Output)
                         }
                         is AlertOutcome.Changed -> nav.openAgent(outcome.terminalId)
                         is AlertOutcome.NoLongerObserved -> nav.route = Route.Home
                     }
                 }
-                graph.alerts.consume(e)
+                alerts.consume(e)
             }
         }
     }
@@ -95,8 +102,8 @@ internal fun AlertEvents(graph: AppGraph, nav: NavState, boot: Boot) {
 
 /** A pairing link (a tap, or Paste a pairing link): Add machine opens pre-filled. Nothing connects and nothing is trusted from here. */
 @Composable
-internal fun PairingEvents(graph: AppGraph, nav: NavState, boot: Boot) {
-    val pairingEvent by graph.pairing.event.collectAsState()
+internal fun PairingEvents(pairing: PairingInbox, nav: NavState, boot: Boot) {
+    val pairingEvent by pairing.event.collectAsState()
     LaunchedEffect(pairingEvent, boot) {
         val e = pairingEvent ?: return@LaunchedEffect
         if (boot == Boot.Loading) return@LaunchedEffect
@@ -104,7 +111,7 @@ internal fun PairingEvents(graph: AppGraph, nav: NavState, boot: Boot) {
             is PairingEvent.Invalid -> nav.alertNotice = PairingCopy.invalid(e.reason)
             is PairingEvent.Link -> nav.openPairing(e.link, boot)
         }
-        graph.pairing.consume(e)
+        pairing.consume(e)
     }
 }
 
@@ -113,12 +120,12 @@ internal fun PairingEvents(graph: AppGraph, nav: NavState, boot: Boot) {
  * scope and can end after a rotation or while the app is away, and whichever composition is here then says it once.
  */
 @Composable
-internal fun RemovalOutcomes(graph: AppGraph, nav: NavState) {
-    val removal by graph.machineBook.removalOutcome.collectAsState()
+internal fun RemovalOutcomes(machineBook: MachineBook, nav: NavState) {
+    val removal by machineBook.removalOutcome.collectAsState()
     LaunchedEffect(removal) {
         val r = removal ?: return@LaunchedEffect
         nav.removalShown(r.id, r.name, r.result)
-        graph.machineBook.consumeRemoval(r)
+        machineBook.consumeRemoval(r)
     }
 }
 
@@ -127,7 +134,7 @@ internal fun RemovalOutcomes(graph: AppGraph, nav: NavState) {
  * It keeps following after a failure (a retry that succeeds, or a host key trusted late, must still end the attempt) and after the wait ran out.
  */
 @Composable
-internal fun FollowConnectAttempt(graph: AppGraph, nav: NavState) {
+internal fun FollowConnectAttempt(broker: HostKeyBroker, hostUi: HostUiModel, nav: NavState) {
     val add = nav.add
     val attemptKey = add.attempt?.let { it.profileId to it.connecting }
     LaunchedEffect(attemptKey) {
@@ -135,15 +142,15 @@ internal fun FollowConnectAttempt(graph: AppGraph, nav: NavState) {
         coroutineScope {
             // The time is counted only while no question is on screen: comparing a fingerprint with the desktop's takes as long as the user needs.
             if (connecting) launch {
-                graph.broker.firstTrust.map { it != null }.distinctUntilChanged().collectLatest { asking ->
+                broker.firstTrust.map { it != null }.distinctUntilChanged().collectLatest { asking ->
                     if (!asking) {
                         delay(CONNECT_WAIT_MILLIS)
                         if (add.attempt?.profileId == id && add.attempt?.connecting == true) add.attempt = ConnectAttempt(id, ConnectOutcomes.STILL_WAITING, ConnectFix.Retry)
                     }
                 }
             }
-            graph.hostUi.view.map { it.phase }.distinctUntilChanged().collect { phase ->
-                when (val outcome = ConnectOutcomes.outcome(phase, id, graph.hostUi.phaseBeforeAttempt)) {
+            hostUi.view.map { it.phase }.distinctUntilChanged().collect { phase ->
+                when (val outcome = ConnectOutcomes.outcome(phase, id, hostUi.phaseBeforeAttempt)) {
                     ConnectOutcome.Connected -> {
                         nav.connected()
                         this@coroutineScope.cancel()
