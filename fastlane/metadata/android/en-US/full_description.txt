@@ -15,7 +15,7 @@ Four things are Pro, a one-time purchase in the Google Play build. The free buil
 • Home-screen widgets for the herd. Without Pro, the app itself shows the herd
 
 <b>How it connects</b>
-Paddock talks to your machine over SSH only, with a key made on the phone that never leaves it. There is no Paddock server, no account, no analytics and no crash upload. Agent output is shown and not kept.
+Paddock controls your machine over SSH, with a key made on the phone that never leaves it. Finding or pairing a machine on your Wi-Fi, and waking a sleeping one, use your local network, only when you ask. Alerts reach a locked phone through a relay on your machine and ntfy or UnifiedPush, which you choose. There is no Paddock server, no account, and no analytics or crash reporting of Paddock's own. The Google Play build also contains Google's billing library for the Pro purchase. Agent output is shown and not kept.
 
 <b>You need</b>
 herdr 0.9.1 on a machine you can reach over SSH. Paddock is an independent project and is not affiliated with herdr.
