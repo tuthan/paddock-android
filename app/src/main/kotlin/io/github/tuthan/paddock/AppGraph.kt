@@ -58,7 +58,7 @@ import io.github.tuthan.paddock.ops.FileSnippetStore
 import io.github.tuthan.paddock.ops.ManualInputMode
 import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ports.Clock
-import io.github.tuthan.paddock.relay.sha256Hex
+import io.github.tuthan.paddock.relay.PinnedHostScripts
 import io.github.tuthan.paddock.settings.AppSettings
 import io.github.tuthan.paddock.settings.FileAppSettingsStore
 import io.github.tuthan.paddock.ssh.ConnectFailure
@@ -222,30 +222,8 @@ class AppGraph(private val app: Application) {
     /** Whether Paddock's screens are covered by the lock (Settings > Privacy > Lock Paddock). Elapsed real time, so the date changing cannot stretch the timeout. */
     val appLock = io.github.tuthan.paddock.applock.AppLock { android.os.SystemClock.elapsedRealtime() }
 
-    private val relayScript: ByteArray = app.assets.open("paddock-relay.py").use { it.readBytes() }
-    private val relayPin: String = app.assets.open("paddock-relay.sha256").use { it.readBytes().toString(Charsets.UTF_8).trim() }
-    init { check(sha256Hex(relayScript) == relayPin) { "the bundled relay does not match its pin" } }
-    private val controlScript: ByteArray = app.assets.open("paddock-control.py").use { it.readBytes() }
-    private val controlPin: String = app.assets.open("paddock-control.sha256").use { it.readBytes().toString(Charsets.UTF_8).trim() }
-    init { check(sha256Hex(controlScript) == controlPin) { "the bundled control helper does not match its pin" } }
-
-    /** The alert relay's script, unit and example configuration, each checked against its pin (host/SOURCE.json) when the graph is built. */
-    private fun pinnedAsset(name: String, pin: String): ByteArray = app.assets.open(name).use { it.readBytes() }.also {
-        val want = app.assets.open(pin).use { p -> p.readBytes().toString(Charsets.UTF_8).trim() }
-        check(sha256Hex(it) == want) { "the bundled $name does not match its pin" }
-    }
-    private val alertScript: ByteArray = pinnedAsset("paddock-alert-relay.py", "paddock-alert-relay.py.sha256")
-    val alertScriptSha256: String = sha256Hex(alertScript)
-    val alertUnit: String = pinnedAsset("paddock-alert-relay.service", "paddock-alert-relay.service.sha256").toString(Charsets.UTF_8)
-    val alertConfigExample: String = pinnedAsset("alert-relay.example.toml", "alert-relay.example.toml.sha256").toString(Charsets.UTF_8)
-
-    /** The permission-request writer and the Claude Code hook (Phase 08), each checked against its pin when the graph is built. */
-    private val decideScript: ByteArray = pinnedAsset("paddock-decide.py", "paddock-decide.py.sha256")
-    val decideScriptSha256: String = sha256Hex(decideScript)
-    private val hookScript: ByteArray = pinnedAsset("paddock-claude-permission-hook.py", "paddock-claude-permission-hook.py.sha256")
-    val hookScriptSha256: String = sha256Hex(hookScript)
-    private val opencodeScript: ByteArray = pinnedAsset("paddock-opencode-permission.js", "paddock-opencode-permission.js.sha256")
-    val opencodeScriptSha256: String = sha256Hex(opencodeScript)
+    /** Every script, unit file and example configuration Paddock installs on a machine, each checked against its pin (host/SOURCE.json) when the graph is built. */
+    val hostScripts = PinnedHostScripts { name -> app.assets.open(name).use { it.readBytes() } }
 
     private val _boot = MutableStateFlow(Boot.Loading)
     val boot: StateFlow<Boot> = _boot.asStateFlow()
@@ -630,8 +608,8 @@ class AppGraph(private val app: Application) {
         c?.stop()
         // The watched tap's facts were about the machine before; this machine's send-only facts said it was not watched (MachineWake.watching).
         if (c?.profile?.id != profile.id) machineWake.watching(profile.id)
-        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, relayScript, relayPin, sessionName = profile.session, controlScript = controlScript, controlSha256 = controlPin, journal = journal, alertScript = alertScript, alertSha256 = alertScriptSha256,
-            decideScript = decideScript, decideSha256 = decideScriptSha256, hookScript = hookScript, hookSha256 = hookScriptSha256, opencodeScript = opencodeScript, opencodeSha256 = opencodeScriptSha256, sagaStore = sagaStore,
+        val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, hostScripts.relay, hostScripts.relaySha256, sessionName = profile.session, controlScript = hostScripts.control, controlSha256 = hostScripts.controlSha256, journal = journal, alertScript = hostScripts.alert, alertSha256 = hostScripts.alertSha256,
+            decideScript = hostScripts.decide, decideSha256 = hostScripts.decideSha256, hookScript = hostScripts.hook, hookSha256 = hostScripts.hookSha256, opencodeScript = hostScripts.opencode, opencodeSha256 = hostScripts.opencodeSha256, sagaStore = sagaStore,
             wakeCapture = { session -> io.github.tuthan.paddock.wake.WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) },
             osProbe = { session -> io.github.tuthan.paddock.hostprofile.HostOsProbe.read(session) })
         controller = next

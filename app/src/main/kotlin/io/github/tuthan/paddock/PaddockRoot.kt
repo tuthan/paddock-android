@@ -1467,9 +1467,9 @@ private fun GuardedAnswersRoute(graph: AppGraph, onBack: () -> Unit) {
     }
     GuardedAnswers(
         GuardedAnswersUi(
-            profile?.name ?: "this machine", answerHost?.decideSha256 ?: graph.decideScriptSha256, answerHost?.hookSha256 ?: graph.hookScriptSha256,
+            profile?.name ?: "this machine", answerHost?.decideSha256 ?: graph.hostScripts.decideSha256, answerHost?.hookSha256 ?: graph.hostScripts.hookSha256,
             hostState, installing, installError, window, config, snippet, copied,
-            opencodeSha256 = answerHost?.opencodeSha256 ?: graph.opencodeScriptSha256, codexWindowSeconds = codexWindow,
+            opencodeSha256 = answerHost?.opencodeSha256 ?: graph.hostScripts.opencodeSha256, codexWindowSeconds = codexWindow,
             codexSnippet = codexSnippet, opencodeCommand = opencodeCommand,
         ),
         onBack = onBack,
@@ -1571,7 +1571,7 @@ private fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
             platform = platform,
         )
     }
-    val script = setupOrNull()?.let { s -> runCatching { AlertSetupScript.build(graph.alertUnit, s, graph.alertScriptSha256) }.getOrNull() }
+    val script = setupOrNull()?.let { s -> runCatching { AlertSetupScript.build(graph.hostScripts.alertUnit, s, graph.hostScripts.alertSha256) }.getOrNull() }
 
     suspend fun obtainEndpoint(p: HostProfile): String? {
         val pkg = form.distributor?.takeIf { d -> distributors.any { it.packageName == d } } ?: distributors.firstOrNull()?.packageName ?: return null
@@ -1585,7 +1585,7 @@ private fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
 
     AlertRelay(
         AlertRelayUi(
-            profile?.name ?: "this machine", profile?.id ?: "", graph.alertScriptSha256, hostState,
+            profile?.name ?: "this machine", profile?.id ?: "", graph.hostScripts.alertSha256, hostState,
             saved = saved?.takeIf { it.enabled },
             push = PushUi(
                 distributors = distributors.map { PushDistributorUi(it.packageName, it.label) },
@@ -1615,7 +1615,7 @@ private fun AlertRelayRoute(graph: AppGraph, onBack: () -> Unit) {
             val steps = (if (setup.mode == DeliveryMode.Push) SetupStep.entries else SetupStep.entries.filter { it != SetupStep.Register && it != SetupStep.SendAddress })
             run = SetupRunUi(steps = steps.map { it to StepState.Pending }, running = true); result = null; copied = false
             scope.launch {
-                val outcome = AlertSetupRunner(r, graph.alertUnit, graph.alertScriptSha256).run(setup, { obtainEndpoint(p) }) { step, state ->
+                val outcome = AlertSetupRunner(r, graph.hostScripts.alertUnit, graph.hostScripts.alertSha256).run(setup, { obtainEndpoint(p) }) { step, state ->
                     run = run.copy(steps = run.steps.map { if (it.first == step) step to state else it })
                 }
                 when (outcome) {
