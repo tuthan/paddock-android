@@ -59,6 +59,8 @@ import io.github.tuthan.paddock.ops.ManualInputMode
 import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.relay.PinnedHostScripts
+import io.github.tuthan.paddock.wake.WakeLink
+import io.github.tuthan.paddock.wake.WakeService
 import io.github.tuthan.paddock.settings.AppSettings
 import io.github.tuthan.paddock.settings.SettingsController
 import io.github.tuthan.paddock.settings.FileAppSettingsStore
@@ -163,49 +165,6 @@ class AppGraph(private val app: Application) {
     @Volatile private var wakeWatcher: Job? = null
     @Volatile private var osWatcher: Job? = null
     @Volatile private var pairingWatcher: Job? = null
-    /**
-     * The Wake tap on the watched machine (see [wake]). Lazy because it reads [hostUi], which is declared further down; nothing in it
-     * runs before a tap.
-     */
-    private val wakeTap by lazy {
-        io.github.tuthan.paddock.wake.WakeTap(
-            scope, clock,
-            send = { _profile.value?.let { sendWake(profiles.get(it.id) ?: it) } },
-            link = { hostUi.view.value.let { io.github.tuthan.paddock.wake.WakeLink.of(it.phase, it.freshness) } },
-            links = hostUi.view.map { io.github.tuthan.paddock.wake.WakeLink.of(it.phase, it.freshness) },
-            reconnect = { retry() },
-        )
-    }
-    /** Wake for every saved machine (decision D2): the watched one through [wakeTap], any other as a send only, from its stored address and relay. */
-    private val machineWake by lazy {
-        io.github.tuthan.paddock.wake.MachineWake(scope, clock, wakeTap, watchedId = { _profile.value?.id }, sendTo = { id -> profiles.get(id)?.let { sendWake(it) } })
-    }
-
-    /** One magic-packet send for [profile] from where the phone is now; null when its hardware address was never read. Nothing is read over SSH. */
-    private suspend fun sendWake(profile: HostProfile): io.github.tuthan.paddock.wake.WakeSendResult? {
-        val target = profile.wake ?: return null
-        return withContext(Dispatchers.IO) {
-            val candidates = io.github.tuthan.paddock.wake.WakePaths.candidates(lanPaths.paths(), profile.host, target.iface)
-            io.github.tuthan.paddock.wake.WakeSender(sockets, permissionMissing = { gate.lanAccessMissing() }).send(target, candidates, target.relay)
-        }
-    }
-
-    /** What the last Wake tap on the watched machine came to; null before any tap and after switching machines. */
-    val wakeFacts: StateFlow<io.github.tuthan.paddock.wake.WakeFacts?> get() = wakeTap.facts
-
-    /** One flow per saved machine, made once: a screen asks for it in composition, and a removed machine's goes with it ([removeMachine]). */
-    private val wakeFactsByMachine = java.util.concurrent.ConcurrentHashMap<String, Pair<Job, StateFlow<io.github.tuthan.paddock.wake.WakeFacts?>>>()
-
-    /**
-     * What the last Wake tap for [profileId] came to, watched or not: the watched machine's facts while it is the watched one ([wakeFacts], with the
-     * two later facts), otherwise its send-only facts (the packet line and "Paddock is not watching this machine"). Null before any tap.
-     */
-    fun wakeFacts(profileId: String): StateFlow<io.github.tuthan.paddock.wake.WakeFacts?> = wakeFactsByMachine.computeIfAbsent(profileId) {
-        val job = SupervisorJob(scope.coroutineContext[Job])
-        val flow = kotlinx.coroutines.flow.combine(_profile, wakeTap.facts, machineWake.others) { watched, mine, others -> if (watched?.id == profileId) mine else others[profileId] }
-            .stateIn(CoroutineScope(scope.coroutineContext + job), kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), machineWake.facts(profileId))
-        job to flow
-    }.second
     @Volatile private var lastWidgetCache: io.github.tuthan.paddock.widget.WidgetCache? = null
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
@@ -259,6 +218,12 @@ class AppGraph(private val app: Application) {
     private suspend fun refreshMachines() { machinesWrite.withLock { runCatching { profiles.list() }.onSuccess { _machines.value = it } } }
 
     val hostUi = HostUiModel(scope)
+    /** Wake for every saved machine: the watched one through its tap, any other as a send only ([WakeService]). */
+    val wakes = WakeService(
+        scope, clock, lanPaths, sockets, permissionMissing = { gate.lanAccessMissing() }, watched = _profile, profile = { id -> profiles.get(id) },
+        link = { hostUi.view.value.let { WakeLink.of(it.phase, it.freshness) } }, links = hostUi.view.map { WakeLink.of(it.phase, it.freshness) },
+        reconnect = { retry() },
+    )
     /** The open terminal session, kept through a rotation so turning the phone does not release control. */
     val terminals = io.github.tuthan.paddock.host.Retained<io.github.tuthan.paddock.terminal.TerminalSession>(scope) { it.close() }
     private val lock = Any()
@@ -390,7 +355,7 @@ class AppGraph(private val app: Application) {
         wakeWatcher?.cancel(); wakeWatcher = null
         osWatcher?.cancel(); osWatcher = null
         pairingWatcher?.cancel(); pairingWatcher = null
-        wakeTap.forget()
+        wakes.forgetWatched()
         lastWidgetCache = null
         hostUi.detach()
     }
@@ -440,8 +405,7 @@ class AppGraph(private val app: Application) {
                 return@withLock result
             }
             // Its Wake facts and their flow go with it: a later machine with the same id starts with none.
-            machineWake.forget(id)
-            wakeFactsByMachine.remove(id)?.first?.cancel()
+            wakes.forget(id)
             probe.forget(id)
             if (wasWatched) {
                 val next = MachineRoster.after(_machines.value, id, prefs.value.chosenProfileId)
@@ -479,7 +443,7 @@ class AppGraph(private val app: Application) {
             _profile.value = profile
             // At the switch, not only when its connection starts (watch runs only in the foreground): from now on this machine's facts are the watched
             // tap's, and its send-only "not watching this machine" line is no longer true. watch() says it again for a controller it replaces; twice is harmless.
-            machineWake.watching(profile.id)
+            wakes.watching(profile.id)
             if (triggers.foreground.value) watch(profile)
         }
         profile
@@ -534,7 +498,7 @@ class AppGraph(private val app: Application) {
         if (c != null && c.profile.copy(wake = null, os = null, detectedOs = null) == profile.copy(wake = null, os = null, detectedOs = null)) { c.resume(); return@synchronized }
         c?.stop()
         // The watched tap's facts were about the machine before; this machine's send-only facts said it was not watched (MachineWake.watching).
-        if (c?.profile?.id != profile.id) machineWake.watching(profile.id)
+        if (c?.profile?.id != profile.id) wakes.watching(profile.id)
         val next = HostSessionController(scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, hostScripts.relay, hostScripts.relaySha256, sessionName = profile.session, controlScript = hostScripts.control, controlSha256 = hostScripts.controlSha256, journal = journal, alertScript = hostScripts.alert, alertSha256 = hostScripts.alertSha256,
             decideScript = hostScripts.decide, decideSha256 = hostScripts.decideSha256, hookScript = hostScripts.hook, hookSha256 = hostScripts.hookSha256, opencodeScript = hostScripts.opencode, opencodeSha256 = hostScripts.opencodeSha256, sagaStore = sagaStore,
             wakeCapture = { session -> io.github.tuthan.paddock.wake.WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) },
@@ -627,30 +591,6 @@ class AppGraph(private val app: Application) {
         pairingCoordinator.start(host, port, sid, line, key.fingerprint)
         return true
     }
-
-    /**
-     * True when this phone could send a wake packet for [profile] from where it is now: its hardware address is read, and either a
-     * network holding the machine can carry a broadcast or a VPN can carry the packet to a saved relay. A relay alone is not enough
-     * (cellular and a non-VPN network away from the machine never use it), and neither is a network the machine is not on.
-     */
-    fun wakeReady(profile: HostProfile): Boolean {
-        val target = profile.wake?.takeIf { it.available } ?: return false
-        val candidates = io.github.tuthan.paddock.wake.WakePaths.candidates(lanPaths.paths(), profile.host, target.iface)
-        return io.github.tuthan.paddock.wake.WakePaths.canSend(candidates, target.relay)
-    }
-
-    /**
-     * One Wake tap on the watched machine: send, show the three facts, ask for a reconnect at once. A tap while one is sending, or
-     * inside the guard of one that sent something, does nothing.
-     */
-    fun wake() = wakeTap.tap()
-
-    /**
-     * One Wake tap for any saved machine (decision D2, Free): the watched one as [wake]; any other only sends, to its stored address or saved relay,
-     * and its facts say that whether it answered is not observed here. That send never reconnects and never follows a connection: the connection
-     * is the watched machine's. A tap while one is sending for that machine, or inside the guard of one that sent something, does nothing.
-     */
-    fun wake(profileId: String) = machineWake.tap(profileId)
 
     /**
      * Saves, replaces or clears the relay for waking [profileId] from away. Before any reading the profile gets a "not read yet" target

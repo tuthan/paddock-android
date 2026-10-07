@@ -536,10 +536,10 @@ private fun HomeRoute(
     val view by graph.hostUi.view.collectAsState()
     val now = rememberNow()
     val name = profile?.name ?: "this machine"
-    val wakeFacts by graph.wakeFacts.collectAsState()
+    val wakeFacts by graph.wakes.watchedFacts.collectAsState()
     // Read again when the connection changes and on every return: the phone may have joined or left a network meanwhile.
     val homeResumes = rememberResumes()
-    val wakeReady = remember(profile, view.phase, homeResumes) { profile?.let { graph.wakeReady(it) } == true }
+    val wakeReady = remember(profile, view.phase, homeResumes) { profile?.let { graph.wakes.ready(it) } == true }
     val screen = HomeUiMapper.map(name, view, now, wakeAvailable = wakeReady && wakeFacts?.canWakeAgain(now) != false)
     val ctx = LocalContext.current
     // The captured prompt is agent output, so while it is on Home the window is protected like Output is.
@@ -606,7 +606,7 @@ private fun HomeRoute(
             Recovery.InstallRelay -> setRelayDismissed(false)
             Recovery.Retry -> graph.retry()
             Recovery.SetUpKey -> onSetUpKey()
-            Recovery.Wake -> graph.wake()
+            Recovery.Wake -> graph.wakes.wake()
             Recovery.ShowCommand -> onShowCommand()
             null -> Unit
         }
@@ -1164,7 +1164,7 @@ private fun MachinesRoute(graph: AppGraph, busy: Boolean, onBack: () -> Unit, on
     LaunchedEffect(Unit) { graph.push.refresh() }
     val resumes = rememberResumes()
     val health = watchedHealth(graph)
-    val ready = remember(machines, resumes, view.phase) { machines.associate { it.id to graph.wakeReady(it) } }
+    val ready = remember(machines, resumes, view.phase) { machines.associate { it.id to graph.wakes.ready(it) } }
     val cards = MachineRoster.rows(machines, profile?.id, settings.chosenProfileId).mapNotNull { row ->
         machines.firstOrNull { it.id == row.id }?.let { p -> MachineCard(row, machineStateLine(row, p, health, ready[p.id] == true, registrations)) }
     }
@@ -1196,8 +1196,8 @@ private fun MachineRoute(
     val now = rememberNow()
     // Read again when the connection changes and on every return: the phone may have joined or left a network meanwhile.
     val resumes = rememberResumes()
-    val ready = remember(machine, resumes, view.phase) { graph.wakeReady(machine) }
-    val facts by remember(machine.id) { graph.wakeFacts(machine.id) }.collectAsState()
+    val ready = remember(machine, resumes, view.phase) { graph.wakes.ready(machine) }
+    val facts by remember(machine.id) { graph.wakes.facts(machine.id) }.collectAsState()
     val row = MachineRoster.rows(machines, profile?.id, settings.chosenProfileId).first { it.id == machine.id }
     val wake = io.github.tuthan.paddock.host.WakeWordsMapper.words(
         machine, facts, now, wakeReady = ready,
@@ -1222,7 +1222,7 @@ private fun MachineRoute(
             onGuardedAnswers = onGuardedAnswers,
             onCopyWakeCommand = { cmd -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock wake command", cmd)) },
             onSaveWakeRelay = { relay -> scope.launch { graph.setWakeRelay(machine.id, relay) } },
-            onWake = { graph.wake(machine.id) },
+            onWake = { graph.wakes.wake(machine.id) },
             onRename = { name -> scope.launch { if (graph.renameMachine(machine.id, name)) onNotice(MachineCopy.renamed(name)) } },
             onSetOs = { os -> scope.launch { graph.setMachineOs(machine.id, os) } },
         )

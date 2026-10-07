@@ -193,20 +193,20 @@ class MachineRemovalGraphTest {
         graph.addMachine(a.copy(wake = target)); graph.addMachine(b)
         assertEquals(b.id, graph.profile.value?.id)
         // Kept subscribed for the whole test, so the flow's value is the live one and not the last one before it stopped.
-        val keep = launch(Dispatchers.Default) { graph.wakeFacts(a.id).collect { } }
+        val keep = launch(Dispatchers.Default) { graph.wakes.facts(a.id).collect { } }
         try {
-            val watchedBefore = graph.wakeFacts.value
-            graph.wake(a.id)
-            val facts = kotlinx.coroutines.withTimeout(5_000) { graph.wakeFacts(a.id).first { it != null } }!!
+            val watchedBefore = graph.wakes.watchedFacts.value
+            graph.wakes.wake(a.id)
+            val facts = kotlinx.coroutines.withTimeout(5_000) { graph.wakes.facts(a.id).first { it != null } }!!
             assertTrue("recorded as a send for a machine that is not watched", facts.notWatched)
             assertTrue("and the machine list still has the reading", graph.machines.value.single { it.id == a.id }.wake != null)
-            assertEquals("the watched machine's facts are untouched", watchedBefore, graph.wakeFacts.value)
+            assertEquals("the watched machine's facts are untouched", watchedBefore, graph.wakes.watchedFacts.value)
             // Watching a makes its send-only facts go: their "not watching this machine" line is no longer true. While a is watched its facts are the
             // watched tap's, so the drop shows once the phone is back on b: a's old line does not come back. (The switch drops them itself, foreground or not.)
             graph.watchProfile(a.id, chosen = true)
             graph.watchProfile(b.id)
             kotlinx.coroutines.delay(300)
-            assertNull("a's send-only facts went when it was watched", graph.wakeFacts(a.id).value)
+            assertNull("a's send-only facts went when it was watched", graph.wakes.facts(a.id).value)
         } finally { keep.cancel() }
     }
 
