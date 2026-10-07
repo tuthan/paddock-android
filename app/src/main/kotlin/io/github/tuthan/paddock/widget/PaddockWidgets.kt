@@ -123,7 +123,7 @@ class WidgetRefreshJobService : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         val graph = (application as PaddockApp).graph
         work = graph.scope.launch {
-            val outcome = try { graph.refreshWidgetCache() } catch (e: Exception) { null }
+            val outcome = try { graph.widgets.refresh() } catch (e: Exception) { null }
             android.util.Log.i("Widgets", "refresh: ${outcome ?: "failed"}")
             jobFinished(params, false)
         }

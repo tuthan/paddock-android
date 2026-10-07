@@ -52,7 +52,7 @@ class ProGraphTest {
 
     @Test fun aLockedBuildDoesNotSpendABackgroundReadOnAWidgetThatDrawsNothing() {
         assumeTrue("a build with -PpaddockUnlocked=false", !Distribution.UNLOCKED)
-        val outcome = kotlinx.coroutines.runBlocking { graph.refreshWidgetCache() }
+        val outcome = kotlinx.coroutines.runBlocking { graph.widgets.refresh() }
         assertTrue(outcome, outcome.startsWith("skipped: widgets are Pro"))
     }
 
@@ -60,7 +60,7 @@ class ProGraphTest {
         assumeTrue("a build with -PpaddockUnlocked=false that sells Pro (the play flavor)", !Distribution.UNLOCKED && Distribution.SELLS_PRO)
         withSavedEntitlement(EntitlementState(status = ProStatus.PRO, verifiedAtMillis = 1L, acknowledged = true)) {
             // The saved answer decides, even though this graph's view of Pro was loaded before the file changed.
-            val outcome = kotlinx.coroutines.runBlocking { graph.refreshWidgetCache() }
+            val outcome = kotlinx.coroutines.runBlocking { graph.widgets.refresh() }
             assertFalse(outcome, outcome.startsWith("skipped: widgets are Pro"))
         }
     }
@@ -69,7 +69,7 @@ class ProGraphTest {
         // A play install of the same application id left PRO behind; the foss build cannot verify it, so it is not honoured (the widget and the refresh agree: PaddockWidgets.locked).
         assumeTrue("a locked foss build (-PpaddockUnlocked=false)", !Distribution.UNLOCKED && !Distribution.SELLS_PRO)
         withSavedEntitlement(EntitlementState(status = ProStatus.PRO, verifiedAtMillis = 1L, acknowledged = true)) {
-            val outcome = kotlinx.coroutines.runBlocking { graph.refreshWidgetCache() }
+            val outcome = kotlinx.coroutines.runBlocking { graph.widgets.refresh() }
             assertTrue(outcome, outcome.startsWith("skipped: widgets are Pro"))
         }
     }
