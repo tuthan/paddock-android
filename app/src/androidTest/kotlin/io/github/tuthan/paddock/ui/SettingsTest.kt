@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -275,10 +276,17 @@ class SettingsTest {
     }
 
     @Test fun theRelayModeNamesItsProviderInSettings() {
-        // The privacy checklist: relay mode says who carries the message, in the row that opens the alert relay screen, not only inside it.
+        // The privacy checklist: relay mode says who carries the message, in Settings, not only inside the relay screen on the machine's page.
         showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState())
         rule.onNodeWithText(io.github.tuthan.paddock.alerts.AlertDelivery.MODE).performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Through ntfy: the public server or your own").assertIsDisplayed()
+    }
+
+    @Test fun locked_phone_alerts_are_a_label_here_and_the_setup_is_on_the_machine() {
+        // The relay, its topic and its registration belong to one machine: Settings says how alerts reach a locked phone and where the setup is, and has no button for it.
+        showAlerts(io.github.tuthan.paddock.ui.screens.AlertsState())
+        rule.onNodeWithText("Locked-phone alerts").performScrollTo().assertIsDisplayed().assertHasNoClickAction()
+        rule.onNodeWithText(io.github.tuthan.paddock.alerts.AlertDelivery.PER_MACHINE).performScrollTo().assertIsDisplayed()
     }
 
     @Test fun theSwitchesReportTheirNewValues() {
@@ -596,7 +604,7 @@ class SettingsTest {
             PaddockTheme(darkTheme = true) {
                 SettingsRoute(
                     graph.prefs, graph.machineBook, graph.hostUi, graph.proService, graph.gate, graph.journal, graph.notificationAccess, graph.appLock, graph.clock,
-                    onBack = {}, onMachines = {}, onEditSnippets = {}, onAlertRelay = {},
+                    onBack = {}, onMachines = {}, onEditSnippets = {},
                 )
                 ProGateHost(graph.proService, graph.manualInput, graph.journal, graph.entitlements, pendingAnswerOnScreen = false)
             }

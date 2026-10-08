@@ -18,6 +18,9 @@ object AlertDelivery {
         "Measured delivery: the relay's own part, 20 alerts per mode on a test machine. Median 32 ms and 95th percentile 102 ms with ntfy, " +
             "54 ms and 93 ms with UnifiedPush, none missed. Delivery to a phone is not measured yet."
 
+    /** Where the setup is: it is one machine's relay, topic and registration, so it is on that machine's page and only for the machine being watched. */
+    const val PER_MACHINE = "Set up for each machine: Machines, then the machine, then Locked-phone alerts. It is the machine you are watching that is set up."
+
     const val HOW =
         "A small script on your machine watches herdr and tells your phone through ntfy when an agent becomes blocked or done. " +
             "Paddock can show the alert itself, or the ntfy app can (that also works on an iPhone). " +

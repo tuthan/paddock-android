@@ -154,7 +154,6 @@ fun Settings(
     onLocalAlerts: (Boolean) -> Unit = {},
     onHideOnLockScreen: (Boolean) -> Unit = {},
     onAlertRecovery: (AccessRecovery.Action) -> Unit = {},
-    onAlertRelay: () -> Unit = {},
     onAgentGlyphs: (Boolean) -> Unit = {},
     onRestorePurchase: () -> Unit = {},
     onBuyTip: (String) -> Unit = {},
@@ -223,19 +222,17 @@ fun Settings(
                 inset = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                 detail = "On: the lock screen shows only \"Paddock: attention on <machine>\". The agent's title appears once the phone is unlocked. Android's own lock-screen setting can hide more, never less.",
             )
-            Row(
-                Modifier.card(c, padded = false)
-                    .clickable(role = Role.Button, onClickLabel = "Set up the alert relay", onClick = onAlertRelay)
-                    .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
-                    .semantics(mergeDescendants = true) { contentDescription = "Locked-phone alerts, ${AlertDelivery.MODE}. ${AlertDelivery.BEST_EFFORT} ${AlertDelivery.MEASURED}" },
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            // Locked-phone alerts are set up for one machine (its relay, its topic, its registration), so the setup is on that machine's page; this card only says how they
+            // reach a locked phone (AC-07.8) and where to find the setup.
+            Column(
+                Modifier.card(c, padded = false).padding(horizontal = 14.dp, vertical = 10.dp)
+                    .semantics(mergeDescendants = true) { contentDescription = "Locked-phone alerts, ${AlertDelivery.MODE}. ${AlertDelivery.BEST_EFFORT} ${AlertDelivery.MEASURED} ${AlertDelivery.PER_MACHINE}" },
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("Locked-phone alerts", style = PaddockTokens.type.rowTitle, color = c.title)
-                    Text(AlertDelivery.MODE, style = PaddockTokens.type.secondary, color = c.text)
-                    Text(AlertDelivery.BEST_EFFORT + " " + AlertDelivery.MEASURED, style = PaddockTokens.type.secondary, color = c.dim)
-                }
-                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
+                Text("Locked-phone alerts", style = PaddockTokens.type.rowTitle, color = c.title)
+                Text(AlertDelivery.MODE, style = PaddockTokens.type.secondary, color = c.text)
+                Text(AlertDelivery.BEST_EFFORT + " " + AlertDelivery.MEASURED, style = PaddockTokens.type.secondary, color = c.dim)
+                Text(AlertDelivery.PER_MACHINE, style = PaddockTokens.type.secondary, color = c.text)
             }
             Note2("Every notification has two buttons, Open and Review. Both only open Paddock; nothing is ever sent to an agent from a notification.")
 

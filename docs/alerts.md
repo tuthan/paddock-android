@@ -14,7 +14,7 @@ How Paddock tells a locked phone that an agent needs you, what each path can and
 
 ## Set up in one step
 
-**Settings > Locked-phone alerts** (or a machine's page > Locked-phone alerts > Set up or check) asks two things and does the rest:
+**Settings > Machines > the machine > Locked-phone alerts > Set up or check…** asks two things and does the rest. The setup is one machine's (its relay, its topic, its registration with the ntfy or UnifiedPush app), so it is on that machine's page and only for the machine being watched; Settings > Alerts carries the measured-best-effort label and says where the setup is, with no button:
 
 1. **How should alerts reach you?** *Paddock shows the alert* or *The ntfy app shows the alert*. The first is chosen when a UnifiedPush app (the ntfy app, usually) is installed; otherwise the second. Each card says what it needs.
 2. **Which server?** (ntfy-app way only.) *Public server (ntfy.sh)* needs nothing typed. *My own server* asks for its address (`https://`, host with optional port and path) and, if it needs one, an access token. In the Paddock way the server is whatever the ntfy app is set to (its Settings), and the screen says which host the address came from once it has one; Paddock does not ask.

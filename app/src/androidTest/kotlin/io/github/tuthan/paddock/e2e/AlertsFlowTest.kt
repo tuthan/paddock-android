@@ -12,6 +12,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -138,6 +139,18 @@ class AlertsFlowTest {
         waitFor("the notice to go") { !hasNode(text("Dismiss")) }
     }
 
+    /** Locked-phone alerts are set up on the machine's page: Settings > Machines > the machine > Set up or check…. */
+    private fun openRelayScreen() {
+        rule.onNode(desc("Settings", substring = false)).performClick()
+        waitFor("Settings") { hasNode(text("Keep prompt text")) }
+        rule.onNode(desc("Machines, ")).performScrollTo().performClick()
+        waitFor("the Machines screen") { hasNode(text("Add another machine")) }
+        rule.onNode(hasText("$user@$host:$port", substring = true) and hasClickAction()).performClick()
+        waitFor("the machine's page") { hasNode(text("Set up or check…")) }
+        rule.onNode(text("Set up or check…")).performScrollTo().performClick()
+        waitFor("the relay screen") { hasNode(text("Locked-phone alerts")) && !hasNode(text("Keep prompt text")) }
+    }
+
     private fun back() { scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }; rule.waitForIdle() }
 
     @Test fun t0_exportAppKey() {
@@ -254,10 +267,7 @@ class AlertsFlowTest {
         waitFor("the distributor's address") { graph.push.registrations.value.firstOrNull()?.endpoint == endpoint }
 
         // --- the address goes to the host only through the confirmation, and the screen says where it went ---
-        rule.onNode(desc("Settings", substring = false)).performClick()
-        waitFor("Settings") { hasNode(text("Keep prompt text")) }
-        rule.onNode(desc("Locked-phone alerts")).performScrollTo().performClick()
-        waitFor("the relay screen") { hasNode(text("Locked-phone alerts")) && !hasNode(text("Keep prompt text")) }
+        openRelayScreen()
         waitFor("the address ready to send") { hasNode(text("It is not on $host yet.", substring = true)) }
         // The button is open once the relay screen has read the machine (inspect asks the host a few things over SSH).
         waitFor("the send button to open", 60_000) { hasNode(text("Send the address to $host…") and isEnabled()) }
@@ -270,7 +280,8 @@ class AlertsFlowTest {
         checkpoint("push-sent")
 
         // --- the herd leaves the front: only then does a push raise a notification ---
-        back(); back()
+        // The relay screen, the machine's page, the Machines list, Settings: four steps back to Home.
+        back(); back(); back(); back()
         waitFor("Home") { hasNode(text("Activity")) }
         inst.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
         waitFor("the app out of the front", 15_000) { !graph.triggers.interactive.value }
@@ -299,10 +310,7 @@ class AlertsFlowTest {
 
         // --- unregistering from the screen takes the address off the host too ---
         dismissNotice()
-        rule.onNode(desc("Settings", substring = false)).performClick()
-        waitFor("Settings") { hasNode(text("Keep prompt text")) }
-        rule.onNode(desc("Locked-phone alerts")).performScrollTo().performClick()
-        waitFor("the relay screen") { hasNode(text("Locked-phone alerts")) && !hasNode(text("Keep prompt text")) }
+        openRelayScreen()
         rule.onNodeWithText("Unregister").performScrollTo().performClick()
         waitFor("the registration to go") { graph.push.registrations.value.isEmpty() }
         checkpoint("push-removed")

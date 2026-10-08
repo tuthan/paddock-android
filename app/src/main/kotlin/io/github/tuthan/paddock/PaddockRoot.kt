@@ -159,7 +159,6 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                     graph.prefs, graph.machineBook, graph.hostUi, graph.proService, graph.gate, graph.journal, graph.notificationAccess, graph.appLock, graph.clock,
                     onBack = { nav.route = Route.Home }, onMachines = { nav.openMachines(Route.Settings) },
                     onEditSnippets = { nav.openSnippets(Route.Settings) },
-                    onAlertRelay = { nav.openAlertRelay(Route.Settings) },
                 )
                 Route.AlertRelay -> AlertRelayRoute(graph.hostUi, graph.machineBook, graph.push, graph.alertSetups, graph.hostScripts, graph.clock, onBack = { nav.route = nav.alertRelayFrom })
                 Route.Machines -> MachinesRoute(

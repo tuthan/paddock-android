@@ -55,7 +55,7 @@ internal fun proCard(pro: ProView, nowMillis: Long): ProCardState {
 internal fun SettingsRoute(
     prefs: SettingsController, machineBook: MachineBook, hostUi: HostUiModel, proService: ProService, gate: LocalNetworkGate, journal: OperationJournal,
     notificationReader: NotificationAccessReader, appLock: AppLock, clock: Clock,
-    onBack: () -> Unit, onMachines: () -> Unit, onEditSnippets: () -> Unit, onAlertRelay: () -> Unit) {
+    onBack: () -> Unit, onMachines: () -> Unit, onEditSnippets: () -> Unit) {
     val snippets by prefs.snippets.collectAsState()
     val settings by prefs.settings.collectAsState()
     val profile by machineBook.profile.collectAsState()
@@ -128,7 +128,6 @@ internal fun SettingsRoute(
             if (on && notificationAccess is io.github.tuthan.paddock.alerts.NotificationAccess.NeedsPermission && notificationAccess.canAsk) askPermission()
         },
         onHideOnLockScreen = { prefs.setHidePromptOnLockScreen(it) },
-        onAlertRelay = onAlertRelay,
         onAlertRecovery = { action ->
             if (action == io.github.tuthan.paddock.alerts.AccessRecovery.Action.AskPermission) askPermission()
             else recovery?.let { r -> notificationReader.settingsIntent(r, notificationAccess)?.let { ctx.startActivity(it) } }
