@@ -15,6 +15,8 @@ import io.github.tuthan.paddock.alerts.PushWords
 import io.github.tuthan.paddock.billing.ProCapabilities
 import io.github.tuthan.paddock.billing.ProService
 import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.discovery.MachineRelocator
+import io.github.tuthan.paddock.hostprofile.MachineAddress
 import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.hostprofile.MachineCopy
 import io.github.tuthan.paddock.hostprofile.MachineRoster
@@ -110,7 +112,7 @@ internal fun MachinesRoute(
 @Composable
 internal fun MachineRoute(
     machineBook: MachineBook, prefs: SettingsController, hostUi: HostUiModel, proService: ProService, push: UnifiedPushConnector, wakes: WakeService,
-    appScope: CoroutineScope, clock: Clock, lanPaths: AndroidLanPaths, machineId: String?, removingId: String?, onBack: () -> Unit, onAlertRelay: () -> Unit, onGuardedAnswers: () -> Unit, onNotice: (String) -> Unit,
+    appScope: CoroutineScope, clock: Clock, lanPaths: AndroidLanPaths, relocator: MachineRelocator, machineId: String?, removingId: String?, onBack: () -> Unit, onAlertRelay: () -> Unit, onGuardedAnswers: () -> Unit, onNotice: (String) -> Unit,
 ) {
     val machines by machineBook.machines.collectAsState()
     val profile by machineBook.profile.collectAsState()
@@ -121,6 +123,8 @@ internal fun MachineRoute(
     val machine = machines.firstOrNull { it.id == machineId }
     if (machine == null) { LaunchedEffect(machineId) { onBack() }; return }
     LaunchedEffect(Unit) { push.refresh() }
+    // Opening the page is asking again: the next failed connection is looked into without waiting out an earlier look's cooldown.
+    LaunchedEffect(machineId) { machineId?.let { relocator.askAgain(it) } }
     val health = watchedHealth(hostUi, machineBook, clock)
     val now = rememberNow()
     // Read again when the connection changes and on every return: the phone may have joined or left a network meanwhile.
@@ -143,6 +147,7 @@ internal fun MachineRoute(
                 next = MachineRoster.after(machines, machine.id, settings.chosenProfileId)?.name, busy = removingId != null,
                 otherNames = machines.filter { it.id != machine.id }.map { it.name }, chosenOs = machine.os, detectedOs = machine.detectedOs,
                 guardedLocked = proService.locked(ProCapabilities.GUARDED_ANSWERS, pro),
+                profile = machine, otherProfiles = machines.filter { it.id != machine.id },
             ),
             onBack = onBack,
             onWatch = { switchMachine(proService, machineBook, appScope, row, onNotice) },
@@ -154,6 +159,14 @@ internal fun MachineRoute(
             onWake = { wakes.wake(machine.id) },
             onRename = { name -> scope.launch { if (machineBook.rename(machine.id, name)) onNotice(MachineCopy.renamed(name)) } },
             onSetOs = { os -> scope.launch { machineBook.setOs(machine.id, os) } },
+            onSetSearchNetwork = { on -> scope.launch { machineBook.setSearchNetwork(machine.id, on); relocator.askAgain(machine.id) } },
+            // In the graph's scope, as a switch is: leaving the page must not stop a move halfway (the watch stopped, the new one not started).
+            onChangeAddress = { host, port ->
+                if (MachineAddress.waits(row.watched, proService.gateContext(pendingAnswerOnScreen = false))) onNotice(MachineCopy.ADDRESS_BUSY)
+                else appScope.launch {
+                    if (machineBook.setAddress(machine.id, host, port)) onNotice(MachineCopy.addressChanged(machine.name, MachineRoster.endpoint(machine.copy(host = host, port = port))))
+                }
+            },
         )
     }
 }

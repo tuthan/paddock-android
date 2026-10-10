@@ -53,10 +53,10 @@ class ButtonRolesTest {
     )
     private val danger = listOf("Esc", "Ctrl+C", "Esc · Interrupt", "Remove", "Reset the record…", "Unregister", "Replace with the new key", "Stop…", "Delete…", "Remove…", "Turn off alerts…")
     private val primary = listOf("Connect", "Send prompt", "Import key", "Yes", "Review prompt", "Install the relay", "Start an agent…", "Start agent", "Start with this name", "Rename", "Buy Pro",
-        "Enter the address", "Allow local-network access", "Allow the camera", "Search again", "Turn on alerts…", "Update alerts…", "Open in the ntfy app")
+        "Enter the address", "Allow local-network access", "Allow the camera", "Search again", "Turn on alerts…", "Update alerts…", "Open in the ntfy app", "Save address")
     private val ghost = listOf("Re-read", "Try again", "Check the setup", "Open terminal", "Manual input", "Focus on desktop", "Trust and connect", "Answer in the terminal instead", "Rename agent…", "Show its workspace on the desktop",
         "Show its tab on the desktop", "Open the pane", "Choose another name", "Trust this repository…", "Start anyway", "Open it", "Clear the name",
-        "Find on this network", "Scan the code on the desktop", "Paste a pairing link", "Wake the machine", "Add another machine")
+        "Find on this network", "Scan the code on the desktop", "Paste a pairing link", "Wake the machine", "Add another machine", "Change address…")
 
     private fun check(role: String, labels: List<String>, found: List<Call>) {
         val wrong = found.filter { c -> c.labels.any { it in labels } && c.kind != role }

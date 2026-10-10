@@ -228,6 +228,21 @@ object MachineCopy {
     const val NAME_SAVE = "Save name"
     fun renamed(name: String) = "Renamed to $name."
 
+    /** The machine page's address change (its buttons are "Change address…" and "Save address"): for a machine whose IP address changed, or that is reached by a name now. */
+    fun addressChangeLabel(name: String) = "Change the address of $name…"
+    fun addressTitle(name: String) = "Change the address of $name"
+    const val ADDRESS_BODY = "For when the machine's IP address changed. Paddock keeps everything it knows about this machine and checks that the machine " +
+        "at the new address shows the same host key. A device there with another key is stopped at the changed-key warning, and nothing replaces the old key unless you choose to."
+    const val ADDRESS_TIP = "To keep the address from changing, reserve it for the machine on your router (a DHCP reservation), or use a name that stays " +
+        "the same: its Tailscale name, or its .local name when the machine answers mDNS."
+    const val SEARCH_LABEL = "Search the network if it moves"
+    const val SEARCH_DETAIL = "When this machine stops answering, Paddock looks for it by name. Turn this on to also ask every SSH server on the network for its host key, " +
+        "so the machine is found even when nothing announces its name. Those servers see a short connection from this phone that never signs in, and a managed network may log it."
+    const val SEARCH_KICKER = "If its address changes"
+    /** Moving the watched machine closes its connection, which ends what is running there as unknown: it waits, as a switch does. */
+    const val ADDRESS_BUSY = "An operation on this machine is still running. Change the address once it finishes."
+    fun addressChanged(name: String, endpoint: String) = "$name is now at $endpoint."
+
     /** The machine page's icon row: Automatic follows what the machine said, the others are the user's pick. */
     const val OS_LABEL = "Icon"
     const val OS_HINT = "Linux, macOS and Windows are read from the machine when Paddock connects. Pick one here if it cannot tell, or got it wrong."
@@ -275,6 +290,48 @@ object MachineName {
         Result.BadCharacter -> "Use letters, numbers and punctuation only."
         Result.Taken -> "Another machine already has that name."
     }
+}
+
+/**
+ * A new address for a saved machine, as typed on its page: the host and port, by the Add machine form's own rules ([AddMachineForm.errors]). The user
+ * is not part of it: another user is another sign-in, and adding the machine again is how to get one. Refused when another saved machine already has
+ * this host, port and user, since adding that address later would update only one of the two.
+ */
+object MachineAddress {
+    sealed interface Result {
+        data class Ok(val host: String, val port: Int) : Result
+        /** What is saved already (a host differing only in case is the same host). */
+        data object Unchanged : Result
+        /** Each field's message, null when that field is fine. */
+        data class Bad(val host: String?, val port: String?) : Result
+        data class Taken(val by: String) : Result
+    }
+
+    fun check(hostText: String, portText: String, machine: HostProfile, others: List<HostProfile>): Result {
+        val errors = AddMachineForm.errors(AddMachineInput(host = hostText, port = portText, user = machine.user))
+        if (errors.host != null || errors.port != null) return Result.Bad(errors.host, errors.port)
+        val host = AddMachineForm.normalizeHost(hostText)
+        val port = portText.trim().toInt()
+        if (host.equals(machine.host, ignoreCase = true) && port == machine.port) return Result.Unchanged
+        others.firstOrNull { it.id != machine.id && it.host.equals(host, ignoreCase = true) && it.port == port && it.user == machine.user }
+            ?.let { return Result.Taken(it.name) }
+        return Result.Ok(host, port)
+    }
+
+    /** The host field's message: its own error, or the machine that already has this address. */
+    fun hostMessage(result: Result): String? = when (result) {
+        is Result.Bad -> result.host
+        is Result.Taken -> "${result.by} already has this address. Remove one of them, or use another address."
+        else -> null
+    }
+
+    fun portMessage(result: Result): String? = (result as? Result.Bad)?.port
+
+    /**
+     * Whether moving a machine waits ([MachineCopy.ADDRESS_BUSY]): the watched machine's connection is closed by a move, which ends an operation in
+     * flight there as unknown (the journal's rule), as a switch would. Another machine has nothing running through Paddock.
+     */
+    fun waits(watched: Boolean, context: GateContext): Boolean = watched && context == GateContext.OPERATION_IN_FLIGHT
 }
 
 /**

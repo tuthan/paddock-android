@@ -91,6 +91,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     AlertEvents(graph.alerts, graph.alertService, graph.hostUi, graph.proService, nav, boot)
     PairingEvents(graph.pairing, nav, boot)
     RemovalOutcomes(graph.machineBook, nav)
+    Relocations(graph.relocator, nav)
     FollowConnectAttempt(graph.broker, graph.hostUi, nav)
 
     val effective = nav.effective(boot)
@@ -126,7 +127,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                             graph.machineBook, graph.hostUi, graph.proService, graph.scope, onNotice = { nav.alertNotice = it },
                             onOpenAgent = { nav.openAgent(it) },
                         ) else if (effective == Route.Home) HomeRoute(
-                            graph.machineBook, graph.hostUi, graph.wakes, graph.prefs, graph.proService, graph.probe, graph.gate, graph.scope,
+                            graph.machineBook, graph.hostUi, graph.wakes, graph.prefs, graph.proService, graph.probe, graph.relocator, graph.gate, graph.scope,
                             retry = graph::retry, installRelay = graph::installRelay,
                             relayDismissed = nav.relayDismissed, setRelayDismissed = { nav.relayDismissed = it }, onReviewKey = { nav.reviewKey = true },
                             onOpen = { nav.openAgent(it) },
@@ -168,7 +169,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                     onNotice = { nav.alertNotice = it },
                 )
                 Route.Machine -> MachineRoute(
-                    graph.machineBook, graph.prefs, graph.hostUi, graph.proService, graph.push, graph.wakes, graph.scope, graph.clock, graph.lanPaths, nav.machineId, removingId, onBack = { nav.route = Route.Machines },
+                    graph.machineBook, graph.prefs, graph.hostUi, graph.proService, graph.push, graph.wakes, graph.scope, graph.clock, graph.lanPaths, graph.relocator, nav.machineId, removingId, onBack = { nav.route = Route.Machines },
                     onAlertRelay = { nav.openAlertRelay(Route.Machine) },
                     onGuardedAnswers = { if (graph.proService.requestCapability(ProCapabilities.GUARDED_ANSWERS.id, pendingAnswerOnScreen = false)) nav.openGuardedAnswers(Route.Machine) },
                     onNotice = { nav.alertNotice = it },

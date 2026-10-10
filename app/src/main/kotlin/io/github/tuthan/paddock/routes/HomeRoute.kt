@@ -39,7 +39,7 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun HomeRoute(
     machineBook: MachineBook, hostUi: HostUiModel, wakes: WakeService, prefs: SettingsController, proService: ProService, probe: MachineProbe,
-    gate: LocalNetworkGate, appScope: CoroutineScope, retry: () -> Unit, installRelay: () -> Unit,
+    relocator: io.github.tuthan.paddock.discovery.MachineRelocator, gate: LocalNetworkGate, appScope: CoroutineScope, retry: () -> Unit, installRelay: () -> Unit,
     relayDismissed: Boolean, setRelayDismissed: (Boolean) -> Unit, onReviewKey: () -> Unit,
     onOpen: (terminalId: String) -> Unit, onReviewPrompt: (terminalId: String) -> Unit, onSettings: () -> Unit, onSetUpKey: () -> Unit,
     onShowCommand: () -> Unit, onNotice: (String) -> Unit = {}, onMachines: () -> Unit = {},
@@ -52,7 +52,12 @@ internal fun HomeRoute(
     // Read again when the connection changes and on every return: the phone may have joined or left a network meanwhile.
     val homeResumes = rememberResumes()
     val wakeReady = remember(profile, view.phase, homeResumes) { profile?.let { wakes.ready(it) } == true }
-    val screen = HomeUiMapper.map(name, view, now, wakeAvailable = wakeReady && wakeFacts?.canWakeAgain(now) != false)
+    // While Paddock looks for the machine at another address (or did not find it), the banner says so after its own reason.
+    val relocating by relocator.states.collectAsState()
+    val screen = HomeUiMapper.withLine(
+        HomeUiMapper.map(name, view, now, wakeAvailable = wakeReady && wakeFacts?.canWakeAgain(now) != false),
+        io.github.tuthan.paddock.discovery.RelocateCopy.line(profile?.id?.let { relocating[it] }, name),
+    )
     val ctx = LocalContext.current
     // The captured prompt is agent output, so while it is on Home the window is protected like Output is.
     val settings by prefs.settings.collectAsState()

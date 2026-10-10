@@ -16,7 +16,7 @@ Paddock saves every machine the user adds and **watches one at a time** (`AppSet
 
 `MachinePage` (`Route.Machine`, `MachineRoute` in `routes/MachinesRoute.kt`) has the machine's name as its header and five sections:
 
-- **This machine**: Address (`user@host:port`) and Session as facts, then the state line. The watched machine's line is drawn as the accent chip ("Watching · live"), so "Watching" is not said twice; any other has its state line and a **Watch** (Secondary; locked as on the list, plain for the free return).
+- **This machine**: Address (`user@host:port`) and Session as facts, then the state line. The watched machine's line is drawn as the accent chip ("Watching · live"), so "Watching" is not said twice; any other has its state line and a **Watch** (Secondary; locked as on the list, plain for the free return). Last, **Change address…** (Ghost, small; "Address" below).
 - **Name and icon**: the name field with **Save name**, and the **Icon** row (below). Free for every saved machine.
 - **Wake-on-LAN**: the same section Settings had (`WakeOnLanSection` fed by `WakeWordsMapper.words` for this machine): what was read, the commands to copy, the relay field, **Wake the machine** and the last tap's lines. Free for every saved machine, watched or not (decision D2; `docs/wake.md`, "Waking a machine that is not watched").
 - **Locked-phone alerts**: one line from this machine's UnifiedPush registration on this phone, in the relay screen's own words (`PushWords`: "The address is on <machine>.", "The distributor gave this phone an address. It is not on <machine> yet.", "Registration failed. Register again.", or "No UnifiedPush registration for this machine on this phone."). For the watched machine a row **Set up or check…** opens the alert relay screen, and Back from there returns to the page. Another machine says "Watch this machine to set up or check its alerts." and has no row: that screen reads the machine through the live connection. **Alerts for a machine that is not watched still arrive** (each machine has its own relay and address), and a tap on one switches the watch to it, free; while Paddock is open only the watched machine's own alerts are skipped, since only its herd is on screen (`alerts.md`, "Several machines").
@@ -74,6 +74,159 @@ What this does **not** do:
 - `core`: `HostOsTest` (11: `uname` output maps to the three kinds and nothing else is guessed, a banner before the answer does not hide it, the probe is one constant command, a machine that cannot answer is null and never a failure, the user's pick beats what the machine said, a profiles file written before the icon loads and the icon survives a rewrite, the roster and the chips carry the shown icon, the name rules, and what the rule accepts the profile accepts), `HostSessionControllerTest` (the OS is read once per bring-up and kept; a probe that answers null, throws or never returns leaves it unknown and the bring-up alone).
 - Instrumentation: `MachineNameAndIconTest` (the field starts at the name and Save is off until it changes, a new name is saved trimmed and only on the tap, an empty or taken name is refused in words, the name cannot be saved while a removal runs, the icon says where it came from and each choice reports itself, a machine with no known kind draws no glyph and says so, the card carries its machine's glyph, and audits of the page dark and light).
 - Not run on a phone or a real machine: `uname -s` over a real SSH session to a Mac, an MSYS2 or Git Bash host and a WSL host. The strings come from the platforms' documented `uname` output, not from a capture.
+
+## Address (2026-10-10, the user's request)
+
+A machine's IP address can change (a new DHCP lease, another network), and before this the only way to follow it was to add the machine again, which
+made a second machine with a new id, so a new host-key trust, no history and no alerts. **Change address…** on the machine's page (Free, every saved
+machine, watched or not) opens a dialog: "Change the address of <name>", one sentence on what it is for (`MachineCopy.ADDRESS_BODY`), **Host or IP
+address** and **Port** filled with what is saved, a tip on keeping the address from changing (`ADDRESS_TIP`: a DHCP reservation on the router, a
+Tailscale name, or the machine's `.local` name when it answers mDNS), then **Cancel** (Secondary, focused) and **Save address** (Primary). The user is
+not part of it: another user is another sign-in, and Add a machine keeps those apart.
+
+- **What is checked** (`MachineAddress.check`): the host and port by the Add machine form's own rules and words (`AddMachineForm.errors`); the saved
+  address (a host differing only in case is the same) keeps Save off; another saved machine with the same host, port and user is refused by name
+  ("Studio already has this address. Remove one of them, or use another address."), since adding that address later would update only one of the two.
+- **What stays** (`MachineBook.setAddress`): the id, and so everything keyed by it: the trusted host key, the ledger, the alert registration and setup,
+  the wake facts and relay, the chosen-machine record, the name and the icon. The hardware address the wake facts hold is the machine's own, so Wake
+  still works.
+- **The key is checked at the new address.** The pin is keyed by the profile id, not the address (`SshTarget.endpoint` is informational), so the
+  first connection to the new address must present the key this phone trusted. A device answering there with another key is the usual changed-key
+  refusal: nothing signs in, both fingerprints are shown, and Keep the old key is the focused choice. A move never trusts anything by itself.
+- **What goes:** a changed-key warning recorded for the machine (it was about whatever answers at the old address) and a chip's last look
+  (`MachineBook.Effects.addressChanged`: `broker.clearChanged`, `probe.forget`), so the chip looks again at the new address at the next tick.
+- **The connection.** One write under the machine lock (serialized with add, switch and remove). For the watched machine the watch stops, the
+  connection to the old address is closed at once (`ConnectionOwner.drop`, no grace in which the old session could be picked up again) and the machine
+  is watched again from the start, so its next connection goes to the new address; in the background it is watched again on the next return to the
+  front. For any other machine a connection left open to it is closed. A wake or OS reading that a controller started for the old address brings back
+  later is dropped, as before (`saveWake` and `saveDetectedOs` skip a profile whose address changed).
+- **Waits for an operation in flight** on the watched machine (`MachineAddress.waits`, `MachineCopy.ADDRESS_BUSY`), as a switch does: closing the
+  connection would end it as unknown. The move runs in the graph's scope, so leaving the page does not stop it halfway. It says
+  "<name> is now at user@host:port." in the notice bar.
+- **The changed-key dialog** names the trap a move is for: "...or something else is answering at this address, such as another device that was given
+  the machine's old IP address. Keep the old key unless you changed the machine yourself. If the machine's address changed, change it on its page in
+  Machines." Replacing the key there would pin the other device.
+
+Paddock also finds a moved machine by itself in most cases (next section); Change address… is for when it cannot. Add a machine's "Set up the key" path still makes a new machine when its host is
+changed (it keeps the machine only for the same host and port, `AddMachineForm.resolve`); Change address… is the way to move one. On Android 17 a move
+from a non-local name to a LAN address can need the local-network grant; the form does not ask for it in context, and Home's banner offers Open
+settings when the connection is refused for it.
+
+Tests: `core` `MachineAddressTest` (a new address trimmed and its port read, brackets go, the saved address in any case is unchanged, the form's
+words for a bad host or port, another machine's address refused for the same user only, only the watched machine waits and only for an operation in
+flight), `MachineBookTest` (moving the watched machine keeps its id and facts, the order stop, drop, watch, and it stays watched; another machine is
+only dropped; in the background nothing connects; the same address is not a write and an unknown id is refused; a wake reading from the old
+address is dropped). `ButtonRolesTest` pins **Change address…** (Ghost) and **Save address** (Primary). Instrumentation (`MachineAddressDialogTest`, 9, API 36): the
+page offers the move by name ("Change the address of Alpha…") and the dialog starts at the saved address with Save off; a new host and port are saved
+trimmed, only on the tap, and the dialog closes; another machine's address and a bad port are refused in words; Cancel changes nothing; no move
+during a removal; no Change address… without the profile; audits of the dialog dark and light and of the page. The dialog's audits draw it alone, as
+the other dialogs' do: with the page's window behind it the contrast pass measured its text against the wrong pixels (Port read 3.17:1 and 2.52:1;
+sampled from the screenshot it is the `dim` token on `surface`), and alone the dialog's window is not captured, so its contrast is not measured by the
+audit. By the tokens it draws with, on `surface`: dim 5.83 and 7.04:1, the error colour 6.46 and 6.92:1, body text 10.6 and 11.0:1 (dark, light).
+Not run: a phone, a real address change, TalkBack.
+
+## Finding a machine that moved (2026-10-10, the user's request)
+
+When the watched machine's saved LAN address stops answering, Paddock looks for it on the phone's network and moves it by itself when it finds it
+(`MachineRelocator` in `core/.../discovery/`, the user's choice: automatic, not a tap). Whether a device is the machine is decided by one thing only:
+it presents the host key this phone trusted for the machine. The hostname and the hardware address only say where to look, because any device on a
+network can announce either.
+
+- **What starts a look:** the watched machine's connection fails with no answer (`Timeout`), nothing listening or no route (`Network`), or another
+  host key (`HostKeyChanged`: a router gave the old address to another SSH machine) (`RelocateRules.worthLooking`). Not a refused sign-in, a missing
+  grant or a bad key. Only while Paddock is in front and not covered by its lock, only for a machine with a pinned key, and once per failure streak
+  (see **How often**).
+- **Which machines:** only one saved at a LAN IPv4 address (10/8, 172.16/12, 192.168/16, 169.254/16, `RelocateRules.movable`). A name (a Tailscale
+  name, `<host>.local`), a tailnet or VPN address (100.64/10 is not a LAN range) or a public address is how the user reaches it from anywhere, and a
+  LAN address found for it would replace that.
+- **Where it looks, cheapest first** (`MachineRelocator.find`), checking at most 24 addresses in all, 4 at a time, each once, and only addresses on
+  the phone's own subnet (never the phone, the network or broadcast address):
+  1. **The hostname**, on the network the machine was saved on only. Each bring-up reads it (`uname -n`, cut at the first dot: `HostNameProbe`,
+     `MachineHostName.label`; kept as `HostProfile.detectedName`, shown on the machine's page as "Hostname", never a reason to reconnect). The phone's
+     resolver is asked for `<hostname>.local` (answered when the machine runs an mDNS responder: always on a Mac, Avahi on Linux, which is the user's
+     choice) and the bare hostname (answered by a router that names its DHCP clients). Nothing is asked before a bring-up has read the hostname, and
+     never on another network: the name would go to that network's resolver and, for `.local`, to everyone listening for mDNS, and a hostname is often a
+     person's name.
+  2. **mDNS announcements** heard for 3 s (`NsdBrowser`), those naming the machine checked first (an SSH service called by its hostname, or Avahi's
+     workstation name `host [aa:bb:cc:dd:ee:ff]` with its hostname or the hardware address its wake facts hold). Listening sends nothing but the
+     platform's own service query, so this step also runs on another network, where a machine that announces itself can be found.
+  3. **Only on the network the machine was saved on, and only with the machine's switch on:** every other SSH service announced, then a scan of the
+     subnet on the saved port (`RelocateRules.onSavedNetwork`: the subnet holds the saved address), a /24 to a /30, as Find on this network scans
+     (`SshProbe`, on sockets of its own bound to that network). Skipped when Paddock went to the background meanwhile. These are the steps that reach
+     other machines, so they are the user's to allow (next bullet).
+- **What the user allows** (`HostProfile.searchNetwork`, review 2026-10-10, finding 1). **Search the network if it moves**, a switch on the machine's page
+  under "If its address changes", off until the user turns it on, per machine. It says: "When this machine stops answering, Paddock looks for it by
+  name. Turn this on to also ask every SSH server on the network for its host key, so the machine is found even when nothing announces its name. Those
+  servers see a short connection from this phone that never signs in, and a managed network may log it." A subnet match is all "the saved network" can
+  mean to the app (the network's name and its router's address are behind the location permission), so an office or a café that uses the same
+  192.168.1.0/24 as the user's home counts as the same network; the switch is what keeps Paddock from scanning there without the user having said it
+  could. With it off, a look that found nothing says so on Home ("Paddock looked for <name> by its name only. To search this network for it, turn on
+  "Search the network if it moves" on its page in Machines, or change its address there."). The switch is a setting, not a reading: changing it never
+  reconnects, a move keeps it, and turning it on asks again at once (`MachineRelocator.askAgain`).
+- **What is left alone:** the addresses of the other saved machines (`Ports.otherAddresses`) are never looked at, whatever announced or answered
+  there: they are not this machine, and a phone that keeps knocking on another saved machine's sshd is how it gets banned from it (it also keeps two
+  machines from ending up with one address, which Change address… refuses by hand). An address that showed another machine's key
+  (`KeyCheck.OtherKey`) is not asked again for 30 minutes (`REJECT_MILLIS`), also across looks; an address that said nothing is asked again. A network
+  change forgets both.
+- **How often** (review finding 2). A look that found nothing doubles the wait for the next one: five minutes after the first, then 10, 20, 40, and 60
+  at most (`COOLDOWN_MILLIS`, `MAX_COOLDOWN_MILLIS`). Before, a machine that was only switched off made the phone sweep the subnet every two to four
+  minutes for as long as the app was open. A look puts two lines in the log of every SSH server it touches (a connection that sent nothing, then one
+  that left after the key exchange), and fail2ban's aggressive mode bans at five in ten minutes, so the first wait is five minutes: at most two looks
+  fall in any ten. The wait starts over on a connection, a network change, a changed address, the switch being turned on, and opening the machine's
+  page (`askAgain`; the next failed connection looks, a look never starts by itself).
+- **On another network** (the phone is not on the subnet the machine was saved on) only the announcement naming the machine is followed: no name is
+  asked, no other machine is connected to and nothing is scanned, whatever the switch says.
+- **The check** (`SshlibConnector.checkPinnedKey`, through `AndroidRelocatorPorts`): the gate, a socket, and the key exchange with only the
+  pinned key's type offered; the connection is closed when the exchange completes, before any authentication. Nobody is asked, nothing is written
+  (not even the pin's last-seen time). The answer has three values (`KeyCheck`): the pinned key (the machine), another key (some other machine, which
+  is remembered), and no key at all (no pin, a refused gate, nothing listening: says nothing). On the throwaway sshd (`KeyCheckTest`) the run's sshd log
+  held no accepted sign-in: every check ended `[preauth]`.
+- **A key approved for the old address** (review finding 3). A changed-key warning is about whatever answered at the address it was recorded for.
+  Replace key now runs under the machine book's lock and only while the machine is still saved at that address (`MachineBook.whileAt`, used by
+  `AppGraph.replaceKey`), so a tap that lands between Paddock's move and the warning being cleared cannot pin the other device's key to a machine that
+  now points at the real one; the move waits for a replace already running.
+- **The move** is `MachineBook.setAddress(..., onlyFrom = the profile looked for)`: refused when the user changed the address meanwhile, otherwise
+  the same move Change address… makes (id, trust, history and alerts kept; the connection to the old address closed; the machine watched again).
+  The notice bar says "Found <name> at <new> (it was at <old>). Paddock connects there now." (`RelocateCopy.moved`).
+- **What Home says meanwhile:** the degraded banner's reason is followed by "Paddock is looking for <name> on this network, in case its address
+  changed.", and after a look that found nothing by "Paddock did not find <name> at another address on this network. If its address changed, change
+  it on its page in Machines." (or the switch-off sentence above) (`RelocateCopy.line`, `HomeUiMapper.withLine`). Both go when the machine connects.
+
+What it cannot do: read the hardware address of a device from the phone (Android 10 and later keep the neighbour table from apps; on API 36 as
+the app, `/proc/net/arp` is "Permission denied" and `ip neigh` "Cannot bind netlink socket"), find a machine on another network unless that machine
+announces itself, find a machine at an address another saved machine is saved at (it is skipped on purpose), or look for a machine that is not watched
+(its chip says "not reachable"; watching it starts a look). A "key changed" dialog for the old address can be on screen while the look runs; it goes
+when the machine is found elsewhere (`broker.clearChanged` in the move), and a Replace key tapped after that is refused (above).
+
+Review 2026-10-10 (security review of this feature, all five findings fixed): 1. the scan and the other-announcements step need the machine's switch;
+2. the wait doubles, the other saved machines' addresses and other machines' keys are not asked again; 3. Replace key is fenced to the address the
+warning was about; 4. names are asked on the saved network only; 5. the address dialog no longer says a device with another key is "never trusted"
+(Replace key can pin it when the user says so): it says it is stopped at the changed-key warning and nothing replaces the old key unless the user chooses.
+
+Tests: `core` `MachineRelocatorTest` (28: the rules, which failures look, which machines move, the names, which announcements name the machine,
+the candidates, the saved network; then with fake ports: found by its hostname without listening or scanning, a name pointing at another device is
+not it and the announcement naming it is, on the saved network other announcements then the scan on the saved port, on another network only its
+own name and nothing connected to, found elsewhere by its name, nothing for a refused sign-in or a name or tailnet address or in the background,
+nothing without a pin, the grant or a LAN, the cooldown and a network change, one look at a time and connecting clears the banner, a move the book
+refuses says nothing, the check budget, a resolver that never answers and a listener that fails, leaving before the scan skips it, forgetting
+stops a look, the hardware address finds a renamed machine; and the review's: with the switch off only the name and the announcement naming the
+machine are followed and the banner says so, with it on the other announcements and the scan run, on another network no name is asked and nothing is
+scanned even with it on while the machine announcing itself is found, the other saved machines' addresses are never checked, an address that showed
+another key is skipped until its window or a network change while a silent one is not, the wait doubles to its cap, and connecting, opening the page and
+a changed address start it over), `HostNameTest` (5, an old file loads with the search off), `HostProfileSameConnectionTest` (the switch never
+reconnects), `MachineBookTest` (41: the hostname is kept without a reconnect and only for the address that asked; a move found by Paddock is refused
+when the user moved the machine meanwhile; the switch is saved, kept through a move and never reconnects; `whileAt` runs only while the machine is at
+that address, and a move waits for a decision running at the old one), `HostSessionControllerTest` (the
+hostname is read after the OS even when that fails; a failed read leaves it unknown), `HomeUiMapperTest` (the banner line). Instrumentation, run
+by `paddock-harness/run-transport-tests.sh <serial> <class>` against the throwaway sshd: `KeyCheckTest` (5: the pinned key is presented whoever the
+user is and the pin is not touched, another key is `OtherKey`, no pin is `NoAnswer` and writes nothing, nothing listening is `NoAnswer` within 6 s, a
+refusing gate) and `RelocateOnEmulatorTest` (3, the real `AndroidRelocatorPorts` on API 36: a machine saved at 10.0.2.99 with the switch on was found at
+10.0.2.2 by the scan in 6.0 s; the same with the switch off is not scanned for and the banner says so; one whose key nobody there holds is not moved;
+no sign-in in the sshd log), `MachineAddressDialogTest` (15: the dialog, and the switch on the page: off until turned on and what it says, on shows
+on, a tap sets it either way, no change during a removal, none without a profile, audit of the page with it on, light). Mutations that each fail a
+test: removing the switch's gate, asking names on any network, not skipping the other saved machines, a wait that does not double, not remembering
+another machine's key (`MachineRelocatorTest`), and removing `whileAt`'s address check (`MachineBookTest`). Not run: a phone, a real DHCP change, a Mac or Avahi answering `.local`,
+a router that names its clients, Android 17's grant.
 
 ## Watch another machine (Pro, `hosts.switch`)
 

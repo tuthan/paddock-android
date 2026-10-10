@@ -129,6 +129,17 @@ internal fun RemovalOutcomes(machineBook: MachineBook, nav: NavState) {
     }
 }
 
+/** A machine Paddock found at another address and moved ([MachineRelocator]): the notice bar says where, once. */
+@Composable
+internal fun Relocations(relocator: io.github.tuthan.paddock.discovery.MachineRelocator, nav: NavState) {
+    val moved by relocator.moved.collectAsState()
+    LaunchedEffect(moved) {
+        val r = moved ?: return@LaunchedEffect
+        nav.alertNotice = io.github.tuthan.paddock.discovery.RelocateCopy.moved(r)
+        relocator.consumeMoved(r)
+    }
+}
+
 /**
  * Follows the connection from Connect until it is live: a live or set-up-needing host ends the attempt, a failure stays on the form with its fix.
  * It keeps following after a failure (a retry that succeeds, or a host key trusted late, must still end the attempt) and after the wait ran out.

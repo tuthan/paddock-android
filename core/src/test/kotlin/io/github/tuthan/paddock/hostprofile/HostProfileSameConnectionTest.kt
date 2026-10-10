@@ -16,6 +16,11 @@ class HostProfileSameConnectionTest {
         assertTrue(base.sameConnectionAs(base))
     }
 
+    @Test fun theNetworkSearchSwitchIsASettingNotAConnection() {
+        assertTrue(base.sameConnectionAs(base.copy(searchNetwork = true)))
+        assertTrue(base.copy(searchNetwork = true).sameConnectionAs(base))
+    }
+
     @Test fun everythingThatShapesTheConnectionOrItsLabelDoes() {
         for (changed in listOf(
             base.copy(name = "Alpha 2"), base.copy(host = "10.0.0.3"), base.copy(port = 2222), base.copy(user = "other"),

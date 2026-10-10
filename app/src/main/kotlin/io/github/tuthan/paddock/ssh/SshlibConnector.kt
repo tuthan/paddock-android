@@ -7,6 +7,7 @@ import com.trilead.ssh2.DHGexParameters
 import com.trilead.ssh2.ServerHostKeyVerifier
 import com.trilead.ssh2.Session
 import com.trilead.ssh2.auth.SignatureProxy
+import io.github.tuthan.paddock.discovery.KeyCheck
 import io.github.tuthan.paddock.hostkey.HostKeyAlgorithms
 import io.github.tuthan.paddock.hostkey.HostKeyPolicy
 import io.github.tuthan.paddock.hostkey.HostKeyState
@@ -109,16 +110,7 @@ class SshlibConnector(
         }
         val pin = try { hostKeys.pinFor(target.profileId) } catch (e: IOException) { throw ConnectFailure.HostKeysUnreadable(e) }
         val tracker = LinkTracker(clock).also { it.connecting() }
-        val connection = Connection(target.host, target.port)
-        // API 26 to 27 have no ChaCha20 provider and sshlib offers chacha20-poly1305 whenever the server does.
-        connection.setClient2ServerCiphers(CIPHERS)
-        connection.setServer2ClientCiphers(CIPHERS)
-        connection.setClient2ServerMACs(MACS)
-        connection.setServer2ClientMACs(MACS)
-        connection.setKeyExchangeAlgorithms(KEX)
-        connection.setDHGexParameters(DHGexParameters(2048, 3072, 8192))
-        // A pinned host is asked for the pinned key's type only; first contact offers modern algorithms only.
-        connection.setServerHostKeyAlgorithms(HostKeyAlgorithms.offered(pin).toTypedArray())
+        val connection = newConnection(target, pin)
 
         val verdict = Verdict()
         // The host-key question runs on sshlib's thread; this job makes it a child of the connect call.
@@ -166,6 +158,52 @@ class SshlibConnector(
         }
         tracker.up()
         return SshlibSession(connection, tracker, keepalive, keepaliveReplyTimeout, channelWait)
+    }
+
+    /**
+     * What [target] shows of the host key pinned for its profile: the gate, the socket and the key exchange, so the server proves it holds the key,
+     * then the connection is closed. Nothing signs in and nobody is asked. [KeyCheck.Matches] is the pinned key; [KeyCheck.OtherKey] a different one
+     * (some other machine answers there); [KeyCheck.NoAnswer] no key at all (no pin, a refused gate, nothing listening, a failed exchange). For finding
+     * a machine whose address changed (`MachineRelocator`). The key is compared with the pin here, not through [HostKeyPolicy.evaluate]: a match at a
+     * candidate address is not a sighting at the saved one (no `touch`), and nothing is ever written.
+     */
+    suspend fun checkPinnedKey(target: SshTarget, timeout: Duration = 4.seconds): KeyCheck {
+        if (gate.check(target) != null) return KeyCheck.NoAnswer
+        val pin = try { hostKeys.pinFor(target.profileId) } catch (_: IOException) { return KeyCheck.NoAnswer } ?: return KeyCheck.NoAnswer
+        val connection = newConnection(target, pin)
+        val other = AtomicBoolean(false)
+        val verifier = ServerHostKeyVerifier { _, _, algorithm, blob ->
+            val same = HostKeyAlgorithms.keyType(pin.algorithm) == HostKeyAlgorithms.keyType(algorithm) && java.security.MessageDigest.isEqual(pin.blob, blob)
+            if (!same) other.set(true)
+            same
+        }
+        val ms = timeout.inWholeMilliseconds.toInt()
+        return try {
+            // connect returns once the first key exchange is complete: the verifier accepted the key and the server's signature checked out.
+            blocking("paddock-key-check") { connection.connect(verifier, ms, ms) }
+            KeyCheck.Matches
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            if (other.get()) KeyCheck.OtherKey else KeyCheck.NoAnswer
+        } finally {
+            closeOffThread(connection)
+        }
+    }
+
+    /** A connection to [target] offering what Paddock offers, and for a pinned host only the pinned key's type. Nothing is sent until connect. */
+    private fun newConnection(target: SshTarget, pin: io.github.tuthan.paddock.hostkey.PinnedHostKey?): Connection {
+        val connection = Connection(target.host, target.port)
+        // API 26 to 27 have no ChaCha20 provider and sshlib offers chacha20-poly1305 whenever the server does.
+        connection.setClient2ServerCiphers(CIPHERS)
+        connection.setServer2ClientCiphers(CIPHERS)
+        connection.setClient2ServerMACs(MACS)
+        connection.setServer2ClientMACs(MACS)
+        connection.setKeyExchangeAlgorithms(KEX)
+        connection.setDHGexParameters(DHGexParameters(2048, 3072, 8192))
+        // A pinned host is asked for the pinned key's type only; first contact offers modern algorithms only.
+        connection.setServerHostKeyAlgorithms(HostKeyAlgorithms.offered(pin).toTypedArray())
+        return connection
     }
 
     /** What the host-key callback decided, read by the connecting coroutine once sshlib returns. */

@@ -15,6 +15,19 @@ class HomeUiMapperTest {
 
     private fun map(v: HostView) = HomeUiMapper.map("Laptop", v, now)
 
+    @Test fun whatPaddockDoesAboutAFailureFollowsTheBannersReasonAndNothingElseChanges() {
+        val failed = map(HostView(phase = HostPhase.Failed(DownReason.Timeout, null)))
+        val with = HomeUiMapper.withLine(failed, "Paddock is looking for Laptop on this network, in case its address changed.")
+        val before = failed.state as HomeUiState.Degraded
+        val after = with.state as HomeUiState.Degraded
+        assertEquals("${before.reason} Paddock is looking for Laptop on this network, in case its address changed.", after.reason)
+        assertEquals(before.copy(reason = after.reason), after)
+        assertEquals("the actions stay", failed.copy(state = after), with)
+        assertEquals(failed, HomeUiMapper.withLine(failed, null))
+        val loading = map(HostView())
+        assertEquals("only a degraded banner carries it", loading, HomeUiMapper.withLine(loading, "a line"))
+    }
+
     @Test fun nothingYetIsLoading() {
         assertEquals(HomeUiState.Loading("Laptop"), map(HostView()).state)
         assertEquals(HomeUiState.Loading("Laptop"), map(HostView(phase = HostPhase.Connecting)).state)

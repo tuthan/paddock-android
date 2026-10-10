@@ -486,7 +486,10 @@ fun FingerprintDialog(prompt: HostKeyPrompt, onTrust: () -> Unit, onCancel: () -
                     Text("${prompt.endpoint} has a new host key", style = PaddockTokens.type.headerTitle, color = c.attention)
                 }
                 Text(
-                    "Paddock did not sign in. Either the machine was reinstalled, or something else is answering at this address. Keep the old key unless you changed the machine yourself.",
+                    // A router can give a machine's old IP address to another device: the fix for that is a new address, never a new key.
+                    "Paddock did not sign in. Either the machine was reinstalled, or something else is answering at this address, such as another device that " +
+                        "was given the machine's old IP address. Keep the old key unless you changed the machine yourself. If the machine's address changed, " +
+                        "change it on its page in Machines.",
                     style = PaddockTokens.type.body.copy(fontSize = PaddockTokens.type.summary.fontSize), color = c.text,
                 )
                 Slab {

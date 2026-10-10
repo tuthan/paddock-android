@@ -61,6 +61,7 @@ class MachineBookTest {
         override fun becameWatched(id: String) { events += "watched:$id" }
         override fun forgotten(id: String) { events += "forgotten:$id" }
         override fun watchedRemoved() { events += "reset" }
+        override fun addressChanged(id: String) { events += "moved:$id" }
     }
 
     private val removal = MachineRemoval(
@@ -401,6 +402,122 @@ class MachineBookTest {
         assertEquals(listOf("A renamed", "B renamed"), book.machines.value.map { it.name })
         assertTrue(book.rename(a.id, "A renamed"), "saying the name it already has is not a failure")
         assertFalse(book.rename("nope", "X"))
+    }
+
+    @Test fun movingTheWatchedMachineKeepsItsIdAndFactsAndWatchesItAgainAtTheNewAddress() = runBlocking<Unit> {
+        book.add(a); book.add(b)
+        book.saveWake(b, WakeReading(target, answered = true))
+        events.clear()
+        assertTrue(book.setAddress(b.id, "devbox.local", 2222))
+        val moved = profiles.get(b.id)!!
+        assertEquals("devbox.local" to 2222, moved.host to moved.port)
+        assertEquals(b.copy(host = "devbox.local", port = 2222, wake = target), moved, "the id, the name, the user and the wake facts stay")
+        assertEquals(moved, book.profile.value)
+        assertEquals(moved, book.machines.value.single { it.id == b.id })
+        // The watch stops before the connection to the old address is closed, as a removal does, so the next connection is a new one to the new address.
+        assertEquals(listOf("moved:mtest-b", "stop", "drop:mtest-b", "watch:mtest-b"), events.toList())
+        assertEquals("mtest-b", saved.watchedProfileId, "it is still the watched machine")
+    }
+
+    @Test fun movingAnotherMachineClosesWhatWasOpenToItAndLeavesTheWatchedOneAlone() = runBlocking<Unit> {
+        book.add(a); book.add(b)
+        events.clear()
+        assertTrue(book.setAddress(a.id, "10.255.255.50", 22))
+        assertEquals("10.255.255.50", profiles.get(a.id)?.host)
+        assertEquals(listOf("moved:mtest-a", "drop:mtest-a"), events.toList())
+        assertEquals(b, book.profile.value)
+    }
+
+    @Test fun inTheBackgroundTheWatchedMachineIsMovedButNotConnected() = runBlocking<Unit> {
+        book.add(a)
+        foreground = false
+        events.clear()
+        assertTrue(book.setAddress(a.id, "10.255.255.60", 22))
+        assertEquals(listOf("moved:mtest-a", "stop", "drop:mtest-a"), events.toList())
+        assertEquals("10.255.255.60", book.profile.value?.host)
+    }
+
+    @Test fun theSameAddressIsNotAWriteAndAnUnknownMachineIsNotMoved() = runBlocking<Unit> {
+        book.add(a)
+        events.clear()
+        assertTrue(book.setAddress(a.id, a.host, a.port), "saying the address it already has is not a failure")
+        assertFalse(book.setAddress("nope", "10.255.255.70", 22))
+        assertTrue(events.isEmpty())
+    }
+
+    @Test fun aWakeReadingFromTheOldAddressIsDroppedAfterAMove() = runBlocking<Unit> {
+        book.add(a)
+        book.setAddress(a.id, "10.255.255.80", 22)
+        // The controller that read it was started for the old address.
+        book.saveWake(a, WakeReading(target, answered = true))
+        assertNull(profiles.get(a.id)?.wake)
+    }
+
+    @Test fun theHostnameIsKeptWithoutAReconnectAndOnlyForTheAddressThatAsked() = runBlocking<Unit> {
+        book.add(a)
+        events.clear()
+        book.saveDetectedName(a, "alpha-box")
+        assertEquals("alpha-box", book.profile.value?.detectedName)
+        assertEquals("alpha-box", book.machines.value.single().detectedName)
+        book.saveDetectedName(a.copy(host = "10.255.255.99"), "someone-else")
+        assertEquals("alpha-box", profiles.get(a.id)?.detectedName, "a reading for a machine that is no longer at that address is dropped")
+        assertTrue(events.isEmpty())
+    }
+
+    @Test fun aMoveFoundByPaddockIsRefusedWhenTheUserMovedTheMachineMeanwhile() = runBlocking<Unit> {
+        book.add(a)
+        val lookedFor = book.profile.value!!
+        assertTrue(book.setAddress(a.id, "10.255.255.40", 22))
+        events.clear()
+        assertFalse(book.setAddress(a.id, "10.255.255.41", 22, onlyFrom = lookedFor), "the user's address stands")
+        assertEquals("10.255.255.40", profiles.get(a.id)?.host)
+        assertTrue(events.isEmpty())
+        assertTrue(book.setAddress(a.id, "10.255.255.41", 22, onlyFrom = book.profile.value), "still at the address looked for: moved")
+        assertEquals("10.255.255.41", profiles.get(a.id)?.host)
+    }
+
+    @Test fun theNetworkSearchSwitchIsSavedKeptThroughAMoveAndNeverReconnects() = runBlocking<Unit> {
+        book.add(a); book.add(b)
+        events.clear()
+        assertFalse(profiles.get(b.id)!!.searchNetwork, "off until the user turns it on")
+        book.setSearchNetwork(b.id, true)
+        assertTrue(profiles.get(b.id)!!.searchNetwork)
+        assertTrue(book.profile.value!!.searchNetwork)
+        assertTrue(book.machines.value.single { it.id == b.id }.searchNetwork)
+        book.setSearchNetwork(a.id, true)
+        assertTrue(book.machines.value.single { it.id == a.id }.searchNetwork)
+        book.setSearchNetwork("nope", true)
+        assertTrue(events.isEmpty(), "a setting: nothing is closed or watched again")
+        assertTrue(book.setAddress(b.id, "10.255.255.90", 22))
+        assertTrue(profiles.get(b.id)!!.searchNetwork, "a moved machine keeps the user's switch")
+        book.setSearchNetwork(b.id, false)
+        assertFalse(profiles.get(b.id)!!.searchNetwork)
+    }
+
+    @Test fun aDecisionAboutTheOldAddressRunsOnlyWhileTheMachineIsStillThere() = runBlocking<Unit> {
+        book.add(a)
+        assertEquals("ran", book.whileAt(a.id, "10.255.255.1:22") { "ran" })
+        assertNull(book.whileAt(a.id, "10.255.255.9:22") { "ran" }, "another address")
+        assertNull(book.whileAt("nope", "10.255.255.1:22") { "ran" }, "no such machine")
+        assertTrue(book.setAddress(a.id, "10.255.255.50", 22))
+        assertNull(book.whileAt(a.id, "10.255.255.1:22") { "ran" }, "it moved since the warning was about the old address")
+        assertEquals("ran", book.whileAt(a.id, "10.255.255.50:22") { "ran" })
+    }
+
+    @Test fun aMoveWaitsForADecisionRunningAtTheOldAddressSoNoPinIsMadeAfterIt() = runBlocking<Unit> {
+        book.add(a)
+        val inside = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val deciding = async(Dispatchers.Default) { book.whileAt(a.id, "10.255.255.1:22") { inside.complete(Unit); release.await(); "pinned" } }
+        inside.await()
+        val moving = async(Dispatchers.Default) { book.setAddress(a.id, "10.255.255.51", 22) }
+        kotlinx.coroutines.delay(150)
+        assertFalse(moving.isCompleted, "the move waits for the decision that was made at the old address")
+        assertEquals("10.255.255.1", profiles.get(a.id)?.host)
+        release.complete(Unit)
+        assertEquals("pinned", deciding.await())
+        assertTrue(moving.await())
+        assertEquals("10.255.255.51", profiles.get(a.id)?.host)
     }
 
     @Test fun theUsersIconNeverReconnects() = runBlocking<Unit> {

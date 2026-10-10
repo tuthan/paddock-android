@@ -15,6 +15,7 @@ import io.github.tuthan.paddock.billing.FileEntitlementStore
 import io.github.tuthan.paddock.billing.ProCapabilities
 import io.github.tuthan.paddock.billing.ProService
 import io.github.tuthan.paddock.discovery.FinderController
+import io.github.tuthan.paddock.discovery.MachineRelocator
 import io.github.tuthan.paddock.host.HostUiModel
 import io.github.tuthan.paddock.host.Retained
 import io.github.tuthan.paddock.hostkey.ChangedKey
@@ -22,6 +23,7 @@ import io.github.tuthan.paddock.hostkey.FileHostKeyStore
 import io.github.tuthan.paddock.hostkey.HostKeyBroker
 import io.github.tuthan.paddock.hostkey.HostKeyPolicy
 import io.github.tuthan.paddock.hostprofile.FileHostProfileStore
+import io.github.tuthan.paddock.hostprofile.HostNameProbe
 import io.github.tuthan.paddock.hostprofile.HostOsProbe
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.hostprofile.KeyKind
@@ -38,6 +40,7 @@ import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.live.HostSessionController
 import io.github.tuthan.paddock.live.HostWatcher
 import io.github.tuthan.paddock.net.AndroidLanPaths
+import io.github.tuthan.paddock.net.AndroidRelocatorPorts
 import io.github.tuthan.paddock.net.AndroidSockets
 import io.github.tuthan.paddock.net.NsdBrowser
 import io.github.tuthan.paddock.notify.AndroidAlertNotifier
@@ -164,7 +167,7 @@ class AppGraph(private val app: Application) {
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
     val owner: ConnectionOwner = ConnectionOwner(scope, SessionFactory { profile -> connect(profile) }, clock)
-    val triggers: AndroidTriggers = AndroidTriggers(app, owner, onNetworkChanged = { probe.lookAgainNow() })
+    val triggers: AndroidTriggers = AndroidTriggers(app, owner, onNetworkChanged = { probe.lookAgainNow(); relocator.networkChanged() })
 
     /**
      * The light look at the machines this phone is not watching, for the counts on Home's chips (Pro, `hosts.merged`). Its own short sessions, never the
@@ -214,8 +217,11 @@ class AppGraph(private val app: Application) {
             override suspend fun dropConnection(id: String) = owner.drop(id)
             override fun becameWatched(id: String) = wakes.watching(id)
             // Its Wake facts and their flow go with it: a later machine with the same id starts with none.
-            override fun forgotten(id: String) { wakes.forget(id); probe.forget(id) }
+            override fun forgotten(id: String) { wakes.forget(id); probe.forget(id); relocator.forget(id) }
             override fun watchedRemoved() = hostUi.reset()
+            // A changed key recorded at the old address was about whatever answers there now; the new address is checked against the pin afresh.
+            // Never relocator.forget: the relocator's own move comes through here, and cancelling it would stop the move halfway.
+            override fun addressChanged(id: String) { broker.clearChanged(id); probe.forget(id); relocator.addressChanged(id) }
         },
     )
 
@@ -232,6 +238,20 @@ class AppGraph(private val app: Application) {
         switchTo = { id -> machineBook.watch(id, chosen = false) }, monitored = hostUi.view.map { (it.phase as? HostPhase.Monitoring)?.host },
     )
     /** The one machine watched now: its connection controller, and what follows that controller's phases and readings ([HostWatcher]). */
+    /**
+     * Finds the watched machine when its LAN address stops answering, by the host key this phone trusted for it, and moves it there
+     * ([MachineRelocator]: its hostname, then mDNS, then a scan of the network it was saved on). Only while the herd is in front and not covered.
+     */
+    val relocator: MachineRelocator = MachineRelocator(
+        scope, clock,
+        AndroidRelocatorPorts(
+            app, lanPaths, gate, hostKeyStore, connector,
+            inFront = { triggers.interactive.value && !appLock.locked.value },
+            othersOf = { id -> machineBook.machines.value.filter { it.id != id }.map { it.host.lowercase() }.toSet() },
+            moveTo = { profile, address -> machineBook.setAddress(profile.id, address, profile.port, onlyFrom = profile) },
+        ),
+    )
+
     val hostWatcher: HostWatcher = HostWatcher(
         scope, isRemoving = { machineBook.isRemoving(it) },
         create = { profile ->
@@ -241,7 +261,7 @@ class AppGraph(private val app: Application) {
                 decideScript = hostScripts.decide, decideSha256 = hostScripts.decideSha256, hookScript = hostScripts.hook, hookSha256 = hostScripts.hookSha256,
                 opencodeScript = hostScripts.opencode, opencodeSha256 = hostScripts.opencodeSha256, sagaStore = sagaStore,
                 wakeCapture = { session -> WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) },
-                osProbe = { session -> HostOsProbe.read(session) },
+                osProbe = { session -> HostOsProbe.read(session) }, nameProbe = { session -> HostNameProbe.read(session) },
             )
         },
         attach = { hostUi.attach(it) }, detach = { hostUi.detach() }, becameWatched = { wakes.watching(it) },
@@ -251,6 +271,17 @@ class AppGraph(private val app: Application) {
             { c -> c.phase.collectLatest { p -> if (p is HostPhase.Monitoring) widgets.track(p.host) } },
             { c -> c.wake.filterNotNull().collect { machineBook.saveWake(c.profile, it) } },
             { c -> c.os.filterNotNull().collect { machineBook.saveDetectedOs(c.profile, it) } },
+            { c -> c.hostname.filterNotNull().collect { machineBook.saveDetectedName(c.profile, it) } },
+            // A failure that may mean the machine moved has it looked for: with the profile as saved now, which holds the hostname this connection read.
+            { c ->
+                c.phase.collectLatest { p ->
+                    when (p) {
+                        is HostPhase.Failed -> relocator.lookFor(machineBook.profile.value?.takeIf { it.id == c.profile.id && it.host.equals(c.profile.host, ignoreCase = true) && it.port == c.profile.port } ?: c.profile, p.reason)
+                        is HostPhase.Monitoring -> relocator.connected(c.profile.id)
+                        else -> Unit
+                    }
+                }
+            },
             // A live connection ends any pairing request: the key is no longer what stands between this phone and the machine.
             { c -> c.phase.collectLatest { p -> if (p is HostPhase.Monitoring) pairingCoordinator.connectedTo(p.host.profile.host) } },
         ),
@@ -370,18 +401,19 @@ class AppGraph(private val app: Application) {
      * Replaces the pin with the key the user was shown ([shown], the warning the dialog drew), then reconnects, so the new pin
      * is checked by a fresh connection. Returns false and changes nothing when that warning is no longer the one on record
      * (cleared by a good connect, or replaced by a later failed attempt that may carry another key): the tap approved a key,
-     * and only that key.
+     * and only that key. Also false when the machine is no longer saved at the address the warning is about ([MachineBook.whileAt]): it was
+     * about whatever answered at the old address, and a move (the user's, or Paddock's own relocation) must not be followed by a pin made of it.
      */
     suspend fun replaceKey(shown: ChangedKey): Boolean {
         val c = broker.takeChanged(shown.profileId, shown.id) ?: return false
-        try {
-            hostKeyPolicy.replaceChanged(c.profileId, c.endpoint, c.pin, c.presented)
+        val replaced = try {
+            machineBook.whileAt(c.profileId, c.endpoint) { hostKeyPolicy.replaceChanged(c.profileId, c.endpoint, c.pin, c.presented); true }
         } catch (e: Throwable) {
             broker.restoreChanged(c)
             throw e
-        }
+        } ?: return false
         owner.refresh(c.profileId)
-        return true
+        return replaced
     }
 
     private suspend fun connect(profile: HostProfile) = run {

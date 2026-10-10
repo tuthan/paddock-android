@@ -120,7 +120,13 @@ class HostSessionController(
      */
     private val osProbe: (suspend (SshSession) -> io.github.tuthan.paddock.hostprofile.HostOs?)? = null,
     private val osProbeTimeoutMillis: Long = 5_000,
+    /** Asks the machine its hostname (`uname -n`), after the OS and under the same rules and deadline; null skips it. */
+    private val nameProbe: (suspend (SshSession) -> String?)? = null,
 ) {
+    private val _hostname = MutableStateFlow<String?>(null)
+    /** The hostname the last bring-up read; null until a probe has answered. */
+    val hostname: StateFlow<String?> = _hostname.asStateFlow()
+
     private val _os = MutableStateFlow<io.github.tuthan.paddock.hostprofile.HostOs?>(null)
     /** What the last bring-up learned about the machine's OS; null until a probe has answered (a machine that cannot tell leaves it null). */
     val os: StateFlow<io.github.tuthan.paddock.hostprofile.HostOs?> = _os.asStateFlow()
@@ -264,14 +270,21 @@ class HostSessionController(
     }
 
     private fun probeOs(session: SshSession) {
-        val probe = osProbe ?: return
+        if (osProbe == null && nameProbe == null) return
         scope.launch {
             try {
-                kotlinx.coroutines.withTimeoutOrNull(osProbeTimeoutMillis) { probe(session) }?.let { _os.value = it }
+                osProbe?.let { probe -> kotlinx.coroutines.withTimeoutOrNull(osProbeTimeoutMillis) { probe(session) }?.let { _os.value = it } }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {
                 // An icon is a convenience: a failed probe is "not known", never a failed connection.
+            }
+            try {
+                nameProbe?.let { probe -> kotlinx.coroutines.withTimeoutOrNull(osProbeTimeoutMillis) { probe(session) }?.let { _hostname.value = it } }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // The hostname only helps find the machine after its address changed: not knowing it is never a failed connection.
             }
         }
     }

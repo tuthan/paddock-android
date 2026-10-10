@@ -48,6 +48,12 @@ object HomeUiMapper {
         }
     }
 
+    /** [screen] with [line] after a degraded banner's reason (what Paddock is doing about it meanwhile); any other screen, or no line, is unchanged. */
+    fun withLine(screen: HostScreen, line: String?): HostScreen {
+        val degraded = screen.state as? HomeUiState.Degraded ?: return screen
+        return if (line == null) screen else screen.copy(state = degraded.copy(reason = "${degraded.reason} $line"))
+    }
+
     /**
      * [wakeAvailable] is true when this phone has what it takes to send a wake packet for this machine and the last tap is old enough
      * to send another: a failure that may mean "the machine is asleep" then offers Wake the machine, with Try again beside it.

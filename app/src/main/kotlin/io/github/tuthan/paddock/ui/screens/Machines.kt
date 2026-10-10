@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,16 +25,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import io.github.tuthan.paddock.hostprofile.HostOs
+import io.github.tuthan.paddock.hostprofile.HostProfile
+import io.github.tuthan.paddock.hostprofile.MachineAddress
 import io.github.tuthan.paddock.hostprofile.MachineCopy
 import io.github.tuthan.paddock.hostprofile.MachineName
 import io.github.tuthan.paddock.hostprofile.MachineRoster
 import io.github.tuthan.paddock.hostprofile.MachineRow
 import io.github.tuthan.paddock.ui.components.ButtonKind
+import io.github.tuthan.paddock.ui.components.ButtonPair
 import io.github.tuthan.paddock.ui.components.Fact
 import io.github.tuthan.paddock.ui.components.Field
 import io.github.tuthan.paddock.ui.components.FilterChips
@@ -41,6 +49,7 @@ import io.github.tuthan.paddock.ui.components.Kicker
 import io.github.tuthan.paddock.ui.components.Note
 import io.github.tuthan.paddock.ui.components.PaddockButton
 import io.github.tuthan.paddock.ui.components.ScreenHeader
+import io.github.tuthan.paddock.ui.components.Toggle
 import io.github.tuthan.paddock.ui.components.card
 import io.github.tuthan.paddock.ui.components.proSpoken
 import io.github.tuthan.paddock.ui.theme.PaddockIcons
@@ -146,7 +155,13 @@ data class MachinePageState(
     val detectedOs: HostOs? = null,
     /** Guarded answers are Pro and locked on this phone: the row says so, and a tap asks the gate before the setup opens. */
     val guardedLocked: Boolean = false,
+    /** The machine's saved profile and the other saved machines, for its address change ([MachineAddress]); null draws no Change address…. */
+    val profile: HostProfile? = null,
+    val otherProfiles: List<HostProfile> = emptyList(),
 )
+
+/** The hostname the machine said (`uname -n`), shown so the user knows the name Paddock looks for when its address stops answering; null before a bring-up read it. */
+private val MachinePageState.hostname: String? get() = profile?.detectedName
 
 /**
  * One saved machine (decision D3): what it is and whether it is watched, Watch (Pro for this phone unless it is the free return), Wake-on-LAN
@@ -167,10 +182,16 @@ fun MachinePage(
     onRename: (String) -> Unit = {},
     onSetOs: (HostOs?) -> Unit = {},
     onGuardedAnswers: () -> Unit = {},
+    onChangeAddress: (host: String, port: Int) -> Unit = { _, _ -> },
+    onSetSearchNetwork: (Boolean) -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     val row = state.row
     var confirm by rememberSaveable(row.id) { mutableStateOf(false) }
+    var editAddress by rememberSaveable(row.id) { mutableStateOf(false) }
+    if (editAddress && state.profile != null) {
+        MachineAddressDialog(row.name, state.profile, state.otherProfiles, state.busy, onSave = { host, port -> editAddress = false; onChangeAddress(host, port) }, onCancel = { editAddress = false })
+    }
     if (confirm) {
         ConfirmDialog(
             MachineCopy.removeTitle(row.name), MachineCopy.removeBody(row.name, watched = row.watched, next = state.next),
@@ -187,6 +208,7 @@ fun MachinePage(
             Kicker("This machine", Modifier.padding(top = 4.dp))
             Fact("Address", row.endpoint)
             Fact("Session", row.session ?: MachineCopy.DEFAULT_SESSION)
+            state.hostname?.let { Fact("Hostname", it) }
             if (row.watched) {
                 // The watched machine's state line is its mark, drawn as the design's accent chip, so "Watching" is not said twice.
                 val pill = RoundedCornerShape(50)
@@ -201,6 +223,19 @@ fun MachinePage(
                     "Watch", onWatch, kind = ButtonKind.Secondary, enabled = !state.busy, pro = locked,
                     modifier = Modifier.semantics { contentDescription = MachineCopy.watchLabel(row.name).let { if (locked) proSpoken(it) else it } },
                 )
+            }
+            // After the state line and Watch, so moving the machine never pushes them down; it is needed only when the machine's IP address changed.
+            if (state.profile != null) {
+                PaddockButton(
+                    "Change address…", { editAddress = true }, kind = ButtonKind.Ghost, small = true, fillWidth = false, enabled = !state.busy,
+                    modifier = Modifier.semantics { contentDescription = MachineCopy.addressChangeLabel(row.name) },
+                )
+            }
+
+            // What Paddock may do on its own when the address stops answering: asking the servers of the network is the user's to allow, machine by machine.
+            if (state.profile != null) {
+                Kicker(MachineCopy.SEARCH_KICKER, Modifier.padding(top = 12.dp))
+                Toggle(MachineCopy.SEARCH_LABEL, state.profile.searchNetwork, onSetSearchNetwork, detail = MachineCopy.SEARCH_DETAIL, enabled = !state.busy)
             }
 
             // Renaming and the icon are occasional: they come after the state line and Watch, which is what the page is mostly opened for.
@@ -269,6 +304,42 @@ private fun NameEditor(row: MachineRow, otherNames: List<String>, busy: Boolean,
     )
     PaddockButton("Save name", save, kind = ButtonKind.Secondary, enabled = changed && result is MachineName.Result.Ok && !busy)
     Note(MachineCopy.NAME_HINT)
+}
+
+/**
+ * A new host and port for the machine (its IP address changed, or it is reached by a name now). Both fields start at what is saved; Save is on only for
+ * an address [MachineAddress] accepts that is not that one. The user stays: another user is another machine on Add a machine. Cancel has the focus.
+ */
+@Composable
+fun MachineAddressDialog(name: String, machine: HostProfile, others: List<HostProfile>, busy: Boolean, onSave: (String, Int) -> Unit, onCancel: () -> Unit) {
+    val c = PaddockTokens.colors
+    val shape = RoundedCornerShape(PaddockTokens.radii.dialog)
+    var host by rememberSaveable(machine.id) { mutableStateOf(machine.host) }
+    var port by rememberSaveable(machine.id) { mutableStateOf(machine.port.toString()) }
+    val result = MachineAddress.check(host, port, machine, others)
+    val save = { (result as? MachineAddress.Result.Ok)?.let { if (!busy) onSave(it.host, it.port) }; Unit }
+    Dialog(onDismissRequest = onCancel, properties = DialogProperties(dismissOnClickOutside = false, usePlatformDefaultWidth = false)) {
+        Column(
+            Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(shape).background(c.surface).border(1.dp, c.fieldLine(), shape).verticalScroll(rememberScrollState()).padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(MachineCopy.addressTitle(name), style = PaddockTokens.type.headerTitle, color = c.title, modifier = Modifier.semantics { heading() })
+            Text(MachineCopy.ADDRESS_BODY, style = PaddockTokens.type.body, color = c.text)
+            Field(
+                "Host or IP address", host, { host = it }, error = MachineAddress.hostMessage(result), keyboardType = KeyboardType.Uri,
+                placeholder = "192.168.1.20 or box.example.ts.net", mono = true,
+            )
+            Field(
+                "Port", port, { port = it }, error = MachineAddress.portMessage(result), keyboardType = KeyboardType.Number, imeAction = ImeAction.Done,
+                onDone = save, mono = true,
+            )
+            Note(MachineCopy.ADDRESS_TIP)
+            ButtonPair(
+                { m -> PaddockButton("Cancel", onCancel, m, kind = ButtonKind.Secondary, autoFocus = true) },
+                { m -> PaddockButton("Save address", save, m, kind = ButtonKind.Primary, enabled = result is MachineAddress.Result.Ok && !busy) },
+            )
+        }
+    }
 }
 
 /** Which glyph the machine's card draws: what the machine said (Automatic) or the user's own pick; a pick is kept when the machine later says something else. */

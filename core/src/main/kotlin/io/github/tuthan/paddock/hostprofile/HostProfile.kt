@@ -38,6 +38,18 @@ data class HostProfile(
     val os: HostOs? = null,
     /** What the machine said it is (`uname -s`) on the last bring-up that could ask, or null before that. Never the user's choice, so a pick is never overwritten. */
     val detectedOs: HostOs? = null,
+    /**
+     * The machine's own hostname, one DNS label (`uname -n` up to its first dot, [MachineHostName.label]), from the last bring-up that could ask, or
+     * null before that. Only used to look for the machine when its saved address stops answering ([io.github.tuthan.paddock.discovery.MachineRelocator]).
+     * Old files without it load.
+     */
+    val detectedName: String? = null,
+    /**
+     * The user's switch for searching the machine's network when its LAN address stops answering: every other SSH service announced there, then every
+     * address of the subnet on the saved port ([io.github.tuthan.paddock.discovery.MachineRelocator]). Off unless the user turned it on, because those steps
+     * reach other machines. A setting, not a reading: changing it never reconnects. Old files without it load as off.
+     */
+    val searchNetwork: Boolean = false,
 ) {
     init {
         require(ID.matches(id)) { "invalid profile id" }
@@ -46,6 +58,7 @@ data class HostProfile(
         require(port in 1..65535) { "invalid port" }
         require(USER.matches(user)) { "invalid user" }
         require(session == null || SESSION.matches(session)) { "invalid session name" }
+        require(detectedName == null || MachineHostName.LABEL.matches(detectedName)) { "invalid hostname" }
         when (key) {
             KeyKind.Phone -> require(importedKeyId == null) { "a phone-key profile has no imported key" }
             KeyKind.Imported -> require(importedKeyId != null && ID.matches(importedKeyId)) { "an imported-key profile needs a key id" }
@@ -60,11 +73,13 @@ data class HostProfile(
     fun toTarget() = SshTarget(id, host, port, user)
 
     /**
-     * Whether a connection made for this profile is still the one [other] needs. What was read about waking the machine, and the icon (read or
-     * picked), change without the user touching the connection and are no reason to reconnect; anything else, the name included (the label the answer
-     * host writes), is.
+     * Whether a connection made for this profile is still the one [other] needs. What was read about waking the machine, the icon (read or
+     * picked), the hostname read from it and the search switch change without the user touching the connection and are no reason to reconnect;
+     * anything else, the name included (the label the answer host writes), is.
      */
-    fun sameConnectionAs(other: HostProfile): Boolean = copy(wake = null, os = null, detectedOs = null) == other.copy(wake = null, os = null, detectedOs = null)
+    fun sameConnectionAs(other: HostProfile): Boolean = readingsDropped() == other.readingsDropped()
+
+    private fun readingsDropped() = copy(wake = null, os = null, detectedOs = null, detectedName = null, searchNetwork = false)
 
     companion object {
         /** Also the imported-key id rule, so a profile id can name its key. */

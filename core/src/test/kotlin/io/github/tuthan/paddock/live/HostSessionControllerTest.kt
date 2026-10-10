@@ -116,6 +116,22 @@ class HostSessionControllerTest {
         }
     }
 
+    @Test fun theHostnameIsReadAfterTheOsEvenWhenTheOsProbeFailsAndAFailedReadLeavesItUnknown() = runBlocking<Unit> {
+        herdrFound = false
+        val session = host(sha256sum = { result(0, "$sha  x\n") })
+        val c = controller(FakeLease(Connection.Connected(session, 1)), osProbe = { error("boom") }, nameProbe = { "labbox" }).also { it.start() }
+        until("hostname") { c.hostname.value != null }
+        assertEquals("labbox", c.hostname.value)
+        c.stop()
+        for (probe in listOf<suspend (io.github.tuthan.paddock.ports.SshSession) -> String?>({ null }, { error("boom") }, { kotlinx.coroutines.awaitCancellation() })) {
+            val d = controller(FakeLease(Connection.Connected(session, 1)), nameProbe = probe, osTimeout = 50).also { it.start() }
+            until("problem") { d.phase.value is HostPhase.Problem }
+            kotlinx.coroutines.delay(120)
+            assertNull(d.hostname.value)
+            d.stop()
+        }
+    }
+
     private val clock = Clock { System.currentTimeMillis() }
     private val profile = HostProfile("laptop", "Laptop", "10.0.0.2", 22, "jdoe")
     private val script = "print('relay')\n".toByteArray()
@@ -129,7 +145,8 @@ class HostSessionControllerTest {
         wakeTimeout: Long = 5_000,
         osProbe: (suspend (io.github.tuthan.paddock.ports.SshSession) -> io.github.tuthan.paddock.hostprofile.HostOs?)? = null,
         osTimeout: Long = 5_000,
-    ) = HostSessionController(scope, profile, { lease }, ledger, clock, MutableStateFlow(true), script, sha, wakeCapture = wakeCapture, wakeCaptureTimeoutMillis = wakeTimeout, osProbe = osProbe, osProbeTimeoutMillis = osTimeout)
+        nameProbe: (suspend (io.github.tuthan.paddock.ports.SshSession) -> String?)? = null,
+    ) = HostSessionController(scope, profile, { lease }, ledger, clock, MutableStateFlow(true), script, sha, wakeCapture = wakeCapture, wakeCaptureTimeoutMillis = wakeTimeout, osProbe = osProbe, osProbeTimeoutMillis = osTimeout, nameProbe = nameProbe)
 
     private suspend fun until(what: String, cond: () -> Boolean) {
         try { withTimeout(3_000) { while (!cond()) delay(5) } } catch (e: kotlinx.coroutines.TimeoutCancellationException) { throw AssertionError("timed out waiting for $what") }

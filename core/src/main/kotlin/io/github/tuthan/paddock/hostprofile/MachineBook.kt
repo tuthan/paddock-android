@@ -54,6 +54,8 @@ class MachineBook(
         fun forgotten(id: String)
         /** The watched machine was removed: what the screens show about it goes. */
         fun watchedRemoved()
+        /** [id] moved to another address: what was seen at the old one (a changed-key warning, a chip's last look) goes. */
+        fun addressChanged(id: String)
     }
 
     private val _boot = MutableStateFlow(Boot.Loading)
@@ -243,6 +245,18 @@ class MachineBook(
     }
 
     /**
+     * Keeps the hostname a bring-up read ([HostProfile.detectedName]), under the same rules as [saveDetectedOs]: skipped when the stored profile is no
+     * longer at the address that asked, and an equal reading is not a write. Never reconnects.
+     */
+    suspend fun saveDetectedName(read: HostProfile, name: String) {
+        val written = profiles.update(read.id) { stored ->
+            if (!stored.host.equals(read.host, ignoreCase = true) || stored.port != read.port || stored.detectedName == name) null else stored.copy(detectedName = name)
+        } ?: return
+        if (_profile.value?.id == written.id) _profile.value = written
+        machineWritten(written)
+    }
+
+    /**
      * Renames [profileId] on this phone (the id, the pin and every fact that hangs off it stay). [MachineName] has already judged [name]; the store's own
      * check is the last word. False when there is no such machine. The watched machine reconnects once: its name is part of what its connection was
      * started with (the label the answer host writes), so a rename is the one edit here that is not free.
@@ -253,6 +267,46 @@ class MachineBook(
         if (_profile.value?.id == written.id) { _profile.value = written; effects.watch(written) }
         machineWritten(written)
         return true
+    }
+
+    /**
+     * Moves [profileId] to another address ([MachineAddress] has judged it): its IP address changed, or it is reached by a name now. The id stays, so
+     * the trusted host key, the ledger, the alert registration and the wake facts stay attached, and the key is still checked at the new address: a
+     * device answering there with another key stops at the changed-key warning and is not trusted unless the user chooses to. What was seen at the old address goes
+     * ([Effects.addressChanged]), and a connection to it is closed at once; the watched machine is watched again from the start, so its next
+     * connection goes to the new address (as a removal does, the watch stops before the connection is dropped). Serialized with add, switch and
+     * remove. False when there is no such machine. [onlyFrom]: move it only while it is still at that profile's address (Paddock found it elsewhere
+     * by itself, and the user may have changed the address meanwhile); false when it is not.
+     */
+    suspend fun setAddress(profileId: String, host: String, port: Int, onlyFrom: HostProfile? = null): Boolean = machineLock.withLock {
+        val written = profiles.update(profileId) { stored ->
+            if (onlyFrom != null && (!stored.host.equals(onlyFrom.host, ignoreCase = true) || stored.port != onlyFrom.port)) null else stored.copy(host = host, port = port)
+        }
+            ?: return@withLock profiles.get(profileId)?.let { it.host.equals(host, ignoreCase = true) && it.port == port } == true
+        machineWritten(written)
+        effects.addressChanged(profileId)
+        val watched = _profile.value?.id == profileId
+        if (watched) { _profile.value = written; effects.stopWatching() }
+        effects.dropConnection(profileId)
+        if (watched && effects.inForeground) effects.watch(written)
+        true
+    }
+
+    /**
+     * Runs [block] only while [profileId] is still saved at [endpoint] (`host:port`), with moves of the machine held off ([machineLock]), so a decision
+     * about the machine at that address cannot land after the machine moved (a key approved for whatever answered at its old address). Null, without
+     * running [block], when the machine is gone or saved elsewhere now. [block] must not call the book.
+     */
+    suspend fun <T> whileAt(profileId: String, endpoint: String, block: suspend () -> T): T? = machineLock.withLock {
+        val stored = profiles.get(profileId) ?: return@withLock null
+        if (stored.toTarget().endpoint != endpoint) null else block()
+    }
+
+    /** The user's switch for searching the machine's network when its address stops answering ([HostProfile.searchNetwork]). Never reconnects. */
+    suspend fun setSearchNetwork(profileId: String, on: Boolean) {
+        val written = profiles.update(profileId) { stored -> stored.copy(searchNetwork = on) } ?: return
+        if (_profile.value?.id == written.id) _profile.value = written
+        machineWritten(written)
     }
 
     /** The user's own icon for [profileId]: an OS, or null to follow what the machine says. Never reconnects. */
