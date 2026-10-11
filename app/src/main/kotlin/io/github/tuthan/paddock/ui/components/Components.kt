@@ -504,6 +504,8 @@ fun Banner(
     tint: Color = PaddockTokens.colors.attention, icon: androidx.compose.ui.graphics.vector.ImageVector = PaddockIcons.Warning,
     /** A second action beside the first (Wake, then Try again); it makes the banner stack, so two buttons never squeeze the sentence. */
     secondaryLabel: String? = null, onSecondary: () -> Unit = {},
+    /** Off while the action is pending (a connection attempt is running): the button keeps its place and cannot be pressed twice. */
+    actionEnabled: Boolean = true, secondaryEnabled: Boolean = true,
     /** The sentence is a polite live region ([NoticeBar]): read out when it appears or changes. */
     live: Boolean = false,
 ) {
@@ -523,8 +525,8 @@ fun Banner(
     val actionsStacked = secondaryLabel != null && density.fontScale >= 1.3f
     val action: @Composable () -> Unit = {
         val buttons: @Composable () -> Unit = {
-            if (actionLabel != null) PaddockButton(actionLabel, onAction, kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
-            if (actionLabel != null && secondaryLabel != null) PaddockButton(secondaryLabel, onSecondary, kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
+            if (actionLabel != null) PaddockButton(actionLabel, onAction, enabled = actionEnabled, kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
+            if (actionLabel != null && secondaryLabel != null) PaddockButton(secondaryLabel, onSecondary, enabled = secondaryEnabled, kind = ButtonKind.Ghost, small = true, fillWidth = false, tint = tint)
         }
         if (actionsStacked) Column(Modifier.padding(start = 30.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { buttons() }
         else Row(Modifier.padding(start = if (stacked) 30.dp else 0.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { buttons() }

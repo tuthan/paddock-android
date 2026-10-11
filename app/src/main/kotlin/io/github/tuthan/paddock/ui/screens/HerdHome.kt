@@ -76,6 +76,9 @@ sealed interface HomeUiState {
         val recoveryLabel: String? = null,
         /** A second action beside [recoveryLabel] (Try again beside Wake the machine). */
         val secondaryLabel: String? = null,
+        /** False while an attempt is running and the action is "Try again": the button stays where it is, so the banner does not change shape every few seconds. */
+        val recoveryEnabled: Boolean = true,
+        val secondaryEnabled: Boolean = true,
     ) : HomeUiState
 }
 
@@ -170,7 +173,10 @@ fun HerdHome(
                 }
                 if (state is HomeUiState.Degraded) {
                     item(key = "banner") {
-                        Banner(state.reason, Modifier.padding(top = 4.dp), actionLabel = state.recoveryLabel, onAction = onRecovery, secondaryLabel = state.secondaryLabel, onSecondary = onSecondaryRecovery)
+                        Banner(
+                            state.reason, Modifier.padding(top = 4.dp), actionLabel = state.recoveryLabel, onAction = onRecovery, secondaryLabel = state.secondaryLabel, onSecondary = onSecondaryRecovery,
+                            actionEnabled = state.recoveryEnabled, secondaryEnabled = state.secondaryEnabled,
+                        )
                     }
                     if (wakeLines.isNotEmpty()) {
                         item(key = "wake") {

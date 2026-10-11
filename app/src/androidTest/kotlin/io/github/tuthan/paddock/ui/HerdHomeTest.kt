@@ -7,6 +7,8 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
@@ -304,6 +306,23 @@ class HerdHomeTest {
 
     @Test fun auditLiveHomeLight() {
         show(live(busy), dark = false); SemanticsAudit.expectClean(rule, "Home, busy, light")
+    }
+
+    @Test fun whileAnAttemptRunsTheBannerKeepsItsButtonsAndOnlyTryAgainIsOff() {
+        show(HomeUiState.Degraded("laptop", null, "The host did not answer in time. Trying now.", null, recoveryLabel = "Wake the machine", secondaryLabel = "Try again", secondaryEnabled = false))
+        rule.onNodeWithText("The host did not answer in time. Trying now.").assertIsDisplayed()
+        rule.onNodeWithText("Wake the machine").assertIsDisplayed().assertIsEnabled()
+        rule.onNodeWithText("Try again").assertIsDisplayed().assertIsNotEnabled()
+    }
+
+    @Test fun auditBannerWithTryAgainOffDark() {
+        show(HomeUiState.Degraded("laptop", null, "The host did not answer in time. Trying now.", null, recoveryLabel = "Wake the machine", secondaryLabel = "Try again", secondaryEnabled = false))
+        SemanticsAudit.expectClean(rule, "Home, an attempt running, dark")
+    }
+
+    @Test fun auditBannerWithTryAgainOffLight() {
+        show(HomeUiState.Degraded("laptop", null, "The host did not answer in time. Trying now.", null, recoveryLabel = "Wake the machine", secondaryLabel = "Try again", secondaryEnabled = false), dark = false)
+        SemanticsAudit.expectClean(rule, "Home, an attempt running, light")
     }
 
     @Test fun auditDegradedHome() {

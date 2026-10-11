@@ -27,7 +27,24 @@ data class HostView(
     val herdrVersion: String? = null,
     /** The machine's sessions for the Spaces screen (Phase 09); null while the connection is not up. */
     val spaces: io.github.tuthan.paddock.live.HostSpaces? = null,
+    /**
+     * The failure the machine is down with, kept while the next attempt runs. A connection that keeps failing goes Failed, then Connecting for up to
+     * the connect timeout, then Failed again; without this the banner and its buttons (Wake the machine, Try again) were there for the few seconds of the
+     * wait and gone for the attempt, again and again. It is set by a failure, kept through [HostPhase.Connecting], and cleared by anything that means the
+     * machine answered (a relay question, a problem, monitoring) or by switching machines.
+     */
+    val failure: HostPhase.Failed? = null,
 )
+
+/**
+ * The failure a view keeps when its phase becomes [phase]: a failure is the new one, the next attempt ([HostPhase.Connecting]) keeps [previous], and every
+ * other phase (a relay question, a problem, monitoring) means the machine answered, so nothing is kept.
+ */
+fun failureAfter(previous: HostPhase.Failed?, phase: HostPhase?): HostPhase.Failed? = when (phase) {
+    is HostPhase.Failed -> phase
+    HostPhase.Connecting -> previous
+    else -> null
+}
 
 /** What tapping the degraded banner's action does. */
 enum class Recovery { OpenSettings, ReviewKey, Retry, InstallRelay, SetUpKey, Wake, ShowCommand }
@@ -65,7 +82,9 @@ object HomeUiMapper {
         fun waiting(): HostScreen = if (v.lastHome == null) HostScreen(HomeUiState.Loading(name)) else degraded("Reconnecting to ${name}.")
 
         return when (val p = v.phase) {
-            null, HostPhase.Connecting, HostPhase.InstallingRelay -> waiting()
+            // While the next attempt runs the banner of the failure stays (its buttons keep their places) instead of giving way to "Reconnecting" or the loader.
+            HostPhase.Connecting -> v.failure?.let { failed(it, nowMillis, wakeAvailable, ::degraded, trying = true) } ?: waiting()
+            null, HostPhase.InstallingRelay -> waiting()
             is HostPhase.NeedsRelayInstall -> degraded(
                 "Paddock has to install its small relay script on $name before it can watch your agents.", "Review the relay", Recovery.InstallRelay, p,
             )
@@ -80,12 +99,28 @@ object HomeUiMapper {
         }
     }
 
+    /**
+     * The banner for [f]. With [trying] an attempt is running now: the same buttons in the same places as while it waited (so nothing appears or goes),
+     * the words say so instead of counting down, and "Try again" is off until the attempt ends.
+     */
     private fun failed(
         f: HostPhase.Failed, now: Long, wakeAvailable: Boolean,
         degraded: (String, String?, Recovery?, HostPhase.NeedsRelayInstall?) -> HostScreen,
+        trying: Boolean = false,
     ): HostScreen {
-        val seconds = f.retryAtMillis?.let { ((it - now).coerceAtLeast(0) + 999) / 1000 }
-        val text = DownReasonText.sentence(f.reason, seconds)
+        val screen = failedScreen(f, now, wakeAvailable, degraded, trying)
+        if (!trying) return screen
+        val d = screen.state as? HomeUiState.Degraded ?: return screen
+        return screen.copy(state = d.copy(recoveryEnabled = screen.recovery != Recovery.Retry, secondaryEnabled = screen.secondary != Recovery.Retry))
+    }
+
+    private fun failedScreen(
+        f: HostPhase.Failed, now: Long, wakeAvailable: Boolean,
+        degraded: (String, String?, Recovery?, HostPhase.NeedsRelayInstall?) -> HostScreen,
+        trying: Boolean,
+    ): HostScreen {
+        val seconds = if (trying) null else f.retryAtMillis?.let { ((it - now).coerceAtLeast(0) + 999) / 1000 }
+        val text = DownReasonText.sentence(f.reason, seconds) + if (trying) " Trying now." else ""
         // A machine that may simply be asleep: these four say "no answer", never "refused" or "wrong key".
         val maybeAsleep = f.reason == DownReason.Timeout || f.reason == DownReason.Closed || f.reason is DownReason.Network
         if (wakeAvailable && maybeAsleep) {
@@ -104,7 +139,7 @@ object HomeUiMapper {
                 degraded(text, "Show the command", Recovery.ShowCommand, null).let { it.copy(state = (it.state as HomeUiState.Degraded).copy(secondaryLabel = "Try again"), secondary = Recovery.Retry) }
             // While Paddock is about to try by itself the banner has no button, except for a refusal, which says nothing about when.
             ConnectFix.Retry ->
-                if (seconds == null || f.reason == DownReason.Refused) degraded(text, "Try again", Recovery.Retry, null)
+                if (f.retryAtMillis == null || f.reason == DownReason.Refused) degraded(text, "Try again", Recovery.Retry, null)
                 else degraded(text, null, null, null)
             ConnectFix.None -> degraded(text, null, null, null)
         }

@@ -44,14 +44,16 @@ class HostUiModel(private val scope: CoroutineScope) {
                         .collect { (home, fresh, installed, preview, loss) ->
                             _view.update { v ->
                                 v.copy(
-                                    phase = phase, home = home, freshness = fresh, blockedPreview = preview, lastLoss = loss,
+                                    phase = phase, home = home, freshness = fresh, blockedPreview = preview, lastLoss = loss, failure = null,
                                     lastHome = home ?: v.lastHome, lastReadAtMillis = installed?.readAtMillis ?: v.lastReadAtMillis,
                                     herdrVersion = installed?.snapshot?.version ?: v.herdrVersion,
                                 )
                             }
                         }
                 } else {
-                    _view.update { it.copy(phase = phase, home = null, freshness = null, blockedPreview = null, lastLoss = null) }
+                    _view.update {
+                        it.copy(phase = phase, home = null, freshness = null, blockedPreview = null, lastLoss = null, failure = failureAfter(it.failure, phase))
+                    }
                 }
             }
         }

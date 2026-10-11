@@ -39,6 +39,68 @@ class HomeUiMapperTest {
         assertEquals(40_000L, s.ageMillis)
     }
 
+    // ---- the banner of a failure stays while the next attempt runs --------------------------------------------------------------
+
+    private val timeout = HostPhase.Failed(DownReason.Timeout, retryAtMillis = now + 4_000)
+    private fun degraded(v: HostView, wake: Boolean = false) = HomeUiMapper.map("Laptop", v, now, wakeAvailable = wake).state as HomeUiState.Degraded
+    private fun actions(s: HomeUiState.Degraded) = listOf(s.recoveryLabel, s.secondaryLabel)
+
+    @Test fun anAttemptAfterAFailureKeepsTheFailuresBannerAndItsButtonsInPlaceInsteadOfTheLoader() {
+        val waiting = HostView(phase = timeout, failure = timeout)
+        val trying = HostView(phase = HostPhase.Connecting, failure = timeout)
+        val before = degraded(waiting, wake = true)
+        val during = degraded(trying, wake = true)
+        assertEquals(listOf("Wake the machine", "Try again"), actions(before))
+        assertEquals("the same buttons in the same places, with no last home to fall back on", actions(before), actions(during))
+        assertTrue(before.reason, before.reason.contains("Trying again in 4 s."))
+        assertEquals("The host did not answer in time. Trying now.", during.reason)
+        assertTrue("Wake stays available while an attempt runs", during.recoveryEnabled)
+        assertTrue("Try again waits for the attempt to end", !during.secondaryEnabled)
+        assertTrue(before.recoveryEnabled && before.secondaryEnabled)
+        assertEquals(Recovery.Wake, HomeUiMapper.map("Laptop", trying, now, wakeAvailable = true).recovery)
+        assertEquals(Recovery.Retry, HomeUiMapper.map("Laptop", trying, now, wakeAvailable = true).secondary)
+    }
+
+    @Test fun withoutWakeAndWhilePaddockWillTryByItselfTheBannerHasNoButtonBeforeOrDuring() {
+        val network = HostPhase.Failed(DownReason.Network("no route"), retryAtMillis = now + 8_000)
+        assertEquals(listOf(null, null), actions(degraded(HostView(phase = network, failure = network))))
+        assertEquals(listOf(null, null), actions(degraded(HostView(phase = HostPhase.Connecting, failure = network))))
+    }
+
+    @Test fun aFailureThatWaitsForTheUserKeepsItsFixAndOnlyTryAgainWaitsForTheAttempt() {
+        val auth = HostPhase.Failed(DownReason.AuthFailed, null)
+        val during = degraded(HostView(phase = HostPhase.Connecting, failure = auth))
+        assertEquals(listOf("Show the command", "Try again"), actions(during))
+        assertTrue(during.recoveryEnabled)
+        assertTrue(!during.secondaryEnabled)
+        val refused = HostPhase.Failed(DownReason.Refused, null)
+        val r = degraded(HostView(phase = HostPhase.Connecting, failure = refused))
+        assertEquals(listOf("Try again", null), actions(r))
+        assertTrue("the only button is Try again, and it waits", !r.recoveryEnabled)
+    }
+
+    @Test fun aKeptFailureKeepsTheLastHomeDimmedToo() {
+        val s = degraded(HostView(phase = HostPhase.Connecting, failure = timeout, lastHome = model, lastReadAtMillis = now - 40_000))
+        assertEquals(model, s.model)
+        assertEquals(40_000L, s.ageMillis)
+    }
+
+    @Test fun theFailureIsKeptThroughTheNextAttemptAndGoneWhenTheMachineAnswers() {
+        val auth = HostPhase.Failed(DownReason.AuthFailed, null)
+        assertEquals(timeout, failureAfter(null, timeout))
+        assertEquals("a new failure replaces the old", timeout, failureAfter(auth, timeout))
+        assertEquals("the attempt keeps it", timeout, failureAfter(timeout, HostPhase.Connecting))
+        assertNull("nothing to keep before any failure", failureAfter(null, HostPhase.Connecting))
+        assertNull(failureAfter(timeout, HostPhase.InstallingRelay))
+        assertNull(failureAfter(timeout, HostPhase.Problem("x")))
+        assertNull(failureAfter(timeout, null))
+    }
+
+    @Test fun anAttemptWithoutAKeptFailureIsStillTheLoaderOrTheDimmedReconnect() {
+        assertEquals(HomeUiState.Loading("Laptop"), map(HostView(phase = HostPhase.Connecting, failure = null)).state)
+        assertEquals("Reconnecting to Laptop.", degraded(HostView(phase = HostPhase.Connecting, lastHome = model, lastReadAtMillis = now - 1_000)).reason)
+    }
+
     @Test fun aFailedAuthWaitsForTheUserAndOffersTheCommandFirstWithTryAgainBeside() {
         val r = map(HostView(phase = HostPhase.Failed(DownReason.AuthFailed, null)))
         assertEquals(Recovery.ShowCommand, r.recovery)
