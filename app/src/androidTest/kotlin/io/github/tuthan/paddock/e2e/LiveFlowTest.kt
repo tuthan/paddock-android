@@ -39,6 +39,8 @@ class LiveFlowTest {
     private val home by lazy { args.getString("home") ?: error("home argument missing") }
     private val session = args.getString("session") ?: "paddock-test"
     private val host = "10.0.2.2"
+    /** The relay question names the machine, and the machine's name is its hostname once a bring-up read it (it was added by its address): match the question, not the name. */
+    private val relayQuestion = "Install the relay on "
 
     private fun shoot(name: String) {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
@@ -86,7 +88,7 @@ class LiveFlowTest {
         rule.onNodeWithText("Trust and connect").performClick()
 
         // --- Relay: asked before anything is written, then installed under the sshd's isolated HOME ---
-        waitFor("the relay prompt") { hasNode(text("Install the relay on $host?")) }
+        waitFor("the relay prompt") { hasNode(text(relayQuestion, substring = true)) }
         rule.onNodeWithText("$home/.local/share/paddock/paddock-relay.py").assertIsDisplayed()
         shoot("relay-prompt")
         rule.onNodeWithText("Install the relay").performClick()
@@ -176,8 +178,8 @@ class LiveFlowTest {
 
             waitFor("the first-trust dialog") { hasNode(text("New host: $host:$port")) }
             rule.onNodeWithText("Trust and connect").performClick()
-            waitFor("the relay prompt or the home") { hasNode(text("Install the relay on $host?")) || hasNode(hasContentDescription("live", substring = true)) }
-            if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()
+            waitFor("the relay prompt or the home") { hasNode(text(relayQuestion, substring = true)) || hasNode(hasContentDescription("live", substring = true)) }
+            if (hasNode(text(relayQuestion, substring = true))) rule.onNodeWithText("Install the relay").performClick()
             waitFor("the home with agents, signed in with the imported key") { hasNode(hasContentDescription("Blocked", substring = true)) && hasNode(hasContentDescription("live", substring = true)) }
             shoot("import-key-home")
         } finally { keyFile.delete() }

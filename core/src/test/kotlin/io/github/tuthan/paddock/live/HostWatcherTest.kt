@@ -82,6 +82,21 @@ class HostWatcherTest {
         assertTrue(cancelledFollows.isEmpty())
     }
 
+    @Test fun aNamePaddockChoseFollowingTheMachineKeepsTheConnectionAndOneTheUserTypedDoesNot() = runBlocking<Unit> {
+        val w = watcher()
+        val byAddress = alpha.copy(name = alpha.host)
+        w.watch(byAddress)
+        until("follow") { followed.size == 1 }
+        val first = w.current
+        w.watch(byAddress.copy(name = "devbox", detectedName = "devbox"))
+        w.watch(byAddress.copy(name = "devbox-2", detectedName = "devbox-2"))
+        assertSame(first, w.current, "the hostname was adopted and followed: no new controller")
+        assertEquals(1, leases.size)
+        assertEquals(1, followed.size)
+        w.watch(byAddress.copy(name = "Build server", detectedName = "devbox-2"))
+        assertNotSame(first, w.current, "a name the user typed is part of the connection")
+    }
+
     @Test fun aChangeThatNeedsANewConnectionReplacesTheControllerAndStopsTheOldOnesFollows() = runBlocking<Unit> {
         val w = watcher()
         w.watch(alpha)

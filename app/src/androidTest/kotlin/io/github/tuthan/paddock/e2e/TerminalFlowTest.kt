@@ -47,6 +47,8 @@ class TerminalFlowTest {
     private val home by lazy { args.getString("home") ?: error("home argument missing") }
     private val session = args.getString("session") ?: "paddock-test"
     private val host = "10.0.2.2"
+    /** The relay question names the machine, and the machine's name is its hostname once a bring-up read it (it was added by its address): match the question, not the name. */
+    private val relayQuestion = "Install the relay on "
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
 
     private fun log(msg: String) = android.util.Log.i("E2E", msg)
@@ -120,9 +122,17 @@ class TerminalFlowTest {
         waitFor("the first-trust dialog") { hasNode(text("New host: $host:$port")) }
         rule.onNodeWithText(hostFp).assertIsDisplayed()
         rule.onNodeWithText("Trust and connect").performClick()
-        waitFor("the relay prompt or the home") { hasNode(text("Install the relay on $host?")) || hasNode(desc("Blocked")) }
-        if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()
+        waitFor("the relay prompt or the home") { hasNode(text(relayQuestion, substring = true)) || hasNode(desc("Blocked")) }
+        if (hasNode(text(relayQuestion, substring = true))) rule.onNodeWithText("Install the relay").performClick()
         waitFor("the blocked agent on Home") { hasNode(desc("Blocked")) && hasNode(desc("live")) }
+        // The machine was added by its address and given no name, so once a bring-up read its hostname that is its name, with no new connection (the flow went on).
+        // The chip says "<name>, watching, ...": a hostname has no dot, so the address cannot match.
+        val named = Regex("[A-Za-z0-9-]+, watching, .*")
+        waitFor("the chip named by the machine's hostname") {
+            hasNode(androidx.compose.ui.test.SemanticsMatcher("chip named by a hostname") { n ->
+                n.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.any { named.matches(it) } == true
+            })
+        }
         rule.onNode(desc("Blocked")).performClick()
         waitFor("the Output tab") { hasNode(desc("Terminal output")) }
         rule.onNodeWithText("Terminal").performClick()

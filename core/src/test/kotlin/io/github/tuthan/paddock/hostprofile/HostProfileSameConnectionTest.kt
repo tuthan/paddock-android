@@ -21,6 +21,27 @@ class HostProfileSameConnectionTest {
         assertTrue(base.copy(searchNetwork = true).sameConnectionAs(base))
     }
 
+    @Test fun aNameThatPaddockChoseFollowsTheMachineWithoutANewConnection() {
+        val byAddress = base.copy(name = "10.0.0.2", host = "10.0.0.2")
+        val byHostname = byAddress.copy(name = "devbox", detectedName = "devbox")
+        assertTrue(byAddress.nameIsDefault)
+        assertTrue(byHostname.nameIsDefault)
+        assertTrue(byAddress.sameConnectionAs(byHostname), "the hostname was adopted")
+        assertTrue(byHostname.sameConnectionAs(byAddress.copy(name = "devbox-2", detectedName = "devbox-2")), "and followed")
+        assertTrue(byHostname.sameConnectionAs(byAddress))
+    }
+
+    @Test fun aNameTheUserTypedStaysPartOfTheConnection() {
+        val byHostname = base.copy(name = "devbox", detectedName = "devbox")
+        val typed = byHostname.copy(name = "Build server")
+        assertFalse(typed.nameIsDefault)
+        assertFalse(byHostname.sameConnectionAs(typed))
+        assertFalse(typed.sameConnectionAs(byHostname))
+        assertFalse(typed.sameConnectionAs(typed.copy(name = "Build server 2")))
+        assertFalse(base.copy(name = "devbox").nameIsDefault, "a name that matches nothing the machine said is the user's")
+        assertTrue(base.copy(name = "DEVBOX", detectedName = "devbox").nameIsDefault, "case does not matter")
+    }
+
     @Test fun everythingThatShapesTheConnectionOrItsLabelDoes() {
         for (changed in listOf(
             base.copy(name = "Alpha 2"), base.copy(host = "10.0.0.3"), base.copy(port = 2222), base.copy(user = "other"),

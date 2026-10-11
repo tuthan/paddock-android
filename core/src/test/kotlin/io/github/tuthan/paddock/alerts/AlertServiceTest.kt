@@ -14,9 +14,14 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 /**
  * What the graph used to decide about an alert (Phase 07): which machine an arrival switches to and how it ends when no fresh read comes, and when the
@@ -107,6 +112,23 @@ class AlertServiceTest {
         service().sees(AgentStatus.Working, agent(AgentStatus.Working), from = AgentStatus.Idle)
         assertTrue(shown.isEmpty(), "$shown")
     }
+
+    @Test fun aNotificationNamesTheMachineAsItIsCalledWhenItIsRaisedNotWhenTheWatchBegan() = runBlocking {
+        var name = "192.168.1.5"
+        var seq = 5L
+        val observations = MutableSharedFlow<Observation>(extraBufferCapacity = 4)
+        val job = launch(Dispatchers.Default) { service().raise(observations, { name }) { Snapshot("0.9.1", 22, agents = listOf(agent(AgentStatus.Blocked, seq = seq))) } }
+        until { observations.subscriptionCount.value == 1 }
+        observations.emit(Observation.StatusChanged(now, key, AgentStatus.Working, AgentStatus.Blocked))
+        until { shown.size == 1 }
+        name = "devbox"; seq = 6
+        observations.emit(Observation.StatusChanged(now, key, AgentStatus.Working, AgentStatus.Blocked))
+        until { shown.size == 2 }
+        job.cancel()
+        assertEquals(listOf("Needs you · 192.168.1.5", "Needs you · devbox"), shown.map { it.text })
+    }
+
+    private suspend fun until(cond: () -> Boolean) { withTimeout(3_000) { while (!cond()) delay(5) } }
 
     @Test fun aChangeTheFreshReadNoLongerShowsRaisesNothingAndOtherObservationsAreIgnored() = runBlocking {
         service().sees(AgentStatus.Blocked, agent = null)

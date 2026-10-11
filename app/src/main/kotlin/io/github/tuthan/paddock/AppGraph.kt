@@ -163,6 +163,7 @@ class AppGraph(private val app: Application) {
         clock = clock, acquire = { profile -> owner.acquire(profile) }, profiles = profiles,
         watchedProfileId = { prefs.stored().watchedProfileId }, inForeground = { triggers.foreground.value }, removing = { machineBook.isRemoving(it) },
         locked = { PaddockWidgets.locked(app) }, redraw = { PaddockWidgets.updateAll(app) },
+        machineName = { id -> machineBook.machines.value.firstOrNull { it.id == id }?.name },
     )
 
     private val connector = SshlibConnector(hostKeyPolicy, clock, gate)
@@ -236,6 +237,7 @@ class AppGraph(private val app: Application) {
     val alertService: AlertService = AlertService(
         clock, settings = { prefs.value }, interactive = { triggers.interactive.value }, show = { notifier.show(it) },
         switchTo = { id -> machineBook.watch(id, chosen = false) }, monitored = hostUi.view.map { (it.phase as? HostPhase.Monitoring)?.host },
+        machineName = { id -> machineBook.machines.value.firstOrNull { it.id == id }?.name },
     )
     /** The one machine watched now: its connection controller, and what follows that controller's phases and readings ([HostWatcher]). */
     /**

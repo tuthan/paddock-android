@@ -49,6 +49,8 @@ class AnswersFlowTest {
     private val port = args.getString("port") ?: "2234"
     private val session = args.getString("session") ?: "paddock-test"
     private val host = "10.0.2.2"
+    /** The relay question names the machine, and the machine's name is its hostname once a bring-up read it (it was added by its address): match the question, not the name. */
+    private val relayQuestion = "Install the relay on "
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
 
     private fun log(msg: String) = android.util.Log.i("E2E", msg)
@@ -129,8 +131,8 @@ class AnswersFlowTest {
         waitFor("the first-trust dialog") { hasNode(text("New host: $host:$port")) }
         rule.onNodeWithText(hostFp).assertIsDisplayed()
         rule.onNodeWithText("Trust and connect").performClick()
-        waitFor("the relay prompt or the home") { hasNode(text("Install the relay on $host?")) || hasNode(desc("Ready")) }
-        if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()
+        waitFor("the relay prompt or the home") { hasNode(text(relayQuestion, substring = true)) || hasNode(desc("Ready")) }
+        if (hasNode(text(relayQuestion, substring = true))) rule.onNodeWithText("Install the relay").performClick()
         openAgentFromHome()
 
         // --- Settings > Machines > the machine > Guarded answers: the hashes first, then the install, which asks ---

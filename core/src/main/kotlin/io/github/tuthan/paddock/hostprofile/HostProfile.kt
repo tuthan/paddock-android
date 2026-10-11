@@ -73,13 +73,25 @@ data class HostProfile(
     fun toTarget() = SshTarget(id, host, port, user)
 
     /**
+     * Whether the name is one Paddock gave the machine rather than the user: the address it was added by, or the hostname the machine said. Only such a
+     * name follows the machine ([MachineBook.saveDetectedName], [MachineBook.setAddress]). A name the user typed is kept, whatever the machine is called
+     * (typing the hostname or the address as the name is the same as having none).
+     */
+    val nameIsDefault: Boolean get() = name.equals(host.take(MachineName.MAX), ignoreCase = true) ||
+        (detectedName != null && name.equals(detectedName.take(MachineName.MAX), ignoreCase = true))
+
+    /**
      * Whether a connection made for this profile is still the one [other] needs. What was read about waking the machine, the icon (read or
      * picked), the hostname read from it and the search switch change without the user touching the connection and are no reason to reconnect;
-     * anything else, the name included (the label the answer host writes), is.
+     * neither is a name Paddock chose ([nameIsDefault]: it follows what the machine says, and only labels the answer host). Anything else, a name the
+     * user typed included (the label the answer host writes), is.
      */
     fun sameConnectionAs(other: HostProfile): Boolean = readingsDropped() == other.readingsDropped()
 
-    private fun readingsDropped() = copy(wake = null, os = null, detectedOs = null, detectedName = null, searchNetwork = false)
+    private fun readingsDropped() = copy(
+        wake = null, os = null, detectedOs = null, detectedName = null, searchNetwork = false,
+        name = if (nameIsDefault) host.take(MachineName.MAX) else name,
+    )
 
     companion object {
         /** Also the imported-key id rule, so a profile id can name its key. */

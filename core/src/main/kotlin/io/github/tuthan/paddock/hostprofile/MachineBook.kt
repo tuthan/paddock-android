@@ -246,11 +246,17 @@ class MachineBook(
 
     /**
      * Keeps the hostname a bring-up read ([HostProfile.detectedName]), under the same rules as [saveDetectedOs]: skipped when the stored profile is no
-     * longer at the address that asked, and an equal reading is not a write. Never reconnects.
+     * longer at the address that asked. A machine whose name is still the default ([HostProfile.nameIsDefault]: the address it was added by, or the
+     * hostname it said before) takes the hostname as its name, unless another machine already has that name (two machines with one hostname: the second keeps
+     * its address, and asks again at the next bring-up). A name the user typed is never touched. An equal reading is not a write. Never reconnects:
+     * [HostProfile.sameConnectionAs] does not count a default name.
      */
     suspend fun saveDetectedName(read: HostProfile, name: String) {
+        val taken = _machines.value.filter { it.id != read.id }.map { it.name }
         val written = profiles.update(read.id) { stored ->
-            if (!stored.host.equals(read.host, ignoreCase = true) || stored.port != read.port || stored.detectedName == name) null else stored.copy(detectedName = name)
+            if (!stored.host.equals(read.host, ignoreCase = true) || stored.port != read.port) return@update null
+            val next = stored.copy(detectedName = name)
+            if (stored.nameIsDefault && taken.none { it.trim().equals(name, ignoreCase = true) }) next.copy(name = name.take(MachineName.MAX)) else next
         } ?: return
         if (_profile.value?.id == written.id) _profile.value = written
         machineWritten(written)
@@ -279,8 +285,12 @@ class MachineBook(
      * by itself, and the user may have changed the address meanwhile); false when it is not.
      */
     suspend fun setAddress(profileId: String, host: String, port: Int, onlyFrom: HostProfile? = null): Boolean = machineLock.withLock {
+        val taken = _machines.value.filter { it.id != profileId }.map { it.name }
         val written = profiles.update(profileId) { stored ->
-            if (onlyFrom != null && (!stored.host.equals(onlyFrom.host, ignoreCase = true) || stored.port != onlyFrom.port)) null else stored.copy(host = host, port = port)
+            if (onlyFrom != null && (!stored.host.equals(onlyFrom.host, ignoreCase = true) || stored.port != onlyFrom.port)) return@update null
+            val moved = stored.copy(host = host, port = port)
+            // A machine named by its old address (no hostname known to name it by) is named by the new one, as if it had been added there.
+            if (stored.name.equals(stored.host.take(MachineName.MAX), ignoreCase = true) && taken.none { it.trim().equals(host.take(MachineName.MAX), ignoreCase = true) }) moved.copy(name = host.take(MachineName.MAX)) else moved
         }
             ?: return@withLock profiles.get(profileId)?.let { it.host.equals(host, ignoreCase = true) && it.port == port } == true
         machineWritten(written)

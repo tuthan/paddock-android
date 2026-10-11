@@ -32,6 +32,8 @@ class WidgetService(
     private val locked: () -> Boolean,
     private val redraw: () -> Unit,
     private val connectMillis: Long = CONNECT_MILLIS,
+    /** The name a machine has now (by profile id), or null when there is no such machine: the cache's label follows a default name that took the hostname without a reconnect. */
+    private val machineName: (String) -> String? = { null },
 ) {
     @Volatile private var last: WidgetCache? = null
 
@@ -46,7 +48,7 @@ class WidgetService(
         home.collect { current ->
             if (current == null) return@collect
             val readAt = readAtMillis() ?: clock.nowMillis()
-            val next = WidgetCacheBuilder.from(current, profileId, machine, session, readAt)
+            val next = WidgetCacheBuilder.from(current, profileId, machineName(profileId) ?: machine, session, readAt)
             val prev = last
             if (prev != null && prev.copy(readAtMillis = 0) == next.copy(readAtMillis = 0) && next.readAtMillis - prev.readAtMillis < TOUCH_MILLIS) return@collect
             last = next

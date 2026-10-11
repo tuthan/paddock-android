@@ -36,6 +36,12 @@ class AlertService(
     private val monitored: Flow<MonitoredHost?>,
     private val rules: LocalAlertRules = LocalAlertRules(),
     private val arrivalTimeoutMillis: Long = AlertArrival.TIMEOUT_MILLIS,
+    /**
+     * The name a machine has now (by profile id), or null when the phone has no such machine. A connection keeps the profile it was made for, and a
+     * default name that followed the hostname did not start a new connection ([HostProfile.sameConnectionAs]), so a notification is titled by this, not by
+     * the connection's copy.
+     */
+    private val machineName: (String) -> String? = { null },
 ) {
     /**
      * The arrival rule for an alert (Phase 07): switch to the machine it names, wait for a read this phone made after the alert
@@ -78,15 +84,18 @@ class AlertService(
      * Watching mode: a terminal the open app saw become Blocked or Done raises a notification, unless alerts are off or the
      * herd is in front. The reconciler only reports changes between two reads of one epoch, so a reconnect invents none.
      */
-    suspend fun raise(host: MonitoredHost) = raise(host.reconciler.observations, host.profile.name) { host.reconciler.installed.value?.snapshot }
+    suspend fun raise(host: MonitoredHost) =
+        raise(host.reconciler.observations, { machineName(host.profile.id) ?: host.profile.name }) { host.reconciler.installed.value?.snapshot }
 
-    internal suspend fun raise(observations: Flow<Observation>, machine: String, snapshot: () -> Snapshot?) {
+    internal suspend fun raise(observations: Flow<Observation>, machine: String, snapshot: () -> Snapshot?) = raise(observations, { machine }, snapshot)
+
+    internal suspend fun raise(observations: Flow<Observation>, machine: () -> String, snapshot: () -> Snapshot?) {
         observations.collect { o ->
             if (o !is Observation.StatusChanged) return@collect
             val current = settings()
             val agent = snapshot()?.agents?.firstOrNull { it.terminalId == o.key.target.terminalId }
             val alert = rules.alertFor(
-                o.to, agent, o.key.target, machine, clock.nowMillis() / 1000, current.localAlerts, interactive(), agent?.let { AttentionModel.title(it) },
+                o.to, agent, o.key.target, machine(), clock.nowMillis() / 1000, current.localAlerts, interactive(), agent?.let { AttentionModel.title(it) },
             ) ?: return@collect
             runCatching { show(AlertContent.of(alert, current.hidePromptOnLockScreen)) }
         }

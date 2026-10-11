@@ -60,9 +60,10 @@ class WidgetServiceTest {
     private var lease = FakeLease(Connection.Connected(FakeSession(), 1))
     private val acquired = mutableListOf<String>()
 
-    private fun service(connectMillis: Long = 200) = WidgetService(
+    private fun service(connectMillis: Long = 200, machineName: (String) -> String? = { null }) = WidgetService(
         store, read = { p, _: SshSession, session -> reads += "${p.id}/$session"; outcome }, clock = { now }, acquire = { acquired += it.id; lease }, profiles = profiles,
         watchedProfileId = { watched }, inForeground = { foreground }, removing = { it in removingNow }, locked = { locked }, redraw = { redraws.incrementAndGet() }, connectMillis = connectMillis,
+        machineName = machineName,
     )
 
     private fun agent(pane: String, status: AgentStatus, title: String? = null) =
@@ -107,6 +108,22 @@ class WidgetServiceTest {
         flow.value = herd("three", blocked = false)
         until("the change") { store.load()!!.counts.done == 1 }
         assertEquals(3, redraws.get())
+        job.cancel()
+    }
+
+    @Test fun theCacheNamesTheMachineByWhatItIsCalledNowAndByTheTrackedNameWhenThePhoneDoesNotKnowIt() = runBlocking<Unit> {
+        var names = mapOf("alpha" to "devbox")
+        val w = service(machineName = { names[it] })
+        val flow = MutableStateFlow<HomeModel?>(null)
+        val job = scope.launch { w.track(flow, "alpha", "192.168.1.5", "main") { now } }
+        delay(50)
+        flow.value = home(agent("w1:p1", AgentStatus.Blocked, "approve"))
+        until("the first write") { store.load() != null }
+        assertEquals("devbox", store.load()!!.machine, "the connection's own copy of the name is the old one")
+        names = emptyMap()
+        flow.value = home(agent("w1:p1", AgentStatus.Done, "approve"))
+        until("the second write") { store.load()!!.counts.done == 1 }
+        assertEquals("192.168.1.5", store.load()!!.machine)
         job.cancel()
     }
 

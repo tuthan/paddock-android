@@ -464,6 +464,78 @@ class MachineBookTest {
         assertTrue(events.isEmpty())
     }
 
+    // ---- the hostname as the default name ---------------------------------------------------------------------------------------
+
+    /** A machine added by its address, as the Add screen does when the user types no name: the address is its name. */
+    private val d = HostProfile("mtest-d", "10.255.255.4", "10.255.255.4", 22, "tester")
+
+    @Test fun aMachineNamedByItsAddressTakesItsHostnameWithoutAReconnectAndFollowsIt() = runBlocking<Unit> {
+        book.add(d)
+        events.clear()
+        book.saveDetectedName(d, "devbox")
+        assertEquals("devbox", profiles.get(d.id)?.name)
+        assertEquals("devbox", book.profile.value?.name, "the watched machine's profile is the new one")
+        assertEquals("devbox", book.machines.value.single().name)
+        assertEquals("devbox", book.machines.value.single().detectedName)
+        book.saveDetectedName(d, "devbox-2")
+        assertEquals("devbox-2", profiles.get(d.id)?.name, "the machine was renamed on its own side: the default follows")
+        assertTrue(events.isEmpty(), "a default name is not a reason to reconnect: $events")
+    }
+
+    @Test fun aNameTheUserTypedIsNeverReplacedByTheHostname() = runBlocking<Unit> {
+        book.add(a)
+        book.saveDetectedName(a, "alpha-box")
+        assertEquals("A machine", profiles.get(a.id)?.name)
+        assertEquals("alpha-box", profiles.get(a.id)?.detectedName)
+        book.add(d)
+        assertTrue(book.rename(d.id, "Build server"))
+        book.saveDetectedName(d, "devbox")
+        assertEquals("Build server", profiles.get(d.id)?.name, "a rename on the phone ends the following, whatever the hostname is")
+    }
+
+    @Test fun aNameTypedAsTheHostnameIsTheDefaultAgainAndFollowsIt() = runBlocking<Unit> {
+        book.add(d)
+        book.saveDetectedName(d, "devbox")
+        assertTrue(book.rename(d.id, "Build server"))
+        assertTrue(book.rename(d.id, "DEVBOX"))
+        book.saveDetectedName(d, "devbox-new")
+        assertEquals("devbox-new", profiles.get(d.id)?.name)
+    }
+
+    @Test fun aHostnameAnotherMachineAlreadyUsesAsItsNameIsNotTakenAndIsAskedAgainWhenItIsFree() = runBlocking<Unit> {
+        val other = HostProfile("mtest-e", "devbox", "10.255.255.5", 22, "tester")
+        book.add(other); book.add(d)
+        events.clear()
+        book.saveDetectedName(d, "DevBox")
+        assertEquals("10.255.255.4", profiles.get(d.id)?.name, "two cards are never told apart only by a capital")
+        assertEquals("DevBox", profiles.get(d.id)?.detectedName, "the reading itself is kept")
+        assertTrue(book.rename(other.id, "Other box"))
+        book.saveDetectedName(d, "DevBox")
+        assertEquals("DevBox", profiles.get(d.id)?.name, "the same reading at the next bring-up finds the name free")
+        assertTrue(events.isEmpty(), "neither the skipped adoption, the other machine's rename nor the later adoption reconnects the watched machine: $events")
+    }
+
+    @Test fun aHostnameTooLongForANameIsCutAndStillTheDefault() = runBlocking<Unit> {
+        val long = "h".repeat(63)
+        book.add(d)
+        book.saveDetectedName(d, long)
+        assertEquals(long.take(60), profiles.get(d.id)?.name)
+        assertTrue(profiles.get(d.id)!!.nameIsDefault)
+    }
+
+    @Test fun aMachineNamedByItsAddressIsNamedByTheNewOneWhenMovedAndACustomNameStays() = runBlocking<Unit> {
+        book.add(d)
+        assertTrue(book.setAddress(d.id, "10.255.255.40", 22))
+        assertEquals("10.255.255.40", profiles.get(d.id)?.name)
+        book.add(a)
+        assertTrue(book.setAddress(a.id, "10.255.255.41", 22))
+        assertEquals("A machine", profiles.get(a.id)?.name)
+        book.add(d.copy(id = "mtest-f", name = "10.255.255.6", host = "10.255.255.6"))
+        assertTrue(book.rename(a.id, "10.255.255.60"))
+        assertTrue(book.setAddress("mtest-f", "10.255.255.60", 22))
+        assertEquals("10.255.255.6", profiles.get("mtest-f")?.name, "another machine already has that name: it keeps the old one")
+    }
+
     @Test fun aMoveFoundByPaddockIsRefusedWhenTheUserMovedTheMachineMeanwhile() = runBlocking<Unit> {
         book.add(a)
         val lookedFor = book.profile.value!!

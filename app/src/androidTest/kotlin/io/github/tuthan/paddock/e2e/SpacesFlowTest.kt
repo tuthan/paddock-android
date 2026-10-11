@@ -53,6 +53,8 @@ class SpacesFlowTest {
     private val session = args.getString("session") ?: "paddock-test-e2e9"
     private val stoppedSession = args.getString("stopped") ?: "paddock-test-e2e9b"
     private val host = "10.0.2.2"
+    /** The relay question names the machine, and the machine's name is its hostname once a bring-up read it (it was added by its address): match the question, not the name. */
+    private val relayQuestion = "Install the relay on "
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
 
     private fun log(msg: String) = android.util.Log.i("E2E", msg)
@@ -114,8 +116,8 @@ class SpacesFlowTest {
         rule.onNodeWithText("Connect").performClick()
         waitFor("the first-trust dialog") { hasNode(text("New host: $host:$port")) }
         rule.onNodeWithText("Trust and connect").performClick()
-        waitFor("the relay prompt or the home") { hasNode(text("Install the relay on $host?")) || hasNode(desc("live")) }
-        if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()
+        waitFor("the relay prompt or the home") { hasNode(text(relayQuestion, substring = true)) || hasNode(desc("live")) }
+        if (hasNode(text(relayQuestion, substring = true))) rule.onNodeWithText("Install the relay").performClick()
         waitFor("the watched session live", 90_000) { hasNode(desc("live")) }
 
         // --- Spaces: the sessions, as that moment's read ---

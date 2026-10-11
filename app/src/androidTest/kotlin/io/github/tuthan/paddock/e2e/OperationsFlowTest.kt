@@ -59,6 +59,8 @@ class OperationsFlowTest {
     private val port = args.getString("port") ?: "2234"
     private val session = args.getString("session") ?: "paddock-test"
     private val host = "10.0.2.2"
+    /** The relay question names the machine, and the machine's name is its hostname once a bring-up read it (it was added by its address): match the question, not the name. */
+    private val relayQuestion = "Install the relay on "
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val unknownFile get() = File(ctx.getExternalFilesDir(null), "unknown-line.txt")
 
@@ -151,8 +153,8 @@ class OperationsFlowTest {
         waitFor("the first-trust dialog") { hasNode(text("New host: $host:$port")) }
         rule.onNodeWithText(hostFp).assertIsDisplayed()
         rule.onNodeWithText("Trust and connect").performClick()
-        waitFor("the relay prompt or the home") { hasNode(text("Install the relay on $host?")) || hasNode(desc("Ready")) }
-        if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()
+        waitFor("the relay prompt or the home") { hasNode(text(relayQuestion, substring = true)) || hasNode(desc("Ready")) }
+        if (hasNode(text(relayQuestion, substring = true))) rule.onNodeWithText("Install the relay").performClick()
 
         // --- Phase 12, through the real app: the claude row draws its glyph and says "claude" in words; Settings > Agent icons turns the
         // glyph into letters on the herd at once, and back. The default (on) is left in place for the stages after this one. ---

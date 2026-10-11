@@ -48,6 +48,8 @@ class ProbeFlowTest {
     private val portB = args.getString("portB") ?: "2233"
     private val session = args.getString("session") ?: "paddock-test"
     private val host = "10.0.2.2"
+    /** The relay question names the machine, and the machine's name is its hostname once a bring-up read it (it was added by its address): match the question, not the name. */
+    private val relayQuestion = "Install the relay on "
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
 
     private fun log(msg: String) = android.util.Log.i("E2E", msg)
@@ -92,8 +94,8 @@ class ProbeFlowTest {
         waitFor("the first-trust dialog for $port") { hasNode(text("New host: $host:$port")) }
         rule.onNodeWithText(hostFp).assertIsDisplayed()
         rule.onNodeWithText("Trust and connect").performClick()
-        waitFor("the relay prompt or the home") { hasNode(text("Install the relay on $host?")) || hasNode(desc("watching, live")) }
-        if (hasNode(text("Install the relay on $host?"))) rule.onNodeWithText("Install the relay").performClick()
+        waitFor("the relay prompt or the home") { hasNode(text(relayQuestion, substring = true)) || hasNode(desc("watching, live")) }
+        if (hasNode(text(relayQuestion, substring = true))) rule.onNodeWithText("Install the relay").performClick()
         waitFor("Home, watching and live", 90_000) { hasNode(desc("watching, live")) }
     }
 

@@ -65,6 +65,8 @@ class PairingFlowTest {
     private val port = args.getString("port") ?: "2233"
     private val session = args.getString("session") ?: "paddock-test"
     private val host = "10.0.2.2"
+    /** The relay question names the machine, and the machine's name is its hostname once a bring-up read it (it was added by its address): match the question, not the name. */
+    private val relayQuestion = "Install the relay on "
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
 
     private fun log(msg: String) = android.util.Log.i("E2E", msg)
@@ -128,11 +130,11 @@ class PairingFlowTest {
         rule.onNodeWithText(hostFp).assertIsDisplayed()
         rule.onNodeWithText("Same as the fingerprint in the pairing link.").assertIsDisplayed()
         Thread.sleep(1_000)
-        assertFalse("nothing is trusted until the tap", hasNode(text("Install the relay on $host?")))
+        assertFalse("nothing is trusted until the tap", hasNode(text(relayQuestion, substring = true)))
         rule.onNodeWithText("Trust and connect").performClick()
 
         // The relay question comes only after SSH signed in with this phone's key, authorized on the host by the copied command alone.
-        waitFor("the relay prompt, after signing in", 60_000) { hasNode(text("Install the relay on $host?")) }
+        waitFor("the relay prompt, after signing in", 60_000) { hasNode(text(relayQuestion, substring = true)) }
         log("PAIRED-AND-SIGNED-IN")
     }
 
@@ -161,7 +163,7 @@ class PairingFlowTest {
         // The script approves in the popup; the app connects by itself, and the first connection still asks about the host key.
         waitFor("the first-trust dialog", 90_000) { hasNode(text("New host: $host:$port")) }
         rule.onNodeWithText("Trust and connect").performClick()
-        waitFor("the relay prompt, after signing in with the key the popup authorized", 60_000) { hasNode(text("Install the relay on $host?")) }
+        waitFor("the relay prompt, after signing in with the key the popup authorized", 60_000) { hasNode(text(relayQuestion, substring = true)) }
         log("PAIRED-BY-POPUP-AND-SIGNED-IN")
     }
 
@@ -200,7 +202,7 @@ class PairingFlowTest {
         rule.onNodeWithText("Close").performClick()
         Thread.sleep(1_500)
         assertFalse("the refusal did not turn into a question", hasNode(text("New host: $host:$port")))
-        assertFalse("nothing was signed in", hasNode(text("Install the relay on $host?")))
+        assertFalse("nothing was signed in", hasNode(text(relayQuestion, substring = true)))
         val pins = File(ctx.filesDir, "host-keys.json")
         assertTrue("nothing was pinned: ${if (pins.exists()) pins.readText().take(200) else "(no file)"}", !pins.exists() || !pins.readText().contains("SHA256"))
         log("REFUSED-AND-NOT-PINNED")
