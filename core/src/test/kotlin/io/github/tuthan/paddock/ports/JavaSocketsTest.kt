@@ -44,6 +44,26 @@ class JavaSocketsTest {
         assertTrue(seen.single().isClosed)
     }
 
+    // What Android throws when the VPN does not select the app (seen on the real phone through WireGuard, in the SteamOS companion app, 2026-09-30).
+    private fun refused(): Nothing = throw java.net.SocketException("Binding socket to network 196: EPERM (Operation not permitted)")
+
+    @Test fun aRefusedBindToATunnelLeavesTheUdpSocketUnboundSoTheWakePacketCanFollowTheDefaultNetwork() {
+        var seen: java.net.DatagramSocket? = null
+        val sockets = JavaSockets(bindUdp = { s, p -> seen = s; NetworkPin.apply(p?.id, { "net" }, tolerateRefusal = p?.tunnel == true) { _: String -> refused() } })
+        sockets.udp(LanPath("wg", "tun0", true, emptyList())).use { assertTrue(seen!!.isBound && !seen!!.isClosed, "a usable, unbound-to-a-network socket") }
+    }
+
+    @Test fun aRefusedBindToALanPathStillFailsBecauseFollowingTheDefaultNetworkCouldLeaveThroughAVpn() {
+        var seen: java.net.DatagramSocket? = null
+        val sockets = JavaSockets(bindUdp = { s, p -> seen = s; NetworkPin.apply(p?.id, { "net" }, tolerateRefusal = p?.tunnel == true) { _: String -> refused() } })
+        assertFailsWith<IOException> { sockets.udp(LanPath("wifi", "wlan0", false, emptyList())) }
+        assertTrue(seen!!.isClosed)
+    }
+
+    @Test fun aTunnelThatHasGoneStillFailsEvenWhenARefusalIsTolerated() {
+        assertFailsWith<IOException> { NetworkPin.apply("wg", { _: String -> null }, tolerateRefusal = true) { _: String -> } }
+    }
+
     @Test fun aPinThatFailsOnUdpClosesTheSocketAndThrows() {
         var seen: java.net.DatagramSocket? = null
         val sockets = JavaSockets(bindUdp = { s, _ -> seen = s; NetworkPin.apply("wifi", { _: String -> null }) { _: String -> } })

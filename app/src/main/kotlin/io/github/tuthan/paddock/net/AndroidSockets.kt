@@ -20,7 +20,9 @@ class AndroidSockets(private val paths: AndroidLanPaths) : Sockets by JavaSocket
 
     private val java = JavaSockets(
         bindTcp = { socket -> NetworkPin.apply(tcpPathId, paths::network) { it.bindSocket(socket) } },
-        bindUdp = { socket, path -> NetworkPin.apply(path?.id, paths::network) { it.bindSocket(socket) } },
+        // A Wake to a relay over a VPN is pinned to the tunnel, which Android may refuse (EPERM) for an app the VPN does not select; that one case
+        // is left unbound so the packet follows the default network. A LAN pin still fails loudly.
+        bindUdp = { socket, path -> NetworkPin.apply(path?.id, paths::network, tolerateRefusal = path?.tunnel == true) { it.bindSocket(socket) } },
     )
 
     override fun tcp() = java.tcp()

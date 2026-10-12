@@ -39,9 +39,21 @@ interface Sockets {
  * could leave through a VPN, which is what the pin is there to prevent.
  */
 object NetworkPin {
-    /** Nothing when [id] is null (no pin was asked for). Otherwise [bind] gets the network [lookup] has for [id], and with none this throws [IOException]. */
-    fun <N : Any> apply(id: String?, lookup: (String) -> N?, bind: (N) -> Unit) {
-        if (id != null) bind(lookup(id) ?: throw IOException("The network this was pinned to is gone"))
+    /**
+     * Nothing when [id] is null (no pin was asked for). Otherwise [bind] gets the network [lookup] has for [id], and with none this throws [IOException].
+     *
+     * [tolerateRefusal] is for a pin to a VPN itself: Android refuses an explicit bind to a VPN network (`EPERM`) for an app the VPN does not
+     * select, and a socket left unbound follows the default network, which is that VPN whenever it applies to the app. Only [bind] refusing is
+     * forgiven; a network that has gone still fails, and a pin to a LAN network never sets it.
+     */
+    fun <N : Any> apply(id: String?, lookup: (String) -> N?, tolerateRefusal: Boolean = false, bind: (N) -> Unit) {
+        if (id == null) return
+        val network = lookup(id) ?: throw IOException("The network this was pinned to is gone")
+        try {
+            bind(network)
+        } catch (e: IOException) {
+            if (!tolerateRefusal) throw e
+        }
     }
 }
 
