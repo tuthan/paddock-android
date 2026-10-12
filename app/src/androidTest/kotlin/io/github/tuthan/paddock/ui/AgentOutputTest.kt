@@ -20,6 +20,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.longClick
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -62,7 +66,8 @@ class AgentOutputTest {
     private fun show(
         output: OutputState, following: Boolean = true, tab: AgentTab = AgentTab.Output, dark: Boolean = true,
         fontScale: Float? = null, header: AgentHeader = this.header, calls: Calls = Calls(), terminal: (@androidx.compose.runtime.Composable () -> Unit)? = null,
-    terminalFocus: Boolean = false,
+    terminalFocus: Boolean = false, onSelectText: (() -> Unit)? = null,
+        onLineAction: ((List<io.github.tuthan.paddock.output.AnsiLine>, Int, io.github.tuthan.paddock.ui.components.LineAction) -> Unit)? = null,
     ): Calls {
         rule.setContent {
             val base = LocalDensity.current
@@ -71,7 +76,7 @@ class AgentOutputTest {
                     AgentOutput(
                         header, output, following, now, tab,
                         onTab = { calls.tab = it }, onBack = { calls.back++ }, onUserScrolledUp = { calls.up++ }, onResumeFollowing = { calls.resume++ },
-                        terminal = terminal, terminalFocus = terminalFocus,
+                        terminal = terminal, terminalFocus = terminalFocus, onSelectText = onSelectText, onLineAction = onLineAction,
                     )
                 }
             }
@@ -302,5 +307,125 @@ class AgentOutputTest {
     @Test fun auditOutputDark() { show(showing()); SemanticsAudit.expectClean(rule, "Agent output, dark", OUTPUT) }
     @Test fun auditOutputLight() { show(showing(), dark = false); SemanticsAudit.expectClean(rule, "Agent output, light", OUTPUT) }
     @Test fun auditOutputStaleDark() { show(showing(stale = true)); SemanticsAudit.expectClean(rule, "Agent output, stale, dark", OUTPUT) }
+
+
+    // ---- Phase 15: the Select text chip, a line's long-press menu and its TalkBack actions ------------------------------------------
+
+    @Test fun theSelectTextChipShowsOnlyWhileOutputIsShowing() {
+        show(showing(), onSelectText = {})
+        rule.onNodeWithText("Select text").assertIsDisplayed()
+    }
+
+    @Test fun noSelectTextChipWhileLoading() {
+        show(OutputState.Loading, onSelectText = {})
+        rule.onNodeWithText("Select text").assertDoesNotExist()
+    }
+
+    @Test fun noSelectTextChipWhenTheOutputIsUnavailableOrGone() {
+        show(OutputState.Unavailable("no route"), onSelectText = {})
+        rule.onNodeWithText("Select text").assertDoesNotExist()
+    }
+
+    @Test fun noSelectTextChipOnceTheTerminalIsGone() {
+        show(OutputState.PaneGone, onSelectText = {})
+        rule.onNodeWithText("Select text").assertDoesNotExist()
+    }
+
+    @Test fun theSelectTextChipIsAButtonWithItsLabelAndAFullTarget() {
+        var taps = 0
+        show(showing(), onSelectText = { taps++ })
+        byDesc("Select text to copy").assertHasClickAction().assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, taps)
+    }
+
+    @Test fun noChipWhenNothingCanBeOpened() {
+        show(showing())
+        rule.onNodeWithText("Select text").assertDoesNotExist()
+    }
+
+    private class Taken { val got = mutableListOf<Triple<List<io.github.tuthan.paddock.output.AnsiLine>, Int, io.github.tuthan.paddock.ui.components.LineAction>>() }
+
+    @Test fun aLongPressPausesFollowingAndOpensTheMenuAtThatLine() {
+        val calls = show(showing(30), onLineAction = { _, _, _ -> })
+        rule.onNodeWithText("line 29 of the agent output", substring = true).performTouchInput { longClick() }
+        rule.waitForIdle()
+        assertEquals("a long press pauses following the way a drag does", 1, calls.up)
+        rule.onNodeWithText("Copy line").assertIsDisplayed()
+        rule.onNodeWithText("Copy from here to newest").assertIsDisplayed()
+        rule.onNodeWithText("Select text…").assertIsDisplayed()
+    }
+
+    @Test fun copyLineAndCopyFromHereReportTheIndexAndTheLines() {
+        val taken = Taken()
+        val lines = showing(30).lines
+        show(showing(30), onLineAction = { l, i, a -> taken.got += Triple(l, i, a) })
+        rule.onNodeWithText("line 29 of the agent output", substring = true).performTouchInput { longClick() }
+        rule.onNodeWithText("Copy line").performClick()
+        rule.onNodeWithText("line 29 of the agent output", substring = true).performTouchInput { longClick() }
+        rule.onNodeWithText("Copy from here to newest").performClick()
+        assertEquals(2, taken.got.size)
+        assertEquals(io.github.tuthan.paddock.ui.components.LineAction.CopyLine, taken.got[0].third)
+        assertEquals("oldest-first index of line 29", 28, taken.got[0].second)
+        assertEquals(lines, taken.got[0].first)
+        assertEquals(io.github.tuthan.paddock.ui.components.LineAction.CopyToNewest, taken.got[1].third)
+    }
+
+    @Test fun theMenuActsOnTheLinesItWasOpenedOnEvenWhenTheOutputChangesUnderIt() {
+        val taken = Taken()
+        val first = showing(30)
+        var output by androidx.compose.runtime.mutableStateOf<OutputState>(first)
+        rule.setContent {
+            PaddockTheme(darkTheme = true) {
+                AgentOutput(header, output, true, now, AgentTab.Output, {}, {}, {}, {}, onLineAction = { l, i, a -> taken.got += Triple(l, i, a) })
+            }
+        }
+        rule.onNodeWithText("line 29 of the agent output", substring = true).performTouchInput { longClick() }
+        output = showing(60) // an answer that lands while the menu is open
+        rule.waitForIdle()
+        rule.onNodeWithText("Copy from here to newest").performClick()
+        assertEquals("the lines at the press, not the new answer", first.lines, taken.got.single().first)
+    }
+
+    @Test fun anEmptyLineOffersNoCopyLine() {
+        val empty = OutputState.Showing(Ansi.parse("alpha\n\nomega"), now, false)
+        show(empty, onLineAction = { _, _, _ -> })
+        val rows = rule.onAllNodes(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsActions.CustomActions)).fetchSemanticsNodes()
+        val names = rows.map { n -> n.config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].map { it.label } }
+        assertEquals(3, names.size)
+        assertEquals("exactly one line has only two actions", 1, names.count { it.size == 2 })
+        assertTrue(names.single { it.size == 2 }.none { it == "Copy line" })
+    }
+
+    @Test fun everyLineHasTheThreeCustomActionsAndNoClick() {
+        show(showing(10), onLineAction = { _, _, _ -> })
+        val rows = rule.onAllNodes(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsActions.CustomActions)).fetchSemanticsNodes()
+        assertEquals(10, rows.size)
+        for (n in rows) {
+            assertEquals(listOf("Copy line", "Copy from here to newest", "Select text from this line"), n.config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].map { it.label })
+            assertTrue("a line is not clickable", n.config.getOrNull(androidx.compose.ui.semantics.SemanticsActions.OnClick) == null)
+        }
+    }
+
+    @Test fun aCustomActionDoesWhatTheMenuItemDoes() {
+        val taken = Taken(); val calls = Calls()
+        show(showing(10), calls = calls, onLineAction = { l, i, a -> taken.got += Triple(l, i, a) })
+        val node = rule.onAllNodes(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsActions.CustomActions))[0]
+        val action = node.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single { it.label == "Select text from this line" }
+        rule.runOnUiThread { action.action() }
+        rule.waitForIdle()
+        assertEquals(io.github.tuthan.paddock.ui.components.LineAction.SelectFromHere, taken.got.single().third)
+        assertEquals("TalkBack's action pauses following like the gesture", 1, calls.up)
+    }
+
+    @Test fun aDragStillScrollsAndStillPausesWithTheMenuInPlace() {
+        val calls = show(showing(200), onLineAction = { _, _, _ -> })
+        rule.onNode(hasContentDescription("Terminal output")).performTouchInput { swipeDown() }
+        rule.waitForIdle()
+        assertTrue("a drag over the lines still reports a scroll up", calls.up >= 1)
+        rule.onNodeWithText("Copy line").assertDoesNotExist()
+    }
+
+    @Test fun auditOutputWithLineActionsDark() { show(showing(), onSelectText = {}, onLineAction = { _, _, _ -> }); SemanticsAudit.expectClean(rule, "Agent output with copy, dark", OUTPUT) }
+    @Test fun auditOutputWithLineActionsLight() { show(showing(), dark = false, onSelectText = {}, onLineAction = { _, _, _ -> }); SemanticsAudit.expectClean(rule, "Agent output with copy, light", OUTPUT) }
 
 }

@@ -117,6 +117,20 @@ class ActivityPresenterTest {
         assertEquals("The desktop now has this agent focused · 14:03:12", focus.detail)
     }
 
+    @Test fun aFileTransferRowSaysWhatWasAskedAndAnAttachmentIsNotOfferedAReread() {
+        val sent = opRow(op(OperationOutcome.Acknowledged, OperationKind.Attachment))
+        assertEquals("You attached a file for approve edit to build.gradle", sent.text)
+        assertTrue(sent.detail!!.startsWith("File sent 14:03:12"))
+        val cut = opRow(op(OperationOutcome.Unknown, OperationKind.Attachment))
+        assertEquals("You attached a file for approve edit to build.gradle (outcome unknown)", cut.text)
+        assertEquals("attachment sent 14:03:12 · outcome unknown · read the inbox before sending again", cut.detail)
+        assertEquals(null, cut.rereadOperationId, "a re-read of the agent does not settle a file")
+        // A drop has no terminal to name, and a fetch is a plain sentence.
+        val drop = ActivityItem.Operation(OperationRecord(100, "laptop", "", "drop:laptop", 0, OperationKind.Attachment, ms(1, 14, 3, 5), OperationOutcome.Acknowledged, sentAt = ms(1, 14, 3, 12)))
+        assertEquals("You dropped a file on the machine", opRow(drop).text)
+        assertEquals("You fetched a file from approve edit to build.gradle", opRow(op(OperationOutcome.Acknowledged, OperationKind.Fetch)).text)
+    }
+
     @Test fun aRowThatDidNotFinishCleanlySaysSoInTheSentenceAndTheDetailHasTheWhy() {
         assertEquals("You prompted approve edit to build.gradle (refused)", opRow(op(OperationOutcome.Rejected, code = "agent_blocked")).text)
         assertEquals("prompt refused by herdr (agent_blocked)", opRow(op(OperationOutcome.Rejected, code = "agent_blocked")).detail)

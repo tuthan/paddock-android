@@ -26,6 +26,12 @@ class Retained<T : Any>(private val scope: CoroutineScope, private val graceMill
         make().also { item = it; this.key = key; opened = false }
     }
 
+    /** The item held for [key], taken back from a pending release as [acquire] does, or null when there is none (the process was restarted, or it was released). */
+    fun current(key: Any): T? = synchronized(lock) {
+        val held = item
+        if (held != null && this.key == key) { drop?.cancel(); drop = null; held } else null
+    }
+
     /** True exactly once per item: the caller starts the item then. */
     fun firstUse(held: T): Boolean = synchronized(lock) { if (held === item && !opened) { opened = true; true } else false }
 

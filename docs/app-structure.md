@@ -34,6 +34,22 @@ that need Android's Keystore (`createPhoneKey`, `importKey`, `importedKey`, `sen
   machine screens (form, Find, Scan, Import key) forward most of it to each other; `AddMachineDeps.of(graph)` is the only place those files know the graph.
 - `AppLockGate.kt` covers the app while the lock says so; it takes the lock, the settings, the triggers and the graph's scope.
 
+## Copying from Output (Phase 15, Part A)
+
+- `ui/Copy.kt` is the one place the app writes the clipboard: `CopyKind` (label and sensitivity for every copy), `clipFor`, `copyText`, `clearClip`, `SensitiveClipboard` (the Compose wrapper that marks the system toolbar's Copy), `AlertClipGuard` (C7, built in `AppGraph` as `clipGuard` and told when the app comes to the front) and `copyNotice`. `CopyKindTest` scans the sources for a clipboard write anywhere else.
+- `ui/screens/SelectText.kt` is the frozen-copy view and `SelectHolder` its snapshot; `AppGraph.selections` (`Retained<SelectHolder>`) keeps the snapshot across a rotation, as `terminals` keeps a terminal session. `OutputRoute` keeps `selecting` in saved state and the holder out of it, so a restart brings back the Output tab. `docs/output.md` has the behaviour.
+- `ui/components/OutputComponents.kt` holds `OutputRow` (the long-press menu and the TalkBack actions) and `linesToText` (the copy's text with its colours).
+
+## Files (Phase 15, Part B)
+
+`docs/files.md` has the behavior. How it is put together:
+
+- **`:core` decides.** `FileTransfers` runs the constant `/bin/sh -c` scripts of `TransferScripts` over the host's session and journals each transfer (`Attachment`, `Fetch`); `TransferLimits`, `FileNames`, `PathTokens` and `DropFolderCheck` are pure; `ShareInbox` holds the one waiting share and `ShareDraft` decides how shared words join a draft. `MonitoredHost.transfers` is the host's one `FileTransfers`.
+- **`:app` takes and hands over.** `IncomingFiles` is the one intake of a picked, captured or shared file (SEC-1, SEC-2); `ShareIntake` reads an `ACTION_SEND` for `MainActivity` and nothing else; `ShareSender` sends a share to a folder or the drop folder with no agent, in the graph's scope; `GetController` (kept across a rotation in `AppGraph.gets`, a `Retained` holder) looks at, reads and caches a file from the machine; `Handoff` and `TransferFileProvider` give another app a read-only URI of one cached file; `ApkCheck` reads what an APK says about itself; `TransferCache` is the one owner of `cache/camera`, `cache/incoming` and `cache/transfers`.
+- **Graph members.** `incoming`, `transferCache`, `transferHold`, `shares`, `shareSender`, `shareNotice`, `gets` and `receiveShare(intent)`, which `MainActivity` calls from `onCreate` and `onNewIntent`. A forgotten machine drops its fetched files through the `forgotten` list.
+- **Routes.** `Route.Share` opens from `ShareEvents` (`RootEffects.kt`) once the app is unlocked and a machine is saved, and returns to Home; `ShareRoute` is the chooser's state, `GetRoute` is the Get sheet and the outbox list over `OutputRoute`, and `MachinePage` has the drop folder section (`MachineRoute`).
+- **A test seam.** `AppGraph.activityResultsOverride` lets `FilesFlowTest` answer the picker with a MediaStore image: a pick is another app's content, so the real SEC-1 check admits it.
+
 ## What the host tests do not cover
 
 The route files are Compose and are checked by compiling both flavors and by the instrumented tests (`ui/`, the graph tests, the smoke test) on an

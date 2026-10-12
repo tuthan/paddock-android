@@ -1,6 +1,5 @@
 package io.github.tuthan.paddock.routes
 
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -29,6 +28,7 @@ import io.github.tuthan.paddock.net.LocalNetworkPolicy
 import io.github.tuthan.paddock.settings.SettingsController
 import io.github.tuthan.paddock.ssh.ImportCheck
 import io.github.tuthan.paddock.ssh.LocalNetworkGate
+import io.github.tuthan.paddock.ui.clearClip
 import io.github.tuthan.paddock.ui.components.SecureWindow
 import io.github.tuthan.paddock.ui.screens.FindOnNetwork
 import io.github.tuthan.paddock.ui.screens.ImportKey
@@ -201,5 +201,5 @@ private fun clearClipboardIfKey(ctx: Context) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
     val text = runCatching { cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString() }.getOrNull() ?: return
     if ("PRIVATE KEY-----" !in text) return
-    if (android.os.Build.VERSION.SDK_INT >= 28) cm.clearPrimaryClip() else cm.setPrimaryClip(ClipData.newPlainText("", ""))
+    clearClip(ctx)
 }

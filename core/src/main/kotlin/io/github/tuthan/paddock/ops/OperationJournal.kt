@@ -31,6 +31,14 @@ enum class OperationKind(val wire: String) {
     CloseWorkspace("workspace close"),
     CloseTab("tab close"),
     ClosePane("pane close"),
+    /**
+     * Phase 15: one file written to the machine (an agent's `.paddock/inbox/` or the drop folder). Written before the first byte, with the
+     * destination path, the size and the file's SHA-256. A cut one is Unknown, which holds only a prompt that would name the file
+     * ([OperationRecord.awaitsInboxCheck]), never the terminal's keys or focus, and is settled by reading the inbox.
+     */
+    Attachment("attachment"),
+    /** Phase 15: a file that arrived from the machine, recorded when it is whole. Never Requested, Sent or Unknown; see [OperationJournal.recordFetch]. */
+    Fetch("fetch"),
 }
 
 /**
@@ -46,7 +54,9 @@ object Subject {
     fun pane(id: String) = "pane:$id"
     /** One start-agent saga: its steps run one after another, so one subject serializes them. */
     fun saga(id: String) = "saga:$id"
-    private val PREFIXES = listOf("session:", "workspace:", "tab:", "pane:", "saga:")
+    /** A file dropped in a machine's drop folder: no terminal and no session, one subject per host profile, so two drops there never overlap. */
+    fun drop(profileId: String) = "drop:$profileId"
+    private val PREFIXES = listOf("session:", "workspace:", "tab:", "pane:", "saga:", "drop:")
     fun isSubject(terminalId: String) = PREFIXES.any { terminalId.startsWith(it) }
     /** The part after the prefix: the session name, the workspace id, and so on. Null for a terminal id. */
     fun name(terminalId: String): String? = PREFIXES.firstOrNull { terminalId.startsWith(it) }?.let { terminalId.removePrefix(it) }
@@ -70,6 +80,9 @@ enum class OperationOutcome { Requested, NotSent, Sent, Acknowledged, Rejected, 
  * [resolvedAt] is set once the user re-read the terminal after an [OperationOutcome.Unknown]; the outcome itself stays.
  * [requestId] is the hook-minted id of the permission request an [OperationKind.Allow] or [OperationKind.Deny] answered, so
  * a lost answer can be settled later from the host's request files; it is null for every other kind.
+ * [path] and [size] describe the file of an [OperationKind.Attachment] or [OperationKind.Fetch] (where it was written or read, and how long it is;
+ * its SHA-256 is [payloadSha256]); they are never the content. [textSha256] is, on a prompt that carries an attachment, the hash of the user's
+ * own text without the phrase line before it (X12): the draft compares that one, because [payloadSha256] covers the phrase too.
  */
 @Serializable
 data class OperationRecord(
@@ -90,11 +103,22 @@ data class OperationRecord(
     val resolvedAt: Long? = null,
     val note: String = "",
     val requestId: String? = null,
+    val path: String? = null,
+    val size: Long? = null,
+    val textSha256: String? = null,
 ) {
     val inFlight get() = outcome == OperationOutcome.Requested || outcome == OperationOutcome.Sent
-    /** True when the row is about a terminal (an agent); false for a session, workspace, tab, pane or saga row (Phase 09). */
+    /** True when the row is about a terminal (an agent); false for a session, workspace, tab, pane, saga or drop row (Phase 09, Phase 15). */
     val aboutTerminal get() = !Subject.isSubject(terminalId)
-    val awaitsReread get() = outcome == OperationOutcome.Unknown && resolvedAt == null
+    /**
+     * An unknown outcome the user has not re-read the terminal for. An [OperationKind.Attachment] is left out (X9): what it leaves unknown is whether
+     * a file is on the machine, which a re-read of the agent cannot say, and it holds nothing but the prompt that would name the file.
+     */
+    val awaitsReread get() = outcome == OperationOutcome.Unknown && resolvedAt == null && kind != OperationKind.Attachment
+    /** A cut [OperationKind.Attachment] whose inbox has not been read since: it holds only the prompt that would name the file ([ComposerRules.gate]). */
+    val awaitsInboxCheck get() = kind == OperationKind.Attachment && outcome == OperationOutcome.Unknown && resolvedAt == null
+    /** The hash the draft compares when this prompt is accepted: the user's own text when the row says it, else the whole payload (X12). */
+    val userTextSha256 get() = textSha256 ?: payloadSha256
     fun sameTerminal(other: TerminalKey) = host == other.target.host.value && session == other.target.session && terminalId == other.target.terminalId
 }
 
@@ -190,26 +214,53 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
 
     /**
      * Writes a [OperationOutcome.Requested] row unless the terminal is busy. [payload] is hashed; the text is kept
-     * only when [keepText] is true.
+     * only when [keepText] is true. A prompt that carries an attachment passes [textSha256], the hash of the user's own text (X12).
+     * An [OperationKind.Attachment] passes [path], [size] and [fileSha256] instead of a payload: the hash of what leaves is the file's.
+     * A second attachment to a terminal waits for the inbox of a cut one to be read ([OperationRecord.awaitsInboxCheck]); nothing else does, and a file sent with no agent never waits for one.
      */
-    fun begin(key: TerminalKey, kind: OperationKind, payload: String? = null, keepText: Boolean = false, requestId: String? = null): Begin = synchronized(lock) {
+    fun begin(
+        key: TerminalKey, kind: OperationKind, payload: String? = null, keepText: Boolean = false, requestId: String? = null,
+        textSha256: String? = null, path: String? = null, size: Long? = null, fileSha256: String? = null,
+    ): Begin = synchronized(lock) {
         _unreadable.value?.let { return Begin.Unreadable(it) }
         data.records.firstOrNull { it.sameTerminal(key) && it.inFlight }?.let { return Begin.InFlight(it) }
         data.records.firstOrNull { it.sameTerminal(key) && it.awaitsReread }?.let { return Begin.NeedsReread(it) }
+        // A cut file holds the prompt that would name it (X9), so only a terminal's next attachment waits for its inbox to be read. A file sent with no agent (a drop, or a
+        // folder's inbox) has no prompt to hold and no screen to read its folder from: its Unknown row stays in the Activity log and never blocks the next send.
+        if (kind == OperationKind.Attachment && !Subject.isSubject(key.target.terminalId)) data.records.firstOrNull { it.sameTerminal(key) && it.awaitsInboxCheck }?.let { return Begin.NeedsReread(it) }
         val row = OperationRecord(
             id = data.nextId, host = key.target.host.value, session = key.target.session, terminalId = key.target.terminalId, epoch = key.epoch,
             kind = kind, requestedAt = clock.nowMillis(),
-            payloadSha256 = payload?.let(::sha256Hex), promptText = payload?.takeIf { keepText }, requestId = requestId,
+            payloadSha256 = fileSha256 ?: payload?.let(::sha256Hex), promptText = payload?.takeIf { keepText }, requestId = requestId,
+            path = path, size = size, textSha256 = textSha256,
         )
         commit(data.copy(nextId = data.nextId + 1, records = data.records + row), mustPersist = true)
         Begin.Started(row)
     }
 
     /**
-     * The write is about to start: the row says so first. [seqAtSend] is the agent's `state_change_seq` in the read that
-     * allowed the send. Throws [JournalWriteFailed] when it cannot, and then nothing is written.
+     * A file arrived from the machine, whole and counted: one finished row (Acknowledged, resolved, never in flight and never Unknown), written
+     * without [begin] because there is nothing to hold back: it never blocks the terminal, whatever else is running. [sha256] is the received
+     * file's. Best effort like the later moves; returns [NOT_RECORDED] when the saved journal is unreadable (nothing may be written over it).
      */
-    fun markSent(id: Long, paneId: String, seqAtSend: Long? = null): OperationRecord =
+    fun recordFetch(key: TerminalKey, path: String, size: Long, sha256: String): Long = synchronized(lock) {
+        if (_unreadable.value != null) return NOT_RECORDED
+        val now = clock.nowMillis()
+        val row = OperationRecord(
+            id = data.nextId, host = key.target.host.value, session = key.target.session, terminalId = key.target.terminalId, epoch = key.epoch,
+            kind = OperationKind.Fetch, requestedAt = now, outcome = OperationOutcome.Acknowledged, sentAt = now, resolvedAt = now,
+            payloadSha256 = sha256, path = path, size = size,
+        )
+        commit(data.copy(nextId = data.nextId + 1, records = data.records + row), mustPersist = false)
+        row.id
+    }
+
+    /**
+     * The write is about to start: the row says so first. [seqAtSend] is the agent's `state_change_seq` in the read that
+     * allowed the send; [paneId] is null for what is not written to a pane (a file). Throws [JournalWriteFailed] when it cannot,
+     * and then nothing is written.
+     */
+    fun markSent(id: Long, paneId: String? = null, seqAtSend: Long? = null): OperationRecord =
         move(id, OperationOutcome.Sent, mustPersist = true) { it.copy(paneIdAtSend = paneId, seqAtSend = seqAtSend, sentAt = clock.nowMillis()) }
 
     /** Refused before the write (not ready, stale pane, host unreachable). Certain: nothing reached the host. */
@@ -238,6 +289,9 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
 
     /** The unknown rows of a terminal that still wait for a re-read. */
     fun unresolvedUnknown(key: TerminalKey): List<OperationRecord> = forTerminal(key).filter { it.awaitsReread }
+
+    /** The cut attachments of a terminal whose inbox has not been read since (X9). A re-read of the agent does not free these. */
+    fun unresolvedAttachments(key: TerminalKey): List<OperationRecord> = forTerminal(key).filter { it.awaitsInboxCheck }
 
     fun get(id: Long): OperationRecord? = _records.value.firstOrNull { it.id == id }
 
@@ -289,6 +343,8 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
         const val MAX_NOTE = 160
         const val MAX_AGE_MILLIS: Long = 30L * 24 * 60 * 60 * 1000
         const val MAX_ROWS = 5_000
+        /** What [recordFetch] returns when it wrote nothing. */
+        const val NOT_RECORDED = -1L
 
         fun sha256Hex(text: String): String =
             MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }

@@ -423,4 +423,171 @@ class OperationJournalTest {
         j.resolve(row.id, "re-read: taken by the hook")
         assertTrue(j.begin(k, OperationKind.Allow, requestId = "22222222-2222-4222-8222-222222222222") is Begin.Started)
     }
+
+    // ---- Phase 15: Attachment and Fetch (X9), the prompt's own-text hash (X12) -----------------------------------------------
+
+    private val fileSha = "ab".repeat(32)
+
+    private fun OperationJournal.attachment(k: TerminalKey = key(), path: String = "/work/proj/.paddock/inbox/a.png"): OperationRecord =
+        (begin(k, OperationKind.Attachment, path = path, size = 1234, fileSha256 = fileSha) as Begin.Started).record
+
+    @Test fun anAttachmentAndAFetchKeepTheirPathSizeAndHashOnDiskAndTheNewKindsRoundTrip() {
+        val dir = java.nio.file.Files.createTempDirectory("journal").toFile()
+        try {
+            val file = File(dir, "j.json")
+            val j = OperationJournal(FileJournalStore(file)) { now }
+            val a = j.attachment()
+            j.markSent(a.id); j.acknowledged(a.id)
+            val fetched = j.recordFetch(key(), "/work/proj/out/a.pdf", 99, fileSha)
+            val again = OperationJournal(FileJournalStore(file)) { now }
+            val rows = again.records.value
+            assertEquals(listOf(OperationKind.Attachment, OperationKind.Fetch), rows.map { it.kind })
+            assertEquals(listOf("attachment", "fetch"), rows.map { it.kind.wire })
+            assertEquals(Triple("/work/proj/.paddock/inbox/a.png", 1234L, fileSha), Triple(rows[0].path, rows[0].size, rows[0].payloadSha256))
+            assertEquals(Triple("/work/proj/out/a.pdf", 99L, fileSha), Triple(rows[1].path, rows[1].size, rows[1].payloadSha256))
+            assertEquals(fetched, rows[1].id)
+            assertNull("no content is ever kept", rows[0].promptText)
+            // A file written before these fields existed loads, with them empty.
+            val older = """{"nextId":2,"records":[{"id":1,"host":"h1","session":"s","terminalId":"t","epoch":1,"kind":"Prompt","requestedAt":1,"payloadSha256":"x"}]}"""
+            val old = File(dir, "old.json").apply { writeText(older) }
+            val loaded = FileJournalStore(old).load().records.single()
+            assertEquals(Triple(null, null, null), Triple(loaded.path, loaded.size, loaded.textSha256))
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun aCutFileSentWithNoAgentHoldsNothingNotEvenTheNextFileToTheSameSubject() {
+        val j = journal()
+        val subject = TerminalKey(TargetRef(HostProfileId("h1"), "", Subject.drop("h1")), epoch = 0)
+        val a = j.attachment(subject, "~/Paddock/a.txt")
+        j.markSent(a.id); j.unknown(a.id, "cut")
+        assertTrue("the row is Unknown and open, as any cut file's is", j.get(a.id)!!.awaitsInboxCheck)
+        val next = j.begin(subject, OperationKind.Attachment, path = "~/Paddock/b.txt", size = 1, fileSha256 = fileSha)
+        assertTrue("there is no prompt to hold and no screen to read from, so the next one goes: $next", next is Begin.Started)
+        // An unfinished one still serializes sends to the subject.
+        assertTrue(j.begin(subject, OperationKind.Attachment, path = "~/Paddock/c.txt", size = 1, fileSha256 = fileSha) is Begin.InFlight)
+        // A terminal's own cut file still holds its next one (X9), as before.
+        val k = key("t9")
+        val t = j.attachment(k)
+        j.markSent(t.id); j.unknown(t.id, "cut")
+        assertTrue(j.begin(k, OperationKind.Attachment, path = "/p", size = 1, fileSha256 = fileSha) is Begin.NeedsReread)
+    }
+
+    @Test fun aCutAttachmentDoesNotCloseTheTerminalForKeysFocusOrAPlainPromptButDoesHoldTheNextAttachmentAndItsOwnPrompt() {
+        val j = journal()
+        val k = key()
+        // Rows of the same terminal that are not waiting on an inbox: a file that arrived, and a prompt that was accepted.
+        val earlier = j.attachment(k, "/work/proj/.paddock/inbox/earlier.png")
+        j.markSent(earlier.id); j.acknowledged(earlier.id)
+        val accepted = (j.begin(k, OperationKind.Prompt, "x") as Begin.Started).record
+        j.markSent(accepted.id, "w1:p1"); j.acknowledged(accepted.id)
+        val a = j.attachment(k)
+        j.markSent(a.id); j.unknown(a.id, "cut")
+        val row = j.get(a.id)!!
+        assertTrue(row.awaitsInboxCheck && !row.awaitsReread)
+        assertTrue(j.unresolvedUnknown(k).isEmpty() && j.unresolvedAttachments(k) == listOf(row))
+
+        // Not the terminal: every gate that shares terminalBlock stays open, and so do the journal's own checks for other kinds.
+        val agent = io.github.tuthan.paddock.herdr.Agent(paneId = "w1:p1", terminalId = "t1", workspaceId = "w1", tabId = "w1:t1", agentStatus = io.github.tuthan.paddock.herdr.AgentStatus.Idle)
+        val rows = j.records.value
+        assertTrue(ComposerRules.gate(agent, now, now - 1, true, rows, k, "hello") is SendGate.Open)
+        assertEquals(OperationGate.Open, ManualInputRules.gate(agent, now, now - 1, true, rows, k))
+        assertEquals(OperationGate.Open, FocusRules.gate(agent, now, true, rows, k))
+        assertTrue(j.begin(k, OperationKind.Prompt, "plain") is Begin.Started)
+
+        // The attachment's own next send is what it holds, with the cut one named.
+        j.acknowledged(j.records.value.last().id.also { j.markSent(it, "w1:p1") })
+        assertEquals(a.id, (j.begin(k, OperationKind.Attachment, path = "/p", size = 1, fileSha256 = fileSha) as Begin.NeedsReread).unknown.id)
+        assertTrue(ComposerRules.attachmentUnknown(j.records.value, k))
+        assertFalse(ComposerRules.attachmentUnknown(j.records.value, key("other")))
+        // Reading the inbox frees it; the row stays Unknown.
+        j.resolve(a.id, "inbox read")
+        assertFalse(ComposerRules.attachmentUnknown(j.records.value, k))
+        assertEquals(OperationOutcome.Unknown, j.get(a.id)!!.outcome)
+        assertTrue(j.begin(k, OperationKind.Attachment, path = "/p", size = 1, fileSha256 = fileSha) is Begin.Started)
+    }
+
+    @Test fun aPromptThatWasCutStillHoldsTheTerminalAsBefore() {
+        val j = journal()
+        val p = j.started()
+        j.markSent(p.id, "w1:p1"); j.unknown(p.id)
+        assertTrue(j.get(p.id)!!.awaitsReread && !j.get(p.id)!!.awaitsInboxCheck)
+        assertTrue(j.begin(key(), OperationKind.Esc) is Begin.NeedsReread)
+        assertTrue(j.begin(key(), OperationKind.Attachment, path = "/p", size = 1, fileSha256 = fileSha) is Begin.NeedsReread)
+    }
+
+    @Test fun anAttachmentRestartedMidWriteIsUnknownAndStillHoldsOnlyItsPrompt() {
+        val j = journal()
+        val a = j.attachment()
+        j.markSent(a.id)
+        val restarted = journal()
+        val row = restarted.get(a.id)!!
+        assertEquals(OperationOutcome.Unknown, row.outcome)
+        assertTrue(row.awaitsInboxCheck && !row.awaitsReread)
+        assertEquals("/work/proj/.paddock/inbox/a.png", row.path)
+        assertTrue(restarted.begin(key(), OperationKind.Esc) is Begin.Started)
+    }
+
+    @Test fun aFetchIsWrittenFinishedWithoutBeginAndNeverBlocksAnything() {
+        val j = journal()
+        val k = key()
+        val p = j.started(k); j.markSent(p.id, "w1:p1")           // a prompt in flight on the same terminal
+        val u = j.started(key("t2")); j.markSent(u.id, "w1:p2"); j.unknown(u.id)
+        val id = j.recordFetch(k, "/work/proj/out/a.pdf", 4_096, fileSha)
+        val fetch = j.get(id)!!
+        assertEquals(OperationKind.Fetch, fetch.kind)
+        assertEquals(OperationOutcome.Acknowledged, fetch.outcome)
+        assertEquals(now, fetch.resolvedAt)
+        assertFalse(fetch.inFlight || fetch.awaitsReread || fetch.awaitsInboxCheck)
+        assertEquals("written to disk with the others", store.load().records.last(), fetch)
+        assertEquals("the prompt in flight is what holds it, not the fetch", p.id, (j.begin(k, OperationKind.Esc) as Begin.InFlight).first.id)
+        j.acknowledged(p.id)
+        assertTrue("and once it is done the terminal is free, fetch or not", j.begin(k, OperationKind.Esc) is Begin.Started)
+        // Fetches in a row never refuse one another, and a fetch row cannot be moved by the machine's states.
+        assertTrue(j.recordFetch(k, "/work/proj/out/b.pdf", 1, fileSha) > id)
+        assertFailsTransition { j.markSent(id) }
+        assertFailsTransition { j.unknown(id) }
+    }
+
+    private fun assertFailsTransition(block: () -> Unit) {
+        try { block(); fail("expected a refused move") } catch (_: IllegalOutcomeTransition) { }
+    }
+
+    @Test fun aFetchIsRecordedEvenWhenTheDiskFailsAndNotWhenTheJournalIsUnreadable() {
+        val j = journal()
+        store.failSaves = true
+        val id = j.recordFetch(key(), "/p/a", 1, fileSha)
+        assertEquals("memory is right", OperationKind.Fetch, j.get(id)!!.kind)
+        assertTrue(j.saveFailed)
+        store.failSaves = false
+        val broken = InMemoryJournalStore().also { it.unreadable = true }
+        val unreadable = journal(broken)
+        assertEquals(OperationJournal.NOT_RECORDED, unreadable.recordFetch(key(), "/p/a", 1, fileSha))
+        assertTrue(unreadable.records.value.isEmpty())
+    }
+
+    @Test fun aDropIsASubjectOfItsOwnAndAboutNoTerminal() {
+        assertEquals("drop:h1", Subject.drop("h1"))
+        assertTrue(Subject.isSubject("drop:h1"))
+        assertEquals("h1", Subject.name("drop:h1"))
+        val j = journal()
+        val k = TerminalKey(TargetRef(HostProfileId("h1"), "", Subject.drop("h1")), 0)
+        val row = j.attachment(k, "~/Paddock/a.txt")
+        assertFalse(row.aboutTerminal)
+        assertTrue("two drops to one machine never overlap", j.begin(k, OperationKind.Attachment, path = "/p", size = 1, fileSha256 = fileSha) is Begin.InFlight)
+        assertTrue(j.attachment(TerminalKey(TargetRef(HostProfileId("h2"), "", Subject.drop("h2")), 0)).id > row.id)
+    }
+
+    @Test fun aPromptRowKeepsTheHashOfTheUsersOwnTextBesideTheHashOfEverythingSent() {
+        val j = journal()
+        val full = "Attached file: .paddock/inbox/a.png\nwhat is this?"
+        val row = (j.begin(key(), OperationKind.Prompt, full, textSha256 = OperationJournal.sha256Hex("what is this?")) as Begin.Started).record
+        assertEquals(OperationJournal.sha256Hex(full), row.payloadSha256)
+        assertEquals(OperationJournal.sha256Hex("what is this?"), row.textSha256)
+        assertEquals(row.textSha256, row.userTextSha256)
+        assertEquals(row, store.load().records.single())
+        // Without the own-text hash, the payload's is the user's text, as before.
+        val plain = (journal().begin(key("t9"), OperationKind.Prompt, "plain") as Begin.Started).record
+        assertNull(plain.textSha256)
+        assertEquals(OperationJournal.sha256Hex("plain"), plain.userTextSha256)
+    }
 }

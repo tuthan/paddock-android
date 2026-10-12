@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phase 15 (SEC-5): the only two folders the file provider can name, both under the cache directory and nothing broader. `camera/` takes a capture from the
+     camera app; `transfers/` serves a file *Get* fetched, to Open or Share. No root-path, no files-path, no "." — a path here is a promise about every file
+     under it. The names in these folders are random ids, never a name from the machine or the sender. `incoming/` is not here: a snapshot is read by the
+     app only, never by another one. -->
+<paths>
+    <cache-path name="camera" path="camera/" />
+    <cache-path name="transfers" path="transfers/" />
+</paths>

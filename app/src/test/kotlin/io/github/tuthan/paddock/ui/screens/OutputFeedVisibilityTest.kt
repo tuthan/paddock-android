@@ -11,4 +11,9 @@ class OutputFeedVisibilityTest {
     @Test fun itDoesNotPollInTheBackgroundOnEitherTab() {
         for (tab in AgentTab.entries) assertFalse(outputFeedVisible(resumed = false, tab = tab))
     }
+
+    @Test fun itDoesNotPollWhileTheSelectTextViewIsOpen() {
+        assertFalse(outputFeedVisible(resumed = true, tab = AgentTab.Output, selecting = true))
+        assertTrue("closing the view lets it poll again", outputFeedVisible(resumed = true, tab = AgentTab.Output, selecting = false))
+    }
 }

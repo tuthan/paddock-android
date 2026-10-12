@@ -566,6 +566,31 @@ class MachineBookTest {
         assertFalse(profiles.get(b.id)!!.searchNetwork)
     }
 
+    @Test fun theDropFolderIsSavedKeptThroughAMoveClearedByTheDefaultAndNeverReconnects() = runBlocking<Unit> {
+        book.add(a); book.add(b)
+        events.clear()
+        assertNull(profiles.get(b.id)!!.dropFolder, "the default until the user chooses")
+        assertEquals("~/Paddock", profiles.get(b.id)!!.dropFolderValue)
+        book.setDropFolder(b.id, "  ~/Incoming  ")
+        assertEquals("~/Incoming", profiles.get(b.id)!!.dropFolder, "trimmed")
+        assertEquals("~/Incoming", book.profile.value!!.dropFolder)
+        assertEquals("~/Incoming", book.machines.value.single { it.id == b.id }.dropFolderValue)
+        assertNull(book.machines.value.single { it.id == a.id }.dropFolder, "only that machine")
+        book.setDropFolder("nope", "~/X")
+        assertTrue(events.isEmpty(), "a setting: nothing is closed or watched again")
+        assertTrue(book.setAddress(b.id, "10.255.255.91", 22))
+        assertEquals("~/Incoming", profiles.get(b.id)!!.dropFolder, "a moved machine keeps the user's folder")
+        book.setDropFolder(b.id, "relative/path")
+        book.setDropFolder(b.id, "~/bad\nname")
+        book.setDropFolder(b.id, "/" + "x".repeat(HostProfile.MAX_DROP_FOLDER))
+        assertEquals("~/Incoming", profiles.get(b.id)!!.dropFolder, "a value the profile would not hold changes nothing")
+        book.setDropFolder(b.id, "~/Paddock")
+        assertNull(profiles.get(b.id)!!.dropFolder, "the default is stored as none")
+        book.setDropFolder(b.id, "/srv/drop")
+        book.setDropFolder(b.id, null)
+        assertNull(profiles.get(b.id)!!.dropFolder)
+    }
+
     @Test fun aDecisionAboutTheOldAddressRunsOnlyWhileTheMachineIsStillThere() = runBlocking<Unit> {
         book.add(a)
         assertEquals("ran", book.whileAt(a.id, "10.255.255.1:22") { "ran" })

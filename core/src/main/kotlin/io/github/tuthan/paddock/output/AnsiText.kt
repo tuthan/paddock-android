@@ -10,7 +10,11 @@ data class AnsiStyle(val fg: AnsiColor? = null, val bold: Boolean = false, val d
 
 data class AnsiSpan(val text: String, val style: AnsiStyle)
 
-data class AnsiLine(val spans: List<AnsiSpan>) {
+/**
+ * One line of output. [cut] is true when [Ansi.parse] dropped characters at [Ansi.MAX_LINE_CHARS]: a copy of this line is not the whole line,
+ * and the screens that copy say so.
+ */
+data class AnsiLine(val spans: List<AnsiSpan>, val cut: Boolean = false) {
     val text: String get() = spans.joinToString("") { it.text }
 }
 
@@ -33,10 +37,14 @@ object Ansi {
         val run = StringBuilder()
         var style = AnsiStyle()
         var lineChars = 0
+        var cut = false
 
         fun flush() { if (run.isNotEmpty()) { spans += AnsiSpan(run.toString(), style); run.clear() } }
-        fun endLine() { flush(); lines += AnsiLine(spans.toList()); spans.clear(); lineChars = 0 }
-        fun put(c: Char) { if (lineChars < MAX_LINE_CHARS) { run.append(c); lineChars++ } }
+        fun endLine() { flush(); lines += AnsiLine(spans.toList(), cut); spans.clear(); lineChars = 0; cut = false }
+        // The first character that does not fit ends the line's text: nothing after it is kept, so a copy never has a gap in the middle.
+        fun put(c: Char) { if (cut) return; if (lineChars < MAX_LINE_CHARS) { run.append(c); lineChars++ } else cut = true }
+        // A surrogate pair goes in whole or not at all; half of one would copy as a broken character.
+        fun putPair(hi: Char, lo: Char) { if (cut) return; if (lineChars + 2 <= MAX_LINE_CHARS) { run.append(hi).append(lo); lineChars += 2 } else cut = true }
 
         var i = 0
         val n = input.length
@@ -48,7 +56,7 @@ object Ansi {
                 c == '\t' -> { repeat(4) { put(' ') }; i++ }
                 Character.isHighSurrogate(c) && i + 1 < n && Character.isLowSurrogate(input[i + 1]) -> {
                     // Tag characters (U+E0000 to U+E007F) are invisible and can smuggle text; drop them, keep the rest.
-                    if (!SafeText.isUnsafe(Character.toCodePoint(c, input[i + 1]))) { put(c); put(input[i + 1]) }
+                    if (!SafeText.isUnsafe(Character.toCodePoint(c, input[i + 1]))) putPair(c, input[i + 1])
                     i += 2
                 }
                 SafeText.isUnsafe(c.code) -> i++
@@ -188,8 +196,13 @@ object Ansi {
  * no line or paragraph separators that break a one-line row. What is left is shown as written.
  */
 object SafeText {
+    /**
+     * An unpaired surrogate (a code point from U+D800 to U+DFFF, which `codePoints()` yields for one) is unsafe too: dropping a tag character
+     * can leave the halves on either side of it adjacent, and two such halves would join into a new character the reader never saw (the
+     * bypass AWS describes for Java). With them gone, cleaning twice gives what cleaning once did.
+     */
     fun isUnsafe(cp: Int): Boolean =
-        cp < 0x20 || cp == 0x7F || cp in 0x80..0x9F ||
+        cp < 0x20 || cp == 0x7F || cp in 0x80..0x9F || cp in 0xD800..0xDFFF ||
             cp in 0x202A..0x202E || cp in 0x2066..0x2069 || cp == 0x200E || cp == 0x200F || cp == 0x061C ||
             // Zero-width space and invisible operators go; the joiners (U+200C, U+200D) stay, as emoji and many scripts need them.
             cp == 0x200B || cp in 0x2060..0x2064 || cp == 0xFEFF || cp == 0x2028 || cp == 0x2029 ||

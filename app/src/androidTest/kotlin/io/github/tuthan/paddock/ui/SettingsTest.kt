@@ -41,6 +41,7 @@ import io.github.tuthan.paddock.routes.SettingsRoute
 import io.github.tuthan.paddock.billing.Distribution
 import io.github.tuthan.paddock.billing.EntitlementState
 import io.github.tuthan.paddock.billing.GateContext
+import io.github.tuthan.paddock.billing.ProCapabilities
 import io.github.tuthan.paddock.billing.ProCopy
 import io.github.tuthan.paddock.billing.ProGate
 import io.github.tuthan.paddock.billing.ProStatus
@@ -625,7 +626,7 @@ class SettingsTest {
         assertEquals(ProCopy.OVERVIEW_ID, graph.proService.gateRequest.value)
         inSheet(hasText("What Pro covers")).assertIsDisplayed()
         val lines = ProCopy.coverageLines(ProGate.GATED)
-        assertEquals(5, lines.size)
+        assertEquals("one line for each built capability", ProCapabilities.ALL.count { it.built }, lines.size)
         inSheet(hasContentDescription("Pro covers: " + lines.joinToString(", "))).assertIsDisplayed()
         // No capability was chosen, so no free path for one: every free path starts "Free: ".
         assertEquals(0, rule.onAllNodes(hasText("Free: ", substring = true) and hasAnyAncestor(isDialog())).fetchSemanticsNodes().size)

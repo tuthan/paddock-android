@@ -1,7 +1,5 @@
 package io.github.tuthan.paddock.routes
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +31,10 @@ import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.notify.UnifiedPushConnector
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.relay.PinnedHostScripts
+import io.github.tuthan.paddock.ui.AlertClipGuard
+import io.github.tuthan.paddock.ui.CopyKind
+import io.github.tuthan.paddock.ui.CopyWords
+import io.github.tuthan.paddock.ui.copyText
 import io.github.tuthan.paddock.ui.screens.AlertForm
 import io.github.tuthan.paddock.ui.screens.AlertRelay
 import io.github.tuthan.paddock.ui.screens.AlertRelayHostState
@@ -53,7 +55,7 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun AlertRelayRoute(
     hostUi: HostUiModel, machineBook: MachineBook, push: UnifiedPushConnector, alertSetups: AlertSetupStore, hostScripts: PinnedHostScripts, clock: Clock,
-    onBack: () -> Unit,
+    clipGuard: AlertClipGuard, onBack: () -> Unit,
 ) {
     val view by hostUi.view.collectAsState()
     val profile by machineBook.profile.collectAsState()
@@ -233,10 +235,8 @@ internal fun AlertRelayRoute(
         },
         onCheck = { tick++ },
         onCopy = {
-            script?.let {
-                (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock alert relay setup", it))
-                copied = true
-            }
+            // The script holds the topic and, for a self-hosted server, its token: marked sensitive, and cleared when Paddock next comes to the front (C7).
+            script?.let { if (copyText(ctx, CopyKind.AlertSetup, it)) { clipGuard.arm(); copied = true } }
         },
         // Explicitly to the ntfy app: the link carries the topic, which is the secret of this mode, so no other app that handles ntfy:// gets it.
         onOpenNtfy = { link ->
@@ -245,8 +245,10 @@ internal fun AlertRelayRoute(
             catch (_: android.content.ActivityNotFoundException) { result = "The ntfy app is not installed on this phone. Install it, then try again."; resultIsProblem = true }
         },
         onCopyLink = { link ->
-            (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("ntfy subscribe link", link))
-            result = "Copied. Open it on a phone with the ntfy app, or enter the server and topic in the app by hand."; resultIsProblem = false
+            if (copyText(ctx, CopyKind.SubscribeLink, link)) {
+                clipGuard.arm()
+                result = "Copied. Open it on a phone with the ntfy app, or enter the server and topic in the app by hand."; resultIsProblem = false
+            } else { result = CopyWords.COULD_NOT; resultIsProblem = true }
         },
     )
 }

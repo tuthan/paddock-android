@@ -319,6 +319,18 @@ class MachineBook(
         machineWritten(written)
     }
 
+    /**
+     * Where files shared to this machine with no agent go ([HostProfile.dropFolder]); null or the default clears it. The caller has had the machine resolve it. A
+     * value the profile would not hold is ignored. Never reconnects.
+     */
+    suspend fun setDropFolder(profileId: String, value: String?) {
+        val wanted = value?.trim()?.takeIf { it.isNotEmpty() && it != HostProfile.DEFAULT_DROP_FOLDER }
+        if (wanted != null && !HostProfile.validDropFolder(wanted)) return
+        val written = profiles.update(profileId) { stored -> stored.copy(dropFolder = wanted) } ?: return
+        if (_profile.value?.id == written.id) _profile.value = written
+        machineWritten(written)
+    }
+
     /** The user's own icon for [profileId]: an OS, or null to follow what the machine says. Never reconnects. */
     suspend fun setOs(profileId: String, os: HostOs?) {
         val written = profiles.update(profileId) { stored -> stored.copy(os = os) } ?: return

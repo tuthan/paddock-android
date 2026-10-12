@@ -18,7 +18,17 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import io.github.tuthan.paddock.output.OutputCopy
 import androidx.compose.material3.ripple
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -50,6 +60,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.widthIn
@@ -57,6 +68,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import io.github.tuthan.paddock.files.PathToken
+import io.github.tuthan.paddock.files.PathTokens
 import io.github.tuthan.paddock.output.AnsiLine
 import io.github.tuthan.paddock.terminal.KeyEncoder
 import io.github.tuthan.paddock.terminal.ModKey
@@ -67,7 +80,7 @@ import io.github.tuthan.paddock.ui.theme.PaddockColors
 import io.github.tuthan.paddock.ui.theme.PaddockTokens
 import androidx.compose.ui.platform.LocalDensity
 
-internal fun ansiLineToText(line: AnsiLine, colors: PaddockColors): AnnotatedString = buildAnnotatedString {
+internal fun ansiLineToText(line: AnsiLine, colors: PaddockColors, links: List<PathToken> = emptyList()): AnnotatedString = buildAnnotatedString {
     if (line.spans.isEmpty()) append(" ") // an empty line keeps its height
     for (span in line.spans) {
         val s = span.style
@@ -81,6 +94,38 @@ internal fun ansiLineToText(line: AnsiLine, colors: PaddockColors): AnnotatedStr
             ),
         ) { append(span.text) }
     }
+    // A path the agent printed is underlined (Phase 15, slice 12). A span style and not a LinkAnnotation: a long press on a link would reach the link and not the line (spike S1).
+    for (t in links) if (t.start < t.end && t.end <= length) addStyle(SpanStyle(textDecoration = TextDecoration.Underline), t.start, t.end)
+}
+
+/** The path token whose characters a tap at [pos] is on, with [slopPx] of room around each character; null when the tap is on no path. */
+internal fun pathAt(layout: TextLayoutResult, pos: Offset, tokens: List<PathToken>, slopPx: Float): PathToken? {
+    if (tokens.isEmpty() || layout.layoutInput.text.isEmpty()) return null
+    val nearest = layout.getOffsetForPosition(pos)
+    for (candidate in intArrayOf(nearest, nearest - 1)) {
+        if (candidate < 0 || candidate >= layout.layoutInput.text.length) continue
+        val token = tokens.firstOrNull { candidate >= it.start && candidate < it.end } ?: continue
+        val box = layout.getBoundingBox(candidate)
+        if (pos.x >= box.left - slopPx && pos.x <= box.right + slopPx && pos.y >= box.top - slopPx && pos.y <= box.bottom + slopPx) return token
+    }
+    return null
+}
+
+/**
+ * The lines of a copy as one text, for the Select text view: the same span styles as [ansiLineToText], lines trimmed and joined with a newline, and no filler for
+ * an empty line, so its characters are exactly [io.github.tuthan.paddock.output.OutputCopy.text] of the same lines and an offset in one is an offset in the other.
+ */
+internal fun linesToText(lines: List<AnsiLine>, colors: PaddockColors): AnnotatedString = buildAnnotatedString {
+    lines.forEachIndexed { i, raw ->
+        for (span in io.github.tuthan.paddock.output.OutputCopy.trimmed(raw).spans) {
+            val s = span.style
+            val color = if (s.fg == null && s.dim) colors.dim else AnsiPalette.color(colors, s.fg)
+            withStyle(
+                SpanStyle(color = color, fontWeight = if (s.bold) FontWeight.Bold else null, textDecoration = if (s.underline) TextDecoration.Underline else null),
+            ) { append(span.text) }
+        }
+        if (i != lines.lastIndex) append('\n')
+    }
 }
 
 /**
@@ -91,7 +136,15 @@ internal fun ansiLineToText(line: AnsiLine, colors: PaddockColors): AnnotatedStr
  * says so.
  */
 @Composable
-fun OutputSlab(lines: List<AnsiLine>, following: Boolean, onUserScrolledUp: () -> Unit, modifier: Modifier = Modifier) {
+fun OutputSlab(
+    lines: List<AnsiLine>, following: Boolean, onUserScrolledUp: () -> Unit, modifier: Modifier = Modifier,
+    /** A long press on a line (or one of its TalkBack actions) pauses following through this, as a drag does; the menu then acts on the lines captured at that moment. */
+    onLongPress: (() -> Unit)? = null,
+    /** What the line menu chose: the lines as they were at the press, the oldest-first index of the line, and the action. Null leaves the lines inert. */
+    onLineAction: ((lines: List<AnsiLine>, index: Int, action: LineAction) -> Unit)? = null,
+    /** A tap on a path the agent printed (Phase 15, Get): the path as printed. Null leaves paths as plain text. Only a line with a menu has links. */
+    onPath: ((String) -> Unit)? = null,
+) {
     val c = PaddockTokens.colors
     val listState = rememberLazyListState()
     val scrolledUp = rememberUpdatedState(onUserScrolledUp)
@@ -116,8 +169,9 @@ fun OutputSlab(lines: List<AnsiLine>, following: Boolean, onUserScrolledUp: () -
             verticalArrangement = Arrangement.Top,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
         ) {
-            itemsIndexed(newestFirst) { _, line ->
-                Text(ansiLineToText(line, c), style = PaddockTokens.type.slab, color = c.text)
+            itemsIndexed(newestFirst) { reversedIndex, line ->
+                if (onLineAction == null) Text(ansiLineToText(line, c), style = PaddockTokens.type.slab, color = c.text)
+                else OutputRow(line, lines, lines.size - 1 - reversedIndex, onLongPress, onLineAction, onPath)
             }
         }
         if (!following) {
@@ -130,6 +184,57 @@ fun OutputSlab(lines: List<AnsiLine>, following: Boolean, onUserScrolledUp: () -
                 Icon(PaddockIcons.Pause, contentDescription = null, tint = c.text, modifier = Modifier.size(14.dp))
                 Text("PAUSED", style = PaddockTokens.type.stateWord, color = c.text)
             }
+        }
+    }
+}
+
+/** What the menu of a long-pressed output line offers (Phase 15, C2). */
+enum class LineAction(val label: String, val spoken: String) {
+    CopyLine("Copy line", "Copy line"),
+    CopyToNewest("Copy from here to newest", "Copy from here to newest"),
+    SelectFromHere("Select text…", "Select text from this line"),
+}
+
+/**
+ * One line of the live tail with its long-press menu (Copy line, Copy from here to newest, Select text…) and the same three as TalkBack custom actions. The long
+ * press is a gesture and not a click, so the line has no click action and a drag that starts on it still scrolls. The menu acts on [lines] and [index] as they
+ * were at the press, never on whatever the feed shows by the time a choice is made. An empty line offers no Copy line.
+ */
+@Composable
+private fun OutputRow(line: AnsiLine, lines: List<AnsiLine>, index: Int, onLongPress: (() -> Unit)?, onLineAction: (List<AnsiLine>, Int, LineAction) -> Unit, onPath: ((String) -> Unit)?) {
+    val c = PaddockTokens.colors
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    var open by remember { mutableStateOf<Pair<List<AnsiLine>, Int>?>(null) }
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val slop = with(LocalDensity.current) { 10.dp.toPx() }
+    val empty = OutputCopy.trimmed(line).text.isEmpty()
+    val actions = LineAction.entries.filter { !(empty && it == LineAction.CopyLine) }
+    // The paths of the line (at most eight), found once per line; the frozen Select text view never has them.
+    val tokens = remember(line, onPath != null) { if (onPath == null) emptyList() else PathTokens.tokens(line.text, line.cut) }
+    val path by rememberUpdatedState(onPath)
+    fun choose(a: LineAction, captured: List<AnsiLine>, at: Int) { open = null; onLineAction(captured, at, a) }
+    Box(
+        Modifier
+            .pointerInput(lines, index, tokens) {
+                detectTapGestures(
+                    onTap = { pos -> layout?.let { l -> pathAt(l, pos, tokens, slop)?.let { path?.invoke(it.text) } } },
+                    onLongPress = {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        onLongPress?.invoke()
+                        open = lines to index
+                    },
+                )
+            }
+            // One node per line, so TalkBack reads the text and offers the actions on the same element: the line's three, then one Get per path.
+            .semantics(mergeDescendants = true) {
+                customActions = actions.map { a -> CustomAccessibilityAction(a.spoken) { onLongPress?.invoke(); choose(a, lines, index); true } } +
+                    tokens.map { it.text }.distinct().map { text -> CustomAccessibilityAction("Get file $text") { path?.invoke(text); true } }
+            },
+    ) {
+        Text(ansiLineToText(line, c, tokens), style = PaddockTokens.type.slab, color = c.text, onTextLayout = { layout = it })
+        val captured = open
+        DropdownMenu(expanded = captured != null, onDismissRequest = { open = null }) {
+            if (captured != null) for (a in actions) DropdownMenuItem(text = { Text(a.label) }, onClick = { choose(a, captured.first, captured.second) })
         }
     }
 }

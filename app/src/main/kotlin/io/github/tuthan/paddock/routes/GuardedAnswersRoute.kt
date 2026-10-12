@@ -1,7 +1,5 @@
 package io.github.tuthan.paddock.routes
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -19,6 +17,8 @@ import io.github.tuthan.paddock.host.HostUiModel
 import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.live.HostPhase
 import io.github.tuthan.paddock.relay.PinnedHostScripts
+import io.github.tuthan.paddock.ui.CopyKind
+import io.github.tuthan.paddock.ui.copyText
 import io.github.tuthan.paddock.ui.screens.GuardedAgent
 import io.github.tuthan.paddock.ui.screens.GuardedAnswers
 import io.github.tuthan.paddock.ui.screens.GuardedAnswersUi
@@ -59,8 +59,7 @@ internal fun GuardedAnswersRoute(hostUi: HostUiModel, machineBook: MachineBook, 
     val opencodeCommand = known?.opencodeDestination?.let { runCatching { AnswerSetupText.opencodeCommand(it) }.getOrNull() }
     val copy = { label: String, text: String?, which: GuardedCopied ->
         text?.let {
-            (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(label, it))
-            copied = which
+            if (copyText(ctx, CopyKind.GuardedSetup, it, label = label)) copied = which
         }
     }
     GuardedAnswers(

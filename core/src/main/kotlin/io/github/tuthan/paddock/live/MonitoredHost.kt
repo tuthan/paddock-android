@@ -26,6 +26,8 @@ import io.github.tuthan.paddock.relay.RelayClient
 import io.github.tuthan.paddock.terminal.ControlHelperPort
 import io.github.tuthan.paddock.terminal.TerminalOptions
 import io.github.tuthan.paddock.terminal.TerminalSession
+import io.github.tuthan.paddock.files.Direction
+import io.github.tuthan.paddock.files.TransferLimits
 import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.EpochTracker
 import io.github.tuthan.paddock.attention.ObservedAt
@@ -130,8 +132,14 @@ class MonitoredHost(
         else io.github.tuthan.paddock.ops.PromptStep.Held(io.github.tuthan.paddock.ops.OperationPresenter().line(io.github.tuthan.paddock.ops.OperationKind.Prompt, result).text)
     }
 
+    /**
+     * Files to and from this machine over the same session (Phase 15): a put to an agent's `.paddock/inbox/`, a drop, the reads and a get, each journaled
+     * ahead. Null without a journal. It opens a channel only when the user sends or fetches something.
+     */
+    val transfers: io.github.tuthan.paddock.files.FileTransfers? = journal?.let { io.github.tuthan.paddock.files.FileTransfers(session, it, clock) }
+
     /** Runs those operations in this host's scope and keeps the newest outcome per terminal; null with [operations]. */
-    val sends: SendController? = operations?.let { SendController(scope, it) }
+    val sends: SendController? = operations?.let { SendController(scope, it, transfers, TransferLimits.MAX_PUT_BYTES) { bytes -> TransferLimits.deadline(bytes, Direction.ToMachine) } }
 
     /**
      * Yes and No for Claude Code permission requests the hook published, journaled; null without a journal or without the host scripts.

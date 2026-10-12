@@ -1,5 +1,8 @@
 package io.github.tuthan.paddock.ops
 
+import io.github.tuthan.paddock.files.ByteSource
+import io.github.tuthan.paddock.files.FileTransfers
+import io.github.tuthan.paddock.files.TransferRefusal
 import io.github.tuthan.paddock.herdr.Pane
 import io.github.tuthan.paddock.herdr.Snapshot
 import io.github.tuthan.paddock.identity.HostProfileId
@@ -12,6 +15,7 @@ import io.github.tuthan.paddock.relay.RelayClient
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -30,6 +34,7 @@ class SendControllerTest {
     private val journal = OperationJournal(InMemoryJournalStore()) { 5_000_000L }
     private val key = TerminalKey(TargetRef(HostProfileId("h1"), "paddock-test", "term_1"), epoch = 1)
     private val methods = CopyOnWriteArrayList<String>()
+    private val prompts = CopyOnWriteArrayList<String>()
     @Volatile private var held: FakeStream? = null
     @Volatile private var hold = false
     @Volatile private var status = "idle"
@@ -42,6 +47,7 @@ class SendControllerTest {
             val id = req["id"]!!.jsonPrimitive.content
             val method = req["method"]!!.jsonPrimitive.content
             methods += method
+            if (method == "agent.prompt") prompts += req["params"]!!.jsonObject["text"]!!.jsonPrimitive.content
             when {
                 method == "agent.get" -> s.feed("""{"id":"$id","result":{"type":"agent_info","agent":${agent(id)}}}""" + "\n")
                 hold -> held = s
@@ -167,6 +173,177 @@ class SendControllerTest {
         c.sendKey(key, OperationKind.Esc)
         until("the Esc outcome") { c.outcomes.value["term_1"]?.kind == OperationKind.Esc }
         assertNull(c.rereads.value["term_1"], "starting another operation clears the earlier report")
+        scope.cancel()
+    }
+
+    // ---- Phase 15: a prompt with an attachment ---------------------------------------------------------------------------------
+
+    private val fileBytes = ByteArray(2_000) { (it * 3).toByte() }
+    private val sourceOf = ByteSource { java.io.ByteArrayInputStream(fileBytes) }
+    private fun sha256Of(b: ByteArray) = java.security.MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
+    private val file = io.github.tuthan.paddock.files.Snapshot("snap-1", "2026-10-11-143205-shot.png", "image/png", fileBytes.size.toLong(), sha256Of(fileBytes))
+
+    private fun withFiles(exit: Int = 0): Pair<SendController, FakeSession> {
+        val files = FakeSession(onStream = { it.exit = exit })
+        return SendController(scope, ops, FileTransfers(files, journal) { 5_000_000L }) to files
+    }
+
+    @Test fun aFileIsPutFirstAndThenThePromptNamesItOnALineOfItsOwnBeforeTheUsersText() = runBlocking<Unit> {
+        val (c, files) = withFiles()
+        c.promptWithAttachment(key, "what does this say?", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the outcome") { c.outcomes.value["term_1"] != null }
+        val outcome = c.outcomes.value.getValue("term_1")
+        assertEquals(OperationKind.Prompt, outcome.kind)
+        assertIs<OperationResult.Acknowledged<*>>(outcome.result)
+        assertEquals(listOf("Attached file: .paddock/inbox/2026-10-11-143205-shot.png\nwhat does this say?"), prompts)
+        assertTrue(files.streams.single().writtenText().startsWith("/work/proj\n2026-10-11-143205-shot.png\n${fileBytes.size}\n"))
+        val rows = journal.records.value
+        assertEquals(listOf(OperationKind.Attachment, OperationKind.Prompt), rows.map { it.kind })
+        assertTrue(rows.all { it.outcome == OperationOutcome.Acknowledged })
+        val prompt = rows.last()
+        assertEquals(OperationJournal.sha256Hex("what does this say?"), prompt.textSha256, "the draft compares the user's own words")
+        assertEquals(OperationJournal.sha256Hex(prompts.single()), prompt.payloadSha256)
+        assertEquals(rows.first().payloadSha256, file.sha256)
+        assertEquals(1, methods.count { it == "agent.prompt" })
+        assertTrue(files.streams.size == 1 && files.streams.single().closed)
+        scope.cancel()
+    }
+
+    @Test fun aPhotoWithNoWordsIsSentAsJustItsPhraseAndTheDraftComparesTheEmptyText() = runBlocking<Unit> {
+        val (c, _) = withFiles()
+        c.promptWithAttachment(key, "", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the outcome") { c.outcomes.value["term_1"] != null }
+        assertEquals(listOf("Attached file: .paddock/inbox/2026-10-11-143205-shot.png"), prompts, "no line break after it: that would be a second Enter for some agents")
+        assertEquals(OperationJournal.sha256Hex(""), journal.records.value.last().textSha256)
+        scope.cancel()
+    }
+
+    @Test fun aRefusedPutSendsNoPromptAndTheOutcomeIsThePutsOwn() = runBlocking<Unit> {
+        val (c, _) = withFiles(exit = TransferRefusal.Exists.exit)
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the outcome") { c.outcomes.value["term_1"] != null }
+        val o = c.outcomes.value.getValue("term_1")
+        assertEquals(OperationKind.Attachment, o.kind)
+        val rejected = assertIs<OperationResult.Rejected>(o.result)
+        assertEquals("exists", rejected.code)
+        assertEquals(0, methods.count { it == "agent.prompt" })
+        assertEquals(emptyList(), prompts)
+        assertEquals(listOf(OperationKind.Attachment), journal.records.value.map { it.kind })
+        assertTrue(c.running.value.isEmpty())
+        scope.cancel()
+    }
+
+    @Test fun aCutPutSendsNoPromptAndLeavesTheAttachmentUnknownWithoutHoldingTheTerminal() = runBlocking<Unit> {
+        val (c, _) = withFiles(exit = 143)
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the outcome") { c.outcomes.value["term_1"] != null }
+        assertIs<OperationResult.Unknown>(c.outcomes.value.getValue("term_1").result)
+        assertEquals(0, methods.count { it == "agent.prompt" })
+        val cut = journal.records.value.single()
+        assertTrue(cut.awaitsInboxCheck)
+        // A plain prompt is not held by it.
+        c.prompt(key, "no file this time", keepText = false)
+        until("the plain prompt") { c.outcomes.value["term_1"]?.kind == OperationKind.Prompt }
+        assertIs<OperationResult.Acknowledged<*>>(c.outcomes.value.getValue("term_1").result)
+        assertEquals(listOf("no file this time"), prompts)
+        scope.cancel()
+    }
+
+    @Test fun withoutAFolderTheAgentsOwnIsReadAndNoFolderIsRefusedBeforeAnythingIsSent() = runBlocking<Unit> {
+        val (c, files) = withFiles()
+        // The agent.get answer carries no folder: the put is refused, journaled and said, and no channel opens.
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false)
+        until("the outcome") { c.outcomes.value["term_1"] != null }
+        val o = c.outcomes.value.getValue("term_1")
+        assertEquals(OperationKind.Attachment, o.kind)
+        assertEquals(TransferRefusal.BadPath.code, assertIs<OperationResult.NotSent>(o.result).reason)
+        assertTrue(files.streams.isEmpty())
+        assertEquals(0, methods.count { it == "agent.prompt" })
+        scope.cancel()
+    }
+
+    private val entered = java.util.concurrent.CountDownLatch(1)
+    private val release = java.util.concurrent.CountDownLatch(1)
+
+    /** 500 bytes of the file, then a read that does not return until the test lets it (a slow local read, a source that stops mid-stream), then the rest. */
+    private val blocking = ByteSource {
+        object : java.io.InputStream() {
+            private var pos = 0
+            override fun read(): Int = throw UnsupportedOperationException()
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (pos == 500) { entered.countDown(); release.await() }
+                if (pos >= fileBytes.size) return -1
+                val n = minOf(len, fileBytes.size - pos, if (pos < 500) 500 - pos else Int.MAX_VALUE)
+                fileBytes.copyInto(b, off, pos, pos + n); pos += n
+                return n
+            }
+        }
+    }
+
+    @Test fun cancellingAFileOnItsWayLeavesItsRowUnknownWithTheCutNoPromptAndNothingRunning() = runBlocking<Unit> {
+        val (c, files) = withFiles()
+        c.promptWithAttachment(key, "hello", file, blocking, keepText = false, folder = "/work/proj")
+        assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the put reached the middle of the file")
+        assertEquals(setOf("term_1"), c.running.value)
+        c.cancel("term_1")
+        release.countDown()
+        until("the call to end") { c.running.value.isEmpty() }
+        val row = journal.records.value.single()
+        assertEquals(OperationKind.Attachment, row.kind)
+        assertEquals(OperationOutcome.Unknown, row.outcome, "bytes may have left: the inbox settles it")
+        assertTrue(row.note.startsWith("cut after ") && "500 of ${fileBytes.size} bytes" in row.note && row.note.endsWith("cancelled"), "the cut is noted")
+        assertTrue(row.awaitsInboxCheck)
+        assertEquals(emptyList(), prompts, "no prompt names a file that may be half there")
+        assertEquals(0, methods.count { it == "agent.prompt" })
+        assertNull(c.outcomes.value["term_1"], "a cancelled call keeps no outcome")
+        assertTrue(files.streams.single().closed)
+        // Another call on the terminal can start again: a plain prompt is not held by a cut attachment.
+        c.prompt(key, "no file this time", keepText = false)
+        until("the plain prompt") { c.outcomes.value["term_1"]?.kind == OperationKind.Prompt }
+        scope.cancel()
+    }
+
+    @Test fun cancellingWhenNothingRunsOrForAnotherTerminalLeavesTheRunningCallAlone() = runBlocking<Unit> {
+        val (c, _) = withFiles()
+        c.cancel("term_1") // nothing is running
+        assertTrue(c.running.value.isEmpty())
+        c.promptWithAttachment(key, "hello", file, blocking, keepText = false, folder = "/work/proj")
+        assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        c.cancel("term_other")
+        delay(100)
+        assertEquals(setOf("term_1"), c.running.value, "another terminal's cancel is not this one's")
+        release.countDown()
+        until("the outcome") { c.outcomes.value["term_1"]?.kind == OperationKind.Prompt }
+        assertIs<OperationResult.Acknowledged<*>>(c.outcomes.value.getValue("term_1").result)
+        until("nothing running") { c.running.value.isEmpty() }
+        c.cancel("term_1") // already over: nothing to cancel, and the next call is not touched by it
+        c.prompt(key, "again", keepText = false)
+        until("the second outcome") { prompts.size == 2 && c.running.value.isEmpty() }
+        assertIs<OperationResult.Acknowledged<*>>(c.outcomes.value.getValue("term_1").result)
+        scope.cancel()
+    }
+
+    @Test fun theTransferDeadlineIsAskedWithTheFilesSizeAndGovernsThePut() = runBlocking<Unit> {
+        val seen = CopyOnWriteArrayList<Long>()
+        val files = FakeSession(onStream = { it.exit = 0 })
+        val c = SendController(scope, ops, FileTransfers(files, journal) { 5_000_000L }, transferDeadline = { size -> seen += size; kotlin.time.Duration.ZERO })
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the outcome") { c.outcomes.value["term_1"] != null }
+        assertEquals(listOf(file.size), seen)
+        val o = c.outcomes.value.getValue("term_1")
+        assertEquals(OperationKind.Attachment, o.kind)
+        assertIs<OperationResult.Unknown>(o.result, "no time at all is a put that was cut, not one that was refused or finished")
+        assertEquals(emptyList(), prompts)
+        scope.cancel()
+    }
+
+    @Test fun aControllerWithoutTransfersRefusesAnAttachmentAndAPromptThatCannotFitIsRefusedAtOnce() = runBlocking<Unit> {
+        val plain = SendController(scope, ops)
+        assertFailsWith<IllegalStateException> { plain.promptWithAttachment(key, "x", file, sourceOf, false, "/w") }
+        val (c, _) = withFiles()
+        assertFailsWith<IllegalArgumentException> { c.promptWithAttachment(key, "x".repeat(AgentOperations.MAX_PROMPT_CHARS), file, sourceOf, false, "/w") }
+        assertFailsWith<IllegalArgumentException> { c.promptWithAttachment(key, "x", file.copy(name = "bad name;rm"), sourceOf, false, "/w") }
+        assertEquals(emptyList(), journal.records.value, "nothing was started")
         scope.cancel()
     }
 }

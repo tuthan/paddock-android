@@ -39,6 +39,8 @@ object PaddockIcons {
     val Send = icon("send", "M12 19V5M5 12l7-7 7 7")
     val Machine = icon("machine", rect(3f, 4f, 18f, 12f, 2f), "M8 20h8M12 16v4")
     val Bell = icon("bell", "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", "M10.3 21a1.94 1.94 0 0 0 3.4 0")
+    val Close = icon("close", "M6 6l12 12M18 6L6 18")
+    val Attach = icon("attach", "M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48")
     val File = icon("file", "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5")
     /** A padlock: the mark a locked Pro button draws before its label (`PaddockButton`'s `pro`), beside the word "Pro", never instead of it. */
     val Lock = icon("lock", rect(4.5f, 10.5f, 15f, 10.5f, 2f), "M8 10.5V7a4 4 0 0 1 8 0v3.5", "M12 14.5v2.5")

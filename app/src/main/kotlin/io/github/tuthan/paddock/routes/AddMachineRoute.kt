@@ -1,7 +1,5 @@
 package io.github.tuthan.paddock.routes
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
@@ -44,7 +42,9 @@ import io.github.tuthan.paddock.ssh.ImportCheck
 import io.github.tuthan.paddock.ssh.ImportedKeyInfo
 import io.github.tuthan.paddock.ssh.LocalNetworkGate
 import io.github.tuthan.paddock.ssh.PhoneKey
+import io.github.tuthan.paddock.ui.CopyKind
 import io.github.tuthan.paddock.ui.commandShareIntent
+import io.github.tuthan.paddock.ui.copyText
 import io.github.tuthan.paddock.ui.screens.ADD_MACHINE_INTRO
 import io.github.tuthan.paddock.ui.screens.AUTHORIZE_INTRO
 import io.github.tuthan.paddock.ui.screens.AUTHORIZE_INTRO_IMPORTED
@@ -224,8 +224,8 @@ internal fun AddMachineRoute(
                 scope.launch { if (deps.gate.needsRequest(AddMachineForm.normalizeHost(offer.host))) { pendingSend = input to offer; permission.launch(LocalNetworkPolicy.PERMISSION) } else beginSend(input, offer) }
             },
             onGenerateKey = { scope.launch { deps.createPhoneKey(); keyTick++ } },
-            onCopyPublicKey = { line -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock public key", line)) },
-            onCopyCommand = { command -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock authorize command", command)) },
+            onCopyPublicKey = { line -> copyText(ctx, CopyKind.PublicKey, line) },
+            onCopyCommand = { command -> copyText(ctx, CopyKind.AuthorizeCommand, command) },
             onShareCommand = { command -> ctx.startActivity(Intent.createChooser(commandShareIntent(command), "Share the command")) },
             onPastePairingLink = {
                 when (val r = readPairingLink(ctx)) {

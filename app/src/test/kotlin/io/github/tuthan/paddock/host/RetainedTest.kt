@@ -64,4 +64,23 @@ class RetainedTest {
         r.acquire("t1") { "x" }; assertFalse("still the same item after a re-create", r.firstUse(a))
         val b = r.acquire("t2") { "two" }; assertTrue(r.firstUse(b))
     }
+
+    // Phase 15: the Select text view finds its copy again after a rotation, and never builds one it was not given.
+
+    @Test fun currentFindsTheItemForItsKeyOnlyAndTakesItBackFromAPendingRelease() {
+        val r = retained(grace = 300)
+        assertEquals(null, r.current("t1"))
+        val a = r.acquire("t1") { "one" }
+        assertSame(a, r.current("t1")); assertEquals(null, r.current("t2"))
+        r.release(a, recreating = true)
+        assertSame("a re-created screen takes it back", a, r.current("t1"))
+        Thread.sleep(500)
+        assertTrue("and the grace no longer closes it", closed.isEmpty())
+    }
+
+    @Test fun currentFindsNothingAfterTheItemWasReleasedForGood() {
+        val r = retained(); val a = r.acquire("t1") { "one" }
+        r.release(a, recreating = false)
+        assertEquals(null, r.current("t1"))
+    }
 }

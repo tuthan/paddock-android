@@ -202,6 +202,89 @@ class OutputFeedTest {
         f.stop()
     }
 
+    // Phase 15: a copy acts on the lines the user saw, so an answer that lands after a pause must not replace them.
+
+    @Test fun aTextAnswerThatLandsAfterAPauseIsDropped() = runBlocking<Unit> {
+        val f = feed()
+        duringRead = { if (paneIds.size == 2) f.userScrolledUp() }
+        f.start(); f.setVisible(true)
+        until("first read shown") { (f.state.value as? OutputState.Showing)?.lines?.singleOrNull()?.text == "line 1" }
+        until("the second read was sent and the user paused") { paneIds.size >= 2 && !f.following.value }
+        delay(150)
+        assertEquals("line 1", (f.state.value as OutputState.Showing).lines.single().text, "the answer to the second read was dropped")
+        assertEquals(2, paneIds.size, "and nothing is read while paused")
+        f.stop()
+    }
+
+    @Test fun aFailedAnswerAfterAPauseStillMarksStale() = runBlocking<Unit> {
+        val f = feed()
+        next = { n -> if (n == 2) OutputRead.Failed("boom") else OutputRead.Text("ok $n") }
+        duringRead = { if (paneIds.size == 2) f.userScrolledUp() }
+        f.start(); f.setVisible(true)
+        until("stale") { (f.state.value as? OutputState.Showing)?.stale == true }
+        assertEquals("ok 1", (f.state.value as OutputState.Showing).lines.single().text)
+        f.stop()
+    }
+
+    @Test fun aDroppedAnswerIsReadAgainWhenFollowingResumes() = runBlocking<Unit> {
+        val f = feed()
+        duringRead = { if (paneIds.size == 2) f.userScrolledUp() }
+        f.start(); f.setVisible(true)
+        until("paused with two reads out") { paneIds.size >= 2 && !f.following.value }
+        delay(100)
+        f.resumeFollowing()
+        until("the text of a later read") { (f.state.value as? OutputState.Showing)?.lines?.singleOrNull()?.text?.let { it != "line 1" } == true }
+        f.stop()
+    }
+
+    @Test fun readOnceReadsWhileHiddenAndPausedAndCountsTheRead() = runBlocking<Unit> {
+        val f = feed()
+        f.start() // not visible: the poll reads nothing
+        f.userScrolledUp()
+        delay(60)
+        assertEquals(0, f.reads)
+        assertTrue(f.readOnce())
+        assertEquals(1, f.reads)
+        assertEquals("line 1", (f.state.value as OutputState.Showing).lines.single().text)
+        assertFalse(f.following.value, "a re-read does not resume following")
+        f.stop()
+    }
+
+    @Test fun readOnceKeepsTheMappingRule() = runBlocking<Unit> {
+        duringRead = { installed.value = snapshotWith(Pane("w2:p7", "term_a", "w2", "w2:t1"), Pane("w1:p1", "term_b", "w1", "w1:t1")) }
+        val f = feed()
+        assertFalse(f.readOnce(), "the answer is for a pane that now belongs to another terminal")
+        assertEquals(OutputState.Loading, f.state.value)
+    }
+
+    @Test fun readOnceFailingMarksTheTextStaleAndAGonePaneSaysSo() = runBlocking<Unit> {
+        val f = feed()
+        assertTrue(f.readOnce())
+        next = { OutputRead.Failed("boom") }
+        assertFalse(f.readOnce())
+        assertTrue((f.state.value as OutputState.Showing).stale)
+        installed.value = snapshotWith()
+        assertFalse(f.readOnce())
+        assertEquals(OutputState.PaneGone, f.state.value)
+    }
+
+    @Test fun readOnceAndThePollNeverOverlap() = runBlocking<Unit> {
+        val inFlight = java.util.concurrent.atomic.AtomicInteger()
+        val peak = java.util.concurrent.atomic.AtomicInteger()
+        val f = OutputFeed(scope, target, installed, { id ->
+            paneIds += id
+            peak.accumulateAndGet(inFlight.incrementAndGet()) { a, b -> maxOf(a, b) }
+            delay(40)
+            inFlight.decrementAndGet()
+            next(paneIds.size)
+        }, clock, intervalMillis = 1, sleep = { delay(1) }, live = live)
+        f.start(); f.setVisible(true)
+        repeat(8) { launch { f.readOnce() } }
+        until("some reads") { f.reads >= 10 }
+        f.stop()
+        assertEquals(1, peak.get(), "one read at a time")
+    }
+
     @Test fun theReaderAsksForTwoHundredUnwrappedAnsiLinesAndMapsTheAnswers() = runBlocking<Unit> {
         val cli = HerdrCli("/usr/local/bin/herdr", "main")
         val answers = ArrayDeque(listOf(

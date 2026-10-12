@@ -158,6 +158,8 @@ data class MachinePageState(
     /** The machine's saved profile and the other saved machines, for its address change ([MachineAddress]); null draws no Change address…. */
     val profile: HostProfile? = null,
     val otherProfiles: List<HostProfile> = emptyList(),
+    /** Where files shared to Paddock with no agent go on this machine (Phase 15, X10); null draws no section (a page that has no way to ask the machine). */
+    val drop: DropFolderUi? = null,
 )
 
 /** The hostname the machine said (`uname -n`), shown so the user knows the name Paddock looks for when its address stops answering; null before a bring-up read it. */
@@ -184,6 +186,7 @@ fun MachinePage(
     onGuardedAnswers: () -> Unit = {},
     onChangeAddress: (host: String, port: Int) -> Unit = { _, _ -> },
     onSetSearchNetwork: (Boolean) -> Unit = {},
+    dropActions: DropFolderActions? = null,
 ) {
     val c = PaddockTokens.colors
     val row = state.row
@@ -242,6 +245,8 @@ fun MachinePage(
             Kicker("Name and icon", Modifier.padding(top = 12.dp))
             NameEditor(row, state.otherNames, state.busy, onRename)
             OsPicker(state.chosenOs, state.detectedOs, onSetOs)
+
+            if (state.drop != null && dropActions != null) DropFolderSection(state.drop, dropActions)
 
             WakeOnLanSection(state.wake, onCopyWakeCommand, onSaveWakeRelay, onWake)
 

@@ -1,5 +1,6 @@
 package io.github.tuthan.paddock.ops
 
+import io.github.tuthan.paddock.files.AttachmentPhrase
 import io.github.tuthan.paddock.herdr.Agent
 import io.github.tuthan.paddock.herdr.AgentStatus
 import io.github.tuthan.paddock.identity.HostProfileId
@@ -7,6 +8,7 @@ import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -24,8 +26,8 @@ class ComposerRulesTest {
 
     private fun gate(
         a: Agent? = agent(), readAtMillis: Long? = readAt, live: Boolean = true, records: List<OperationRecord> = emptyList(), text: String = "hello", strict: Boolean = false,
-        epoch: Long? = key.epoch, journalUnreadable: Boolean = false,
-    ) = ComposerRules.gate(a, readAtMillis, opened, live, records, key, text, strict, epoch, journalUnreadable)
+        epoch: Long? = key.epoch, journalUnreadable: Boolean = false, hasAttachment: Boolean = false, attachmentUnknown: Boolean = false,
+    ) = ComposerRules.gate(a, readAtMillis, opened, live, records, key, text, strict, epoch, journalUnreadable, hasAttachment, attachmentUnknown)
 
     private fun closed(g: SendGate) = assertIs<SendGate.Closed>(g)
 
@@ -109,8 +111,60 @@ class ComposerRulesTest {
 
     @Test fun everyClosedCaseHasASentence() {
         val cases = listOf(gate(a = null), gate(live = false), gate(epoch = key.epoch + 1), gate(readAtMillis = null), gate(records = listOf(row(OperationOutcome.Sent))),
-            gate(records = listOf(row(OperationOutcome.Unknown))), gate(journalUnreadable = true), gate(agent(AgentStatus.Working)), gate(text = ""), gate(text = "x".repeat(AgentOperations.MAX_PROMPT_CHARS + 1)))
+            gate(records = listOf(row(OperationOutcome.Unknown))), gate(journalUnreadable = true), gate(agent(AgentStatus.Working)), gate(attachmentUnknown = true),
+            gate(text = ""), gate(text = "x".repeat(AgentOperations.MAX_PROMPT_CHARS + 1)))
         assertEquals(SendBlock.entries.toSet(), cases.map { closed(it).block }.toSet(), "the matrix reaches every block")
         assertTrue(cases.all { closed(it).sentence.isNotBlank() })
+    }
+
+    // ---- Phase 15: an attachment is a prompt (X12), and a cut one holds only its own prompt (X9) -----------------------------------
+
+    private fun attachmentRow(outcome: OperationOutcome, resolved: Boolean = false) =
+        OperationRecord(2, "h1", "paddock-test", "term_1", 2, OperationKind.Attachment, 1_200, outcome, resolvedAt = if (resolved) 1_300 else null, path = "/w/.paddock/inbox/a.png", size = 5)
+
+    @Test fun anAttachmentWithoutWordsOpensSendAndBlankTextWithoutOneStillDoesNot() {
+        assertEquals(SendBlock.EmptyPrompt, closed(gate(text = "")).block)
+        assertEquals(SendGate.Open(true), gate(text = "", hasAttachment = true), "a photo with no words can be sent")
+        assertEquals(SendGate.Open(true), gate(text = "  \n", hasAttachment = true))
+        assertEquals(SendGate.Open(true), gate(text = "look at this", hasAttachment = true))
+        assertEquals(SendBlock.EmptyPrompt, closed(gate(text = "  ", hasAttachment = false)).block)
+    }
+
+    @Test fun theAttachmentsPhraseTakesItsShareOfTheLengthAndTheSentenceSaysSo() {
+        val room = AgentOperations.MAX_PROMPT_CHARS - AttachmentPhrase.RESERVED_CHARS
+        assertEquals(SendGate.Open(true), gate(text = "x".repeat(room), hasAttachment = true))
+        val long = closed(gate(text = "x".repeat(room + 1), hasAttachment = true))
+        assertEquals(SendBlock.TooLong, long.block)
+        assertTrue("with a file" in long.sentence && "%,d".format(room) in long.sentence, long.sentence)
+        assertEquals(SendGate.Open(true), gate(text = "x".repeat(AgentOperations.MAX_PROMPT_CHARS)), "without a file the limit is as it was")
+        // What would be sent is always within what the operation accepts.
+        val full = AttachmentPhrase.line(".paddock/inbox/" + "n".repeat(100)) + "\n" + "x".repeat(room)
+        assertTrue(full.length <= AgentOperations.MAX_PROMPT_CHARS, "the reserve covers the longest phrase line")
+    }
+
+    @Test fun aCutAttachmentClosesSendWithItsSentenceOnlyWhileTheCallerSaysItConcernsTheDraft() {
+        val g = closed(gate(attachmentUnknown = true, hasAttachment = true))
+        assertEquals(SendBlock.InboxUnread, g.block)
+        assertEquals("This file may already be on the machine. Read the inbox first.", g.sentence)
+        assertEquals(SendBlock.InboxUnread, closed(gate(attachmentUnknown = true, text = "words")).block)
+        // The terminal's own conditions and the agent's readiness are read first, and the empty text comes after.
+        assertEquals(SendBlock.AgentGone, closed(gate(a = null, attachmentUnknown = true)).block)
+        assertEquals(SendBlock.NotReady, closed(gate(agent(AgentStatus.Working), attachmentUnknown = true)).block)
+        assertEquals(SendBlock.InboxUnread, closed(gate(text = "", attachmentUnknown = true)).block)
+    }
+
+    @Test fun aCutAttachmentRowIsNotARereadHoldOnTheTerminalAndTheHelperFindsIt() {
+        val cut = attachmentRow(OperationOutcome.Unknown)
+        assertEquals(SendGate.Open(true), gate(records = listOf(cut)), "a plain prompt, a key and a focus are not held by it (X9)")
+        assertEquals(OperationGate.Open, ManualInputRules.gate(agent(), readAt, opened, true, listOf(cut), key))
+        assertEquals(OperationGate.Open, FocusRules.gate(agent(), readAt, true, listOf(cut), key))
+        assertTrue(ComposerRules.attachmentUnknown(listOf(cut), key))
+        assertFalse(ComposerRules.attachmentUnknown(listOf(attachmentRow(OperationOutcome.Unknown, resolved = true)), key), "reading the inbox frees it")
+        assertFalse(ComposerRules.attachmentUnknown(listOf(attachmentRow(OperationOutcome.Acknowledged), attachmentRow(OperationOutcome.Rejected)), key))
+        assertFalse(ComposerRules.attachmentUnknown(listOf(cut.copy(terminalId = "term_other")), key))
+        // An attachment still being written is the one operation in flight, like any other.
+        assertEquals(SendBlock.InFlight, closed(gate(records = listOf(attachmentRow(OperationOutcome.Sent)))).block)
+        // A prompt's unknown outcome still holds everything, as before.
+        assertEquals(SendBlock.NeedsReread, closed(gate(records = listOf(row(OperationOutcome.Unknown)))).block)
     }
 }

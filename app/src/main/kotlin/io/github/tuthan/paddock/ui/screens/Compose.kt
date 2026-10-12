@@ -63,6 +63,13 @@ data class ComposerUi(
     val snippets: List<String> = emptyList(),
     /** What the last re-read found, as lines; empty when there is none to show. */
     val rereadLines: List<String> = emptyList(),
+    /** Phase 15: whether a file can be attached, and the one waiting in the draft. */
+    val attach: AttachUi = AttachUi.Hidden,
+    val attachment: AttachmentUi? = null,
+    /** A put under way: the transfer sheet shows while it is set. */
+    val transfer: TransferUi? = null,
+    /** What went wrong before anything was sent (a file refused at intake, the camera refused), or what reading the inbox found. */
+    val attachNotice: String? = null,
 )
 
 /** The row at the foot of the Output tab that opens the composer. It looks like a field and is one button. */
@@ -113,6 +120,11 @@ fun Composer(
     onGateAction: () -> Unit = {},
     /** An extra control in the header, such as the desktop-focus button. */
     headerActions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+    /** Phase 15: Attach opened its menu; Remove took the attachment out; Cancel stopped the transfer. */
+    onAttach: () -> Unit = {},
+    onRemoveAttachment: () -> Unit = {},
+    onCancelTransfer: () -> Unit = {},
+    onDismissAttachNotice: () -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     val open = ui.gate is SendGate.Open
@@ -128,6 +140,14 @@ fun Composer(
                 "Prompt", text, onText, singleLine = false, imeAction = ImeAction.Default,
                 placeholder = "Ask ${ui.header.agentKind ?: "the agent"}…",
             )
+            if (ui.attachment != null) AttachmentChip(ui.attachment, onRemoveAttachment)
+            else AttachRow(ui.attach, onAttach)
+            ui.attachNotice?.let { n ->
+                Column(Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Banner(n)
+                    PaddockButton("Dismiss", onDismissAttachNotice, kind = ButtonKind.Secondary, small = true, fillWidth = false)
+                }
+            }
             if (ui.snippets.isNotEmpty()) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     ui.snippets.forEach { s -> Chip(s.abbreviated(), onClick = { onSnippet(s) }, description = "Insert snippet: $s") }
@@ -163,6 +183,7 @@ fun Composer(
             }
         }
     }
+    ui.transfer?.let { TransferSheet(it, onCancelTransfer) }
 }
 
 /** How the last operation ended, announced politely when it appears. Unknown offers a re-read and never a resend. */

@@ -21,6 +21,11 @@ class HostProfileSameConnectionTest {
         assertTrue(base.copy(searchNetwork = true).sameConnectionAs(base))
     }
 
+    @Test fun theDropFolderIsASettingNotAConnection() {
+        assertTrue(base.sameConnectionAs(base.copy(dropFolder = "~/Inbox")))
+        assertTrue(base.copy(dropFolder = "/srv/drop").sameConnectionAs(base))
+    }
+
     @Test fun aNameThatPaddockChoseFollowsTheMachineWithoutANewConnection() {
         val byAddress = base.copy(name = "10.0.0.2", host = "10.0.0.2")
         val byHostname = byAddress.copy(name = "devbox", detectedName = "devbox")

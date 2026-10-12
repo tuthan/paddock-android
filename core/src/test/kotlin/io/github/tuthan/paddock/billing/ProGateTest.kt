@@ -17,6 +17,14 @@ class ProGateTest {
     }
 
     @Test
+    fun filesAreFreeSoNoCapabilityNamesAFileFeature() {
+        // Phase 15, X6: attaching, sharing to Paddock, the drop folder and Get are Free. The caps are safety bounds, not a tier, and nothing joins the gated set for them.
+        for (id in ProGate.GATED) for (word in listOf("file", "attach", "share", "drop", "fetch", "transfer", "copy", "photo", "inbox", "outbox")) {
+            assertEquals(false, id.contains(word), "$id must not be a files capability")
+        }
+    }
+
+    @Test
     fun everyRealCapabilityShowsTheGateToAFreeUserWhoIsIdle() {
         for (c in ProCapabilities.ALL) {
             assertEquals(GateDecision.SHOW_GATE, ProGate.decide(c.id, hasPro = false, context = GateContext.IDLE), c.id)

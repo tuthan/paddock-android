@@ -59,6 +59,42 @@ class LiveFlowTest {
         Thread.sleep(ms)
     }
 
+    /** A line the script printed in the agent's pane (Phase 15): the Select text step finds it on the slab, selects through the view and checks the clipboard. */
+    private val copyMarker = args.getString("copyMarker")
+
+    private fun clipboardText(): String? {
+        var t: String? = null
+        rule.runOnUiThread { t = (rule.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString() }
+        return t
+    }
+    private fun clipboardMarked(): Boolean {
+        var m = false
+        rule.runOnUiThread { m = (rule.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).primaryClipDescription?.extras?.getBoolean("android.content.extra.IS_SENSITIVE", false) == true }
+        return m
+    }
+
+    /**
+     * Select text on the live Output tab: the view opens with the marker line, is FLAG_SECURE (the script's shell capture is black), survives a rotation,
+     * and Copy all puts the marker on the clipboard marked sensitive. No assertion message prints the clip.
+     */
+    private fun selectTextAndCopy(marker: String) {
+        waitFor("the marker line on the slab") { hasNode(text(marker, substring = true)) }
+        rule.onNode(hasContentDescription("Select text to copy")).performClick()
+        waitFor("the Select text view") { hasNode(androidx.compose.ui.test.hasTestTag("SELECT_TEXT")) }
+        shoot("select-text")
+        hold("SELECT")
+        assertTrue("Select text is FLAG_SECURE like Output", rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+        // A rotation re-creates the activity: the view and its copy come back.
+        (rule.activityRule as androidx.test.ext.junit.rules.ActivityScenarioRule<*>).scenario.recreate()
+        waitFor("the Select text view after a re-create") { hasNode(androidx.compose.ui.test.hasTestTag("SELECT_TEXT")) }
+        rule.onNodeWithText("Copy all").performClick()
+        rule.waitForIdle()
+        assertTrue("Copy all put the marker line on the clipboard", clipboardText()?.contains(marker) == true)
+        assertTrue("and marked it sensitive", clipboardMarked())
+        rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        waitFor("back on the Output tab") { hasNode(hasContentDescription("Terminal output")) }
+    }
+
     private fun hasNode(m: androidx.compose.ui.test.SemanticsMatcher) = rule.onAllNodes(m).fetchSemanticsNodes().isNotEmpty()
     private fun text(t: String, substring: Boolean = false) = hasText(t, substring = substring)
 
@@ -88,10 +124,13 @@ class LiveFlowTest {
         rule.onNodeWithText("Trust and connect").performClick()
 
         // --- Relay: asked before anything is written, then installed under the sshd's isolated HOME ---
-        waitFor("the relay prompt") { hasNode(text(relayQuestion, substring = true)) }
-        rule.onNodeWithText("$home/.local/share/paddock/paddock-relay.py").assertIsDisplayed()
-        shoot("relay-prompt")
-        rule.onNodeWithText("Install the relay").performClick()
+        // The isolated home links to the real ~/.config/herdr; when the relay is already current there, no question is asked and the home comes up (as in the import flow).
+        waitFor("the relay prompt or the home") { hasNode(text(relayQuestion, substring = true)) || hasNode(hasContentDescription("live", substring = true)) }
+        if (hasNode(text(relayQuestion, substring = true))) {
+            rule.onNodeWithText("$home/.local/share/paddock/paddock-relay.py").assertIsDisplayed()
+            shoot("relay-prompt")
+            rule.onNodeWithText("Install the relay").performClick()
+        }
 
         // --- Home: real agents, state as words, a live chip ---
         waitFor("the home with agents") { hasNode(hasContentDescription("Blocked", substring = true)) && hasNode(hasContentDescription("Working", substring = true)) }
@@ -107,6 +146,7 @@ class LiveFlowTest {
         hold("OUTPUT")
         val secure = rule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
         assertTrue("Output is FLAG_SECURE by default", secure)
+        copyMarker?.let { selectTextAndCopy(it) }
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         waitFor("back on home") { hasNode(text("Activity")) }
         rule.waitForIdle()

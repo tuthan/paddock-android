@@ -58,4 +58,21 @@ class HostNameTest {
         assertEquals("labbox", FileHostProfileStore(f).get("a")?.detectedName)
         assertTrue(FileHostProfileStore(f).get("a")!!.searchNetwork)
     }
+
+    @Test fun anOldProfilesFileLoadsWithTheDefaultDropFolderAndANewOneKeepsTheChoice() = runBlocking<Unit> {
+        val f = File(tmp.root, "profiles-drop.json")
+        f.writeText("""{"version":1,"profiles":[{"id":"a","name":"A","host":"h","user":"u"}]}""")
+        val store = FileHostProfileStore(f)
+        assertNull(store.get("a")!!.dropFolder)
+        assertEquals("~/Paddock", store.get("a")!!.dropFolderValue)
+        store.update("a") { it.copy(dropFolder = "~/Incoming") }
+        assertEquals("~/Incoming", FileHostProfileStore(f).get("a")!!.dropFolder)
+    }
+
+    @Test fun aProfileHoldsOnlyAFolderTheMachineMayBeAskedAbout() {
+        for (ok in listOf("~", "~/Paddock", "/srv/drop", "/home/jdoe/My Files")) HostProfile("a", "A", "h", user = "u", dropFolder = ok)
+        for (bad in listOf("", "Paddock", "~jdoe/x", "../x", "/tmp/a\nb", "/tmp/a\u0000b", "/" + "x".repeat(HostProfile.MAX_DROP_FOLDER))) {
+            assertFailsWith<IllegalArgumentException>(bad) { HostProfile("a", "A", "h", user = "u", dropFolder = bad) }
+        }
+    }
 }

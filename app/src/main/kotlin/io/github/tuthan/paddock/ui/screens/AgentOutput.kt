@@ -29,7 +29,9 @@ import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.answers.DecisionEntryModel
 import io.github.tuthan.paddock.attention.AgeText
 import io.github.tuthan.paddock.attention.StateWord
+import io.github.tuthan.paddock.output.AnsiLine
 import io.github.tuthan.paddock.output.OutputState
+import io.github.tuthan.paddock.ui.components.LineAction
 import io.github.tuthan.paddock.ui.components.FlexColumn
 import io.github.tuthan.paddock.ui.components.flexible
 import io.github.tuthan.paddock.ui.components.Banner
@@ -51,9 +53,9 @@ enum class AgentTab(val label: String) { Output("Output"), Terminal("Terminal") 
 /**
  * Whether the Output tab's feed may poll: the screen is in the foreground and Output is the tab shown. The Terminal tab streams
  * the terminal itself; a hidden Output feed would go on opening an SSH command and parsing a 200-line capture every second
- * beside it, for text nobody can see.
+ * beside it, for text nobody can see. The Select text view is the same: it shows a frozen copy, so the feed reads nothing while it is open (Phase 15).
  */
-fun outputFeedVisible(resumed: Boolean, tab: AgentTab): Boolean = resumed && tab == AgentTab.Output
+fun outputFeedVisible(resumed: Boolean, tab: AgentTab, selecting: Boolean = false): Boolean = resumed && tab == AgentTab.Output && !selecting
 
 /**
  * What the header says about the agent. [observedAtMillis] is when the phone saw this state, null when it never has.
@@ -98,6 +100,14 @@ fun AgentOutput(
     /** The newest permission request the hook published for this blocked agent (Phase 8); its entry sits above the output and opens the sheet. */
     decision: DecisionEntryModel? = null,
     onOpenDecision: (() -> Unit)? = null,
+    /** Opens the Select text view on the lines as read; null leaves the chip out. */
+    onSelectText: (() -> Unit)? = null,
+    /** What a long-pressed line's menu chose (Phase 15); null leaves the lines inert. */
+    onLineAction: ((lines: List<AnsiLine>, index: Int, action: LineAction) -> Unit)? = null,
+    /** A tap on a path the agent printed, with the path as printed (Phase 15, Get); null leaves paths as plain text. */
+    onPath: ((String) -> Unit)? = null,
+    /** Opens the agent's outbox list; null leaves the Files chip out. */
+    onFiles: (() -> Unit)? = null,
     /**
      * The Terminal tab with the Android keyboard up: the title shrinks to one line and the state chip and the tabs go, so the
      * terminal gets the room (Hide keyboard brings them back). Follows the keyboard itself; a test sets it.
@@ -128,6 +138,8 @@ fun AgentOutput(
                     if (tab == AgentTab.Output && output is OutputState.Showing) {
                         if (following) Chip("Following", icon = PaddockIcons.Eye, description = "Following the newest output")
                         else Chip("Paused · tap to follow", icon = PaddockIcons.Pause, tone = c.accent, onClick = onResumeFollowing, description = "Output is paused. Tap to follow the newest output")
+                        if (onSelectText != null) Chip("Select text", icon = PaddockIcons.Copy, onClick = onSelectText, description = "Select text to copy")
+                        if (onFiles != null) Chip("Files", icon = PaddockIcons.File, onClick = onFiles, description = "Files from this agent")
                     }
                 }
                 SegmentedTabs(AgentTab.entries.map { it.label }, tab.ordinal, { onTab(AgentTab.entries[it]) })
@@ -142,7 +154,7 @@ fun AgentOutput(
                         style = PaddockTokens.type.body, color = c.dim, modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                AgentTab.Output -> OutputParts(output, nowMillis, following, onUserScrolledUp)
+                AgentTab.Output -> OutputParts(output, nowMillis, following, onUserScrolledUp, onLineAction, onPath)
             }
             if (tab == AgentTab.Output) {
                 if (onCompose != null) PromptEntry(header.agentKind, onCompose)
@@ -191,7 +203,7 @@ private val OUTPUT_MIN = 140.dp
  * are taken out of the screen's room and never out of the slab's minimum.
  */
 @Composable
-private fun OutputParts(output: OutputState, nowMillis: Long, following: Boolean, onUserScrolledUp: () -> Unit) {
+private fun OutputParts(output: OutputState, nowMillis: Long, following: Boolean, onUserScrolledUp: () -> Unit, onLineAction: ((List<AnsiLine>, Int, LineAction) -> Unit)?, onPath: ((String) -> Unit)?) {
     val c = PaddockTokens.colors
     when (output) {
         OutputState.Loading -> Box(Modifier.flexible().fillMaxWidth()) { Text("Reading output…", style = PaddockTokens.type.body, color = c.dim) }
@@ -199,7 +211,7 @@ private fun OutputParts(output: OutputState, nowMillis: Long, following: Boolean
         OutputState.PaneGone, OutputState.AgentGone -> Box(Modifier.flexible().fillMaxWidth()) {}
         is OutputState.Showing -> {
             if (output.stale) Banner("Last read failed. Showing the output from ${AgeText.span(nowMillis - output.readAtMillis)}.")
-            Box(Modifier.flexible().fillMaxWidth()) { OutputSlab(output.lines, following, onUserScrolledUp) }
+            Box(Modifier.flexible().fillMaxWidth()) { OutputSlab(output.lines, following, onUserScrolledUp, onLongPress = onUserScrolledUp, onLineAction = onLineAction, onPath = onPath) }
             Note("The last 200 lines, read again every second while following.")
         }
     }

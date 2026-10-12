@@ -73,6 +73,9 @@ internal class NavState {
 
     fun openGuardedAnswers(from: Route) { guardedFrom = from; route = Route.GuardedAnswers }
 
+    /** Something another app shared is waiting for the person to choose where it goes (Phase 15): the chooser opens over whatever was showing and goes back to Home. */
+    fun openShare() { route = Route.Share }
+
     /** Home's "Set up key" ([showCommand] false) or "Show the command" (true): Add machine for the watched machine, not another. */
     fun openAddMachineForKey(showCommand: Boolean) { add.editing = true; add.authorizeIntro = showCommand; add.pairing = null; addFrom = Route.Home; route = Route.AddMachine }
 

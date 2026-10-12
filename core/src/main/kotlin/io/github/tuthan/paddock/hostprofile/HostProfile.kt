@@ -50,6 +50,13 @@ data class HostProfile(
      * reach other machines. A setting, not a reading: changing it never reconnects. Old files without it load as off.
      */
     val searchNetwork: Boolean = false,
+    /**
+     * Where a file shared to Paddock with no agent goes on this machine (Phase 15, X10): a folder under the home folder, written as `~/Paddock` or as an absolute
+     * path, or null for the default ([DEFAULT_DROP_FOLDER]). What it names is resolved and judged on the machine before it is saved and again on every drop
+     * ([io.github.tuthan.paddock.files.TransferScripts]), so this only holds what the user wrote. A setting, not a reading: changing it never reconnects.
+     * Old files without it load as the default.
+     */
+    val dropFolder: String? = null,
 ) {
     init {
         require(ID.matches(id)) { "invalid profile id" }
@@ -59,6 +66,7 @@ data class HostProfile(
         require(USER.matches(user)) { "invalid user" }
         require(session == null || SESSION.matches(session)) { "invalid session name" }
         require(detectedName == null || MachineHostName.LABEL.matches(detectedName)) { "invalid hostname" }
+        require(dropFolder == null || validDropFolder(dropFolder)) { "invalid drop folder" }
         when (key) {
             KeyKind.Phone -> require(importedKeyId == null) { "a phone-key profile has no imported key" }
             KeyKind.Imported -> require(importedKeyId != null && ID.matches(importedKeyId)) { "an imported-key profile needs a key id" }
@@ -69,6 +77,9 @@ data class HostProfile(
 
     /** The OS whose glyph the machine's card draws: the user's pick, else what the machine said, else none (no glyph is better than a wrong one). */
     val shownOs: HostOs? get() = os ?: detectedOs
+
+    /** The drop folder's value in use: the user's, else the default. */
+    val dropFolderValue: String get() = dropFolder ?: DEFAULT_DROP_FOLDER
 
     fun toTarget() = SshTarget(id, host, port, user)
 
@@ -89,11 +100,24 @@ data class HostProfile(
     fun sameConnectionAs(other: HostProfile): Boolean = readingsDropped() == other.readingsDropped()
 
     private fun readingsDropped() = copy(
-        wake = null, os = null, detectedOs = null, detectedName = null, searchNetwork = false,
+        wake = null, os = null, detectedOs = null, detectedName = null, searchNetwork = false, dropFolder = null,
         name = if (nameIsDefault) host.take(MachineName.MAX) else name,
     )
 
     companion object {
+        /** Where a drop goes until the user says otherwise: `~` is the machine's home for the account Paddock signs in as. */
+        const val DEFAULT_DROP_FOLDER = "~/Paddock"
+
+        /** The longest drop folder written, a path of a machine and nothing a person types by accident. */
+        const val MAX_DROP_FOLDER = 200
+
+        /**
+         * What a drop folder may be written as before the machine is asked: absolute, or `~` and `~/…`, with no control character and no more than
+         * [MAX_DROP_FOLDER] characters. The machine decides the rest (not home itself, not hidden, not a link, inside home).
+         */
+        fun validDropFolder(value: String): Boolean =
+            value.length in 1..MAX_DROP_FOLDER && value.none(Char::isISOControl) && (value.startsWith("/") || value == "~" || value.startsWith("~/"))
+
         /** Also the imported-key id rule, so a profile id can name its key. */
         val ID = Regex("[a-z0-9][a-z0-9-]{0,40}")
         private val HOST = Regex("[A-Za-z0-9._:\\[][A-Za-z0-9._:%\\[\\]-]*")

@@ -42,6 +42,7 @@ import io.github.tuthan.paddock.routes.ProGateHost
 import io.github.tuthan.paddock.routes.PromptDraftSaver
 import io.github.tuthan.paddock.routes.ScanRoute
 import io.github.tuthan.paddock.routes.SettingsRoute
+import io.github.tuthan.paddock.routes.ShareRoute
 import io.github.tuthan.paddock.routes.SnippetsRoute
 import io.github.tuthan.paddock.routes.SpacesRoute
 import io.github.tuthan.paddock.routes.WelcomeRoute
@@ -72,7 +73,12 @@ private val NAV = listOf(NavItem("Herd", PaddockIcons.Herd), NavItem("Spaces", P
 fun PaddockRoot(graph: AppGraph, modifier: Modifier = Modifier) {
     // One provider for every agent tile in the app, so Settings > Agent icons redraws the herd at once without threading it through each screen.
     val agentGlyphs by remember(graph) { graph.prefs.settings.map { it.agentGlyphs }.distinctUntilChanged() }.collectAsState(true)
-    CompositionLocalProvider(LocalAgentGlyphs provides agentGlyphs) { AppLockGate(graph.appLock, graph.prefs, graph.triggers, graph.scope) { PaddockRootContent(graph, modifier) } }
+    val results = graph.activityResultsOverride
+    val locals = listOfNotNull(
+        LocalAgentGlyphs provides agentGlyphs,
+        results?.let { androidx.activity.compose.LocalActivityResultRegistryOwner provides it },
+    )
+    CompositionLocalProvider(*locals.toTypedArray()) { AppLockGate(graph.appLock, graph.prefs, graph.triggers, graph.scope) { PaddockRootContent(graph, modifier) } }
 }
 
 @Composable
@@ -87,10 +93,13 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     LaunchedEffect(watchedId) { nav.watchedChanged(watchedId) }
     // The composer's text lives here, above the route: leaving the composer (Edit snippets, Back) or a reconnect that swaps it for "not available" must not lose it.
     var draft by rememberSaveable(stateSaver = PromptDraftSaver) { mutableStateOf(PromptDraft()) }
+    // Once per composition of the root, after the saved state is back: what the file features left in the cache goes unless the draft still names it (Phase 15, SEC-2).
+    LaunchedEffect(Unit) { graph.sweepFiles(setOfNotNull(draft.attachment?.snapshotId)) }
 
     AlertEvents(graph.alerts, graph.alertService, graph.hostUi, graph.proService, nav, boot)
     PairingEvents(graph.pairing, nav, boot)
     RemovalOutcomes(graph.machineBook, nav)
+    ShareEvents(graph.shares, graph.shareNotice, graph.appLock, nav, boot)
     Relocations(graph.relocator, nav)
     FollowConnectAttempt(graph.broker, graph.hostUi, nav)
 
@@ -142,7 +151,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                     }
                     PaddockNavBar(NAV, when (effective) { Route.Home -> 0; Route.Spaces -> 1; else -> 2 }, { nav.route = when (it) { 0 -> Route.Home; 1 -> Route.Spaces; else -> Route.Activity } })
                 }
-                Route.Output -> OutputRoute(graph.hostUi, graph.prefs, graph.machineBook, graph.proService, graph.manualInput, graph.terminals, nav.terminalId, nav.outputTab, { nav.outputTab = it }, onBack = { nav.route = Route.Home }, onCompose = { nav.route = Route.Compose }, onDecision = { nav.route = Route.Decision })
+                Route.Output -> OutputRoute(graph.hostUi, graph.prefs, graph.machineBook, graph.proService, graph.manualInput, graph.terminals, graph.selections, graph.gets, graph.transferCache, graph.transferHold, nav.terminalId, nav.outputTab, { nav.outputTab = it }, onBack = { nav.route = Route.Home }, onCompose = { nav.route = Route.Compose }, onDecision = { nav.route = Route.Decision })
                 Route.Decision -> DecisionRoute(
                     graph.hostUi, graph.prefs, graph.machineBook, graph.proService, nav.terminalId, onBack = { nav.route = Route.Output },
                     onOpenTerminal = { nav.outputTab = AgentTab.Terminal; nav.route = Route.Output },
@@ -151,9 +160,14 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                     onSetUp = { if (graph.proService.requestCapability(ProCapabilities.GUARDED_ANSWERS.id, pendingAnswerOnScreen = true)) nav.openGuardedAnswers(Route.Decision) },
                 )
                 Route.Compose -> ComposeRoute(
-                    graph.hostUi, graph.prefs, graph.machineBook, graph.journal, graph.manualInput, nav.terminalId, draft, { change -> draft = change(draft) }, onBack = { nav.route = Route.Output },
+                    graph.hostUi, graph.prefs, graph.machineBook, graph.journal, graph.manualInput, nav.terminalId, draft, { change -> draft = change(draft) },
+                    graph.incoming, graph.transferHold, onBack = { nav.route = Route.Output },
                     onOpenTerminal = { nav.outputTab = AgentTab.Terminal; nav.route = Route.Output },
                     onEditSnippets = { nav.openSnippets(Route.Compose) },
+                )
+                Route.Share -> ShareRoute(
+                    graph.shares, graph.shareSender, graph.incoming, graph.machineBook, graph.prefs, graph.hostUi, graph.proService, graph.scope, draft, { change -> draft = change(draft) },
+                    onBack = { nav.route = Route.Home }, onComposeAgent = { nav.openAgent(it); nav.route = Route.Compose }, onNotice = { nav.alertNotice = it },
                 )
                 Route.Snippets -> SnippetsRoute(graph.prefs, onBack = { nav.route = nav.snippetsFrom })
                 Route.Settings -> SettingsRoute(
@@ -161,7 +175,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                     onBack = { nav.route = Route.Home }, onMachines = { nav.openMachines(Route.Settings) },
                     onEditSnippets = { nav.openSnippets(Route.Settings) },
                 )
-                Route.AlertRelay -> AlertRelayRoute(graph.hostUi, graph.machineBook, graph.push, graph.alertSetups, graph.hostScripts, graph.clock, onBack = { nav.route = nav.alertRelayFrom })
+                Route.AlertRelay -> AlertRelayRoute(graph.hostUi, graph.machineBook, graph.push, graph.alertSetups, graph.hostScripts, graph.clock, graph.clipGuard, onBack = { nav.route = nav.alertRelayFrom })
                 Route.Machines -> MachinesRoute(
                     graph.machineBook, graph.prefs, graph.hostUi, graph.proService, graph.push, graph.wakes, graph.scope, graph.clock, busy = removingId != null, onBack = { nav.route = nav.machinesFrom },
                     onOpen = { nav.openMachine(it.id) },

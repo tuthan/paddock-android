@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** One `agent read`, already classified. */
 sealed interface OutputRead {
@@ -83,6 +85,10 @@ class AgentOutputReader(
  * text stays, nothing is read) and [resumeFollowing] reads again at once. The CLI's answer names no pane, so a read is
  * kept only if the installed snapshot still maps the terminal to the pane it was sent to; while the monitor is not
  * live (reconnecting, so the mapping cannot be trusted) nothing is read and the last text is marked stale.
+ *
+ * Following is looked at again when an answer lands: a text that arrives after the user paused (a drag, a long press) is dropped, so the lines
+ * a menu was opened on never change under it, and it is read again when following resumes. [readOnce] is the one read the user asks for, whatever
+ * the poll's two gates say; it never overlaps the poll's own read.
  */
 class OutputFeed(
     private val scope: CoroutineScope,
@@ -103,6 +109,7 @@ class OutputFeed(
 
     private val visible = MutableStateFlow(false)
     private val jobs = ArrayList<Job>()
+    private val readLock = Mutex()
 
     /** Reads performed so far, for tests and the debug screen. */
     @Volatile var reads = 0; private set
@@ -125,6 +132,11 @@ class OutputFeed(
 
     private fun goneAndStop() { _state.value = OutputState.PaneGone; jobs.forEach { it.cancel() } }
 
+    /** What the poll does after a read: wait an interval, go round at once (the pane changed under the read), or stop. */
+    private enum class After { Wait, Retry, End }
+
+    private class Step(val after: After, val fresh: Boolean)
+
     private suspend fun poll() {
         while (true) {
             combine(visible, _following) { v, f -> v && f }.first { it }
@@ -134,27 +146,55 @@ class OutputFeed(
             }
             val snapshot = installed.first { it != null }!!.snapshot
             val pane = snapshot.panes.firstOrNull { it.terminalId == target.terminalId } ?: return goneAndStop()
-            reads++
-            val outcome = try {
-                read(pane.paneId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                OutputRead.Failed(e.message ?: e.javaClass.simpleName)
+            val step = readLocked(pane.paneId, requireFollowing = true)
+            when (step.after) {
+                After.End -> return
+                // A read for a pane that changed under it is retried at once with the new mapping; anything else waits.
+                After.Wait -> sleep(intervalMillis)
+                After.Retry -> Unit
             }
-            val stillThatPane = live.value && installed.value?.snapshot?.panes?.firstOrNull { it.terminalId == target.terminalId }?.paneId == pane.paneId
-            when (outcome) {
-                is OutputRead.Text -> if (stillThatPane) _state.value = OutputState.Showing(Ansi.parse(outcome.text, maxLines), clock.nowMillis(), stale = false)
-                OutputRead.PaneMissing -> if (stillThatPane) return goneAndStop()
-                OutputRead.AgentMissing -> if (stillThatPane) { _state.value = OutputState.AgentGone; jobs.forEach { it.cancel() }; return }
-                is OutputRead.Failed -> _state.value = when (val last = _state.value) {
-                    is OutputState.Showing -> last.copy(stale = true)
-                    else -> OutputState.Unavailable(outcome.message)
-                }
-            }
-            // A read for a pane that changed under it is retried at once with the new mapping; anything else waits.
-            if (stillThatPane || outcome is OutputRead.Failed) sleep(intervalMillis)
         }
+    }
+
+    /**
+     * One read of the pane on [paneId] and what follows from its answer, under [readLock] so the poll and [readOnce] never overlap. A text is shown only
+     * if the mapping still holds and, for the poll ([requireFollowing]), the user has not paused since the read was sent.
+     */
+    private suspend fun readLocked(paneId: String, requireFollowing: Boolean): Step = readLock.withLock {
+        reads++
+        val outcome = try {
+            read(paneId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            OutputRead.Failed(e.message ?: e.javaClass.simpleName)
+        }
+        val stillThatPane = live.value && installed.value?.snapshot?.panes?.firstOrNull { it.terminalId == target.terminalId }?.paneId == paneId
+        var fresh = false
+        when (outcome) {
+            is OutputRead.Text -> if (stillThatPane && (!requireFollowing || _following.value)) {
+                _state.value = OutputState.Showing(Ansi.parse(outcome.text, maxLines), clock.nowMillis(), stale = false)
+                fresh = true
+            }
+            OutputRead.PaneMissing -> if (stillThatPane) { goneAndStop(); return@withLock Step(After.End, false) }
+            OutputRead.AgentMissing -> if (stillThatPane) { _state.value = OutputState.AgentGone; jobs.forEach { it.cancel() }; return@withLock Step(After.End, false) }
+            is OutputRead.Failed -> _state.value = when (val last = _state.value) {
+                is OutputState.Showing -> last.copy(stale = true)
+                else -> OutputState.Unavailable(outcome.message)
+            }
+        }
+        Step(if (stillThatPane || outcome is OutputRead.Failed) After.Wait else After.Retry, fresh)
+    }
+
+    /**
+     * One read on request (the Select text view's Re-read), whatever the screen's visibility and following say; it is counted in [reads] and keeps the
+     * poll's pane rule. True when a fresh text was shown. A failure marks the text stale, as the poll's does, and a pane or agent that is gone says so.
+     */
+    suspend fun readOnce(): Boolean {
+        val snapshot = installed.value?.snapshot ?: return false
+        val pane = snapshot.panes.firstOrNull { it.terminalId == target.terminalId }
+        if (pane == null) { goneAndStop(); return false }
+        return readLocked(pane.paneId, requireFollowing = false).fresh
     }
 
     companion object {

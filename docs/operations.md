@@ -34,6 +34,14 @@ All four go through one path (`AgentOperations`): resolve the pane from the term
 - `Unknown` is never deleted and never retried. It holds the terminal: no prompt, key or focus until the user re-reads the agent. The row keeps its outcome; a re-read adds the time it was resolved.
 - The prompt text is stored only when Settings has "Keep prompt text" on at send time. Otherwise the row holds the hash and nothing else. Activity never shows prompt text, kept or not.
 
+## Files: `Attachment` and `Fetch` (Phase 15)
+
+Two more kinds of row, written by `FileTransfers` and never retried (`docs/files.md` has the rest).
+
+- **`Attachment`** is a file sent to the machine: `Requested`, then `Sent` before the header, then `Acknowledged`, `Rejected` (the script's refusal, with its code) or `Unknown` (a cut). The row has the destination path, the size and the file's SHA-256 and never the content. An `Unknown` attachment does not hold the terminal: it holds only the prompt that would name the file (`awaitsInboxCheck`), and **Read the inbox** (`FileTransfers.check`) settles it by the name's presence on the machine, which writes how it came out into the row and leaves its outcome `Unknown`. A re-read of the agent frees nothing here. A file sent with no agent (Share to Paddock, a folder or the drop folder) is the host profile's own subject, `Subject.drop(profile)`: it has no terminal, and a cut one holds no later send.
+- **`Fetch`** is a file received from the machine: one row when the whole file has arrived, with the real path, the size and the SHA-256 of the bytes received. A refused stat, a refused read or a cut writes none.
+- The `Prompt` row of a prompt with an attachment carries the hash of the user's own words (`textSha256`), because the text herdr received also holds the line that names the file; an attachment with no words is a prompt like any other.
+
 ## Unknown outcome and Re-read
 
 The line is exactly `prompt sent 14:03:12 · outcome unknown · re-read before sending again` (`Esc`, `Ctrl+C` and `desktop focus` for the others). It is the journal's own sentence, so it survives a restart. The only action is **Re-read**: one read of the agent that frees every waiting row of that terminal under the connection now installed (the key carries the new epoch, so a row written before a reconnect is still freed). The report says when it read and what herdr reports, then, for a prompt whose text was kept, whether that text appears in the last 200 lines of output the screen already holds (whitespace and wrapping ignored, otherwise an exact match). It never says the prompt was or was not received; a found line does not say the agent took it as a prompt, and a missing line does not say it was not received. A prompt kept only as a hash says it cannot look.

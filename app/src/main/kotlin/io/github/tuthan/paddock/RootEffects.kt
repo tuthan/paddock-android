@@ -12,9 +12,12 @@ import io.github.tuthan.paddock.alerts.AlertOutcome
 import io.github.tuthan.paddock.alerts.AlertService
 import io.github.tuthan.paddock.alerts.AlertState
 import io.github.tuthan.paddock.answers.AnswerRules
+import io.github.tuthan.paddock.applock.AppLock
 import io.github.tuthan.paddock.attention.StateWord
 import io.github.tuthan.paddock.billing.ProCapabilities
 import io.github.tuthan.paddock.billing.ProService
+import io.github.tuthan.paddock.files.ShareCopy
+import io.github.tuthan.paddock.files.ShareInbox
 import io.github.tuthan.paddock.host.ConnectAttempt
 import io.github.tuthan.paddock.host.ConnectOutcome
 import io.github.tuthan.paddock.host.ConnectOutcomes
@@ -34,6 +37,7 @@ import io.github.tuthan.paddock.ui.screens.AgentTab
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -112,6 +116,29 @@ internal fun PairingEvents(pairing: PairingInbox, nav: NavState, boot: Boot) {
             is PairingEvent.Link -> nav.openPairing(e.link, boot)
         }
         pairing.consume(e)
+    }
+}
+
+/**
+ * Something another app shared (Phase 15, X13): the chooser opens once the app is unlocked and a machine is saved. While the lock is up the item waits (its
+ * snapshot is already taken and private); with no machine saved there is nowhere to send it, so it is dropped and the notice says so. What the intake refused,
+ * or what a text lost, is said once through the notice bar.
+ */
+@Composable
+internal fun ShareEvents(shares: ShareInbox, shareNotice: MutableStateFlow<String?>, appLock: AppLock, nav: NavState, boot: Boot) {
+    val pending by shares.pending.collectAsState()
+    val locked by appLock.locked.collectAsState()
+    val said by shareNotice.collectAsState()
+    LaunchedEffect(said, boot) {
+        val sentence = said ?: return@LaunchedEffect
+        if (boot == Boot.Loading) return@LaunchedEffect
+        nav.alertNotice = sentence
+        shareNotice.value = null
+    }
+    LaunchedEffect(pending, locked, boot) {
+        if (pending == null || locked || boot == Boot.Loading) return@LaunchedEffect
+        if (boot == Boot.NoMachines) { shares.discard(); nav.alertNotice = ShareCopy.NO_MACHINE; return@LaunchedEffect }
+        nav.openShare()
     }
 }
 

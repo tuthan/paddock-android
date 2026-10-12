@@ -1,10 +1,11 @@
 package io.github.tuthan.paddock.ops
 
+import io.github.tuthan.paddock.files.AttachmentPhrase
 import io.github.tuthan.paddock.herdr.Agent
 import io.github.tuthan.paddock.identity.TerminalKey
 
 /** Why Send is off. The composer shows the sentence beside the button, so every disabled state names its condition. */
-enum class SendBlock { AgentGone, NotLive, Stale, Reading, JournalUnreadable, InFlight, NeedsReread, NotReady, EmptyPrompt, TooLong }
+enum class SendBlock { AgentGone, NotLive, Stale, Reading, JournalUnreadable, InFlight, NeedsReread, NotReady, InboxUnread, EmptyPrompt, TooLong }
 
 sealed interface SendGate {
     /** Send may be tapped. [hintsUnreported]: herdr gave no readiness hint for this agent, so only its status backs the send. */
@@ -37,6 +38,8 @@ object ComposerRules {
         requireHints: Boolean = false,
         currentEpoch: Long? = key.epoch,
         journalUnreadable: Boolean = false,
+        hasAttachment: Boolean = false,
+        attachmentUnknown: Boolean = false,
     ): SendGate {
         fun closed(block: SendBlock, sentence: String, why: NotReadyReason? = null) = SendGate.Closed(block, sentence, why)
         terminalBlock(agent, installedReadAtMillis, openedAtMillis, live, records, key, currentEpoch, journalUnreadable)?.let { return it }
@@ -45,10 +48,17 @@ object ComposerRules {
             is Readiness.NotReady -> return closed(SendBlock.NotReady, r.primary.sentence, r.primary)
             is Readiness.Ready -> r
         }
-        if (text.isBlank()) return closed(SendBlock.EmptyPrompt, "Write a prompt to send.")
-        if (text.length > AgentOperations.MAX_PROMPT_CHARS) return closed(SendBlock.TooLong, "A prompt is at most ${"%,d".format(AgentOperations.MAX_PROMPT_CHARS)} characters.")
+        // A cut attachment holds only the prompt that would name its file (X9), not the terminal: the caller says it concerns this draft ([attachmentUnknown]).
+        if (attachmentUnknown) return closed(SendBlock.InboxUnread, "This file may already be on the machine. Read the inbox first.")
+        // An attachment alone is a prompt (X12); the phrase line that names it takes some of the length.
+        if (text.isBlank() && !hasAttachment) return closed(SendBlock.EmptyPrompt, "Write a prompt to send.")
+        val max = AgentOperations.MAX_PROMPT_CHARS - if (hasAttachment) AttachmentPhrase.RESERVED_CHARS else 0
+        if (text.length > max) return closed(SendBlock.TooLong, "A prompt ${if (hasAttachment) "with a file " else ""}is at most ${"%,d".format(max)} characters.")
         return SendGate.Open(ready.hintsUnreported)
     }
+
+    /** Whether [key] has a cut attachment whose inbox has not been read since: what a caller passes as `attachmentUnknown`. */
+    fun attachmentUnknown(records: List<OperationRecord>, key: TerminalKey): Boolean = records.any { it.sameTerminal(key) && it.awaitsInboxCheck }
 }
 
 /**

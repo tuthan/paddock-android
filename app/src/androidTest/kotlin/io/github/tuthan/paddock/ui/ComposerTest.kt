@@ -118,8 +118,8 @@ class ComposerTest {
         OperationRecord(1, "h1", "paddock-test", "term_1", 2, OperationKind.Prompt, 1_000, outcome, resolvedAt = if (resolved) 1_100 else null)
 
     /** The real gate for each situation, so this test and the rules cannot drift apart. */
-    private fun gate(a: Agent? = agent(), live: Boolean = true, epoch: Long = 2, readAt: Long? = 1_500, records: List<OperationRecord> = emptyList(), text: String = "hello", journalUnreadable: Boolean = false) =
-        ComposerRules.gate(a, readAt, 1_000, live, records, key, text, currentEpoch = epoch, journalUnreadable = journalUnreadable)
+    private fun gate(a: Agent? = agent(), live: Boolean = true, epoch: Long = 2, readAt: Long? = 1_500, records: List<OperationRecord> = emptyList(), text: String = "hello", journalUnreadable: Boolean = false, attachmentUnknown: Boolean = false) =
+        ComposerRules.gate(a, readAt, 1_000, live, records, key, text, currentEpoch = epoch, journalUnreadable = journalUnreadable, attachmentUnknown = attachmentUnknown)
 
     // ---- Send's gate ---------------------------------------------------------------------------------------------
 
@@ -145,6 +145,7 @@ class ComposerTest {
             "status unknown" to gate(agent(AgentStatus.Unknown)),
             "not interactive" to gate(agent(ready = false)),
             "launch pending" to gate(agent(launching = true)),
+            "a cut attachment's file may be on the machine" to gate(attachmentUnknown = true),
         )
         for ((name, g) in cases) {
             val closed = g as SendGate.Closed

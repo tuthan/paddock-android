@@ -68,7 +68,26 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="paddock" android:host="pair" />
             </intent-filter>
+            <!-- Something shared to Paddock (Phase 15, X13): an image, a PDF or text, one at a time (there is no SEND_MULTIPLE filter). The intake checks the URI, snapshots the
+                 file and cleans the text before anything else happens; nothing is sent until the person chooses where it goes. No component is added by this. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="text/*" />
+            </intent-filter>
         </activity>
+
+        <!-- Phase 15 (SEC-5): the provider for the camera's capture and for Open or Share of a fetched file. Not exported, and the only grant is the URI a caller is
+             handed. It names two cache folders and nothing else (res/xml/transfer_paths.xml). -->
+        <provider
+            android:name=".files.TransferFileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/transfer_paths" />
+        </provider>
 
         <!-- The UnifiedPush messaging receiver. Exported because a distributor is another app; the token each registration carries is
              the only authentication the specification has, and UnifiedPushConnector drops anything that does not hold one. -->

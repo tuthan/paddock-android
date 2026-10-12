@@ -17,6 +17,12 @@ import io.github.tuthan.paddock.billing.ProService
 import io.github.tuthan.paddock.discovery.FinderController
 import io.github.tuthan.paddock.discovery.MachineRelocator
 import io.github.tuthan.paddock.host.HostUiModel
+import io.github.tuthan.paddock.files.GetController
+import io.github.tuthan.paddock.files.ShareInbox
+import io.github.tuthan.paddock.files.ShareIntake
+import io.github.tuthan.paddock.files.ShareOutcome
+import io.github.tuthan.paddock.files.ShareSender
+import io.github.tuthan.paddock.files.SharedItem
 import io.github.tuthan.paddock.host.Retained
 import io.github.tuthan.paddock.hostkey.ChangedKey
 import io.github.tuthan.paddock.hostkey.FileHostKeyStore
@@ -29,7 +35,14 @@ import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.hostprofile.KeyKind
 import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.hostprofile.MachineRemoval
+import androidx.activity.result.ActivityResultRegistryOwner
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import io.github.tuthan.paddock.files.IncomingFiles
+import io.github.tuthan.paddock.files.TransferCache
 import io.github.tuthan.paddock.hostprofile.PairingInbox
+import io.github.tuthan.paddock.lifecycle.TransferHold
 import io.github.tuthan.paddock.identity.HostProfileId
 import io.github.tuthan.paddock.ledger.FileLedgerStore
 import io.github.tuthan.paddock.ledger.Ledger
@@ -73,6 +86,8 @@ import io.github.tuthan.paddock.ssh.PhoneKey
 import io.github.tuthan.paddock.ssh.SshAuth
 import io.github.tuthan.paddock.ssh.SshlibConnector
 import io.github.tuthan.paddock.terminal.TerminalSession
+import io.github.tuthan.paddock.ui.AlertClipGuard
+import io.github.tuthan.paddock.ui.screens.SelectHolder
 import io.github.tuthan.paddock.wake.WakeCapture
 import io.github.tuthan.paddock.wake.WakeLink
 import io.github.tuthan.paddock.wake.WakeService
@@ -90,6 +105,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -170,6 +186,51 @@ class AppGraph(private val app: Application) {
     val owner: ConnectionOwner = ConnectionOwner(scope, SessionFactory { profile -> connect(profile) }, clock)
     val triggers: AndroidTriggers = AndroidTriggers(app, owner, onNetworkChanged = { probe.lookAgainNow(); relocator.networkChanged() })
 
+    /** The two alert copies that hold a secret are cleared when the app next comes to the front (C7); see [AlertClipGuard]. */
+    val clipGuard: AlertClipGuard = AlertClipGuard.of(app)
+
+    /**
+     * Phase 15, X11: held by the composer while the user is in a picker or the camera, so the connection an attachment is about to use is not closed by the
+     * trip. It feeds only the watch ([startLoad]); the lock's stopwatch, the heartbeat and everything else keep reading [AndroidTriggers.foreground].
+     */
+    val transferHold = TransferHold(scope)
+
+    /**
+     * Answers the activity-result requests of the pickers and the camera in place of the system's. Only an instrumented test sets it (nothing in `src/main`
+     * does: `ActivityResultSeamTest` scans for it), so a flow can attach a file the way a user would without driving the system's own picker.
+     */
+    var activityResultsOverride by mutableStateOf<ActivityResultRegistryOwner?>(null)
+
+    /** What the file features keep in the cache (captures, snapshots, fetched files), swept by [sweepFiles]. */
+    val transferCache = TransferCache(app.cacheDir)
+
+    /** The one intake of a picked, captured or shared file (SEC-1, SEC-2). */
+    val incoming = IncomingFiles(app, transferCache)
+
+    /**
+     * What another app shared to Paddock, checked and waiting for the person to choose where it goes (Phase 15, X13). One item waits at a time; one that is replaced
+     * or dropped takes its snapshot with it.
+     */
+    val shares = ShareInbox { item -> (item as? SharedItem.File)?.let { incoming.delete(it.snapshot.id) } }
+    private val shareIntake = ShareIntake(app, incoming)
+
+    /** Sends a shared file to a folder or the drop folder with no agent (Phase 15, X10, X13); in the graph's scope, so turning the phone does not cut it. */
+    val shareSender = ShareSender(scope, incoming::source)
+
+    /** What the last share said when it was refused or when its text lost characters; the root shows it once. */
+    val shareNotice = MutableStateFlow<String?>(null)
+
+    /** Takes what an `ACTION_SEND` carried (SEC-1 to SEC-3) in the graph's scope, so the read of the sender's URI never waits on a screen. Nothing connects and nothing is sent. */
+    fun receiveShare(intent: android.content.Intent?) {
+        scope.launch {
+            when (val r = shareIntake.receive(intent)) {
+                is ShareOutcome.Received -> shares.offer(r.item)
+                is ShareOutcome.Refused -> shareNotice.value = r.sentence
+                ShareOutcome.Ignored -> Unit
+            }
+        }
+    }
+
     /**
      * The light look at the machines this phone is not watching, for the counts on Home's chips (Pro, `hosts.merged`). Its own short sessions, never the
      * owner's: it holds no lease on anything, and it never asks the user ([connectForProbe]).
@@ -218,7 +279,7 @@ class AppGraph(private val app: Application) {
             override suspend fun dropConnection(id: String) = owner.drop(id)
             override fun becameWatched(id: String) = wakes.watching(id)
             // Its Wake facts and their flow go with it: a later machine with the same id starts with none.
-            override fun forgotten(id: String) { wakes.forget(id); probe.forget(id); relocator.forget(id) }
+            override fun forgotten(id: String) { wakes.forget(id); probe.forget(id); relocator.forget(id); transferCache.forgetMachine(id) }
             override fun watchedRemoved() = hostUi.reset()
             // A changed key recorded at the old address was about whatever answers there now; the new address is checked against the pin afresh.
             // Never relocator.forget: the relocator's own move comes through here, and cancelling it would stop the move halfway.
@@ -291,6 +352,11 @@ class AppGraph(private val app: Application) {
     /** The open terminal session, kept through a rotation so turning the phone does not release control. */
     val terminals = Retained<TerminalSession>(scope) { it.close() }
 
+    /** The Select text view's frozen copy, kept across a rotation as the terminal session is (the lines are never saved). */
+    val selections = Retained<SelectHolder>(scope) { }
+    /** The Get of one agent's screen (Phase 15, slice 12): held across a rotation, closed (its part deleted) when the screen goes for good. */
+    val gets = Retained<GetController>(scope) { it.close() }
+
     /**
      * Starts what runs for the life of the process. Each step only starts a collector; none of them waits for another, and the machines and settings
      * they read are empty until [startLoad] has read the files, so each acts when its state fills.
@@ -298,6 +364,7 @@ class AppGraph(private val app: Application) {
     fun start() {
         triggers.install()
         startLock()
+        startClipClearing()
         startAlertClearing()
         startChipProbe()
         proService.start(triggers.foreground)
@@ -308,6 +375,11 @@ class AppGraph(private val app: Application) {
     /** Leaving and coming back is what asks again: the lock counts the time the app was out of sight (it ignores a rotation, and the credential screen's own trip). */
     private fun startLock() {
         scope.launch { triggers.foreground.collect { visible -> if (visible) appLock.shown(prefs.value.appLock, prefs.value.appLockAfterSeconds) else appLock.hidden() } }
+    }
+
+    /** Coming back to the front is when a copy of the alert setup that is still on the clipboard goes (C7). The lock does not matter: the copy is already out. */
+    private fun startClipClearing() {
+        scope.launch { triggers.foreground.collect { visible -> if (visible) clipGuard.onFront() } }
     }
 
     /**
@@ -350,9 +422,18 @@ class AppGraph(private val app: Application) {
             runCatching { push.resume() }
             // The connection is claimed while the app is visible and released when it is not (the owner closes it after its grace).
             // Held while the app is visible and uncovered: behind the lock screen nothing connects, so nothing asks a question (a host key, a key) the user cannot see.
-            combine(triggers.foreground, appLock.locked) { visible, locked -> visible && !locked }.distinctUntilChanged()
+            // The transfer hold keeps the watch while a picker or the camera is in front (X11); it never lifts the lock.
+            combine(triggers.foreground, appLock.locked, transferHold.active, ::watchActive).distinctUntilChanged()
                 .collectLatest { active -> if (active) machineBook.profile.value?.let { hostWatcher.watch(it) } else hostWatcher.pause() }
         }
+    }
+
+    /**
+     * Deletes what the file features left in the cache: a snapshot the draft does not name once it is past its grace, anything past a day. [referenced] is the
+     * snapshot the draft holds, read after the saved state is restored, so a draft that survived a process death keeps its file.
+     */
+    fun sweepFiles(referenced: Set<String>) {
+        scope.launch(Dispatchers.IO) { runCatching { transferCache.sweep(referenced) } }
     }
 
     /** The one imported-key slot: importing again replaces the key, and profiles that use it keep working. */
@@ -444,3 +525,10 @@ class AppGraph(private val app: Application) {
 }
 
 const val IMPORTED_KEY_ID = "imported"
+
+/**
+ * Whether the watched machine's connection is held (Phase 15, X11): while the app is visible, and also while a picker or the camera is in front on
+ * its behalf ([held]), but never while the app lock covers the screen. The hold feeds only this: the lock's stopwatch, the heartbeat and every other
+ * reader keep `triggers.foreground`, so the lock still counts the time away and a trip reads nothing until the return's re-read.
+ */
+internal fun watchActive(visible: Boolean, locked: Boolean, held: Boolean): Boolean = (visible || held) && !locked

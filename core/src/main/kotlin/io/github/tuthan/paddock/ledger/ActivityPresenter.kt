@@ -111,6 +111,8 @@ class ActivityPresenter(
                 OperationKind.CloseWorkspace -> "You closed workspace $subject"
                 OperationKind.CloseTab -> "You closed tab $subject"
                 OperationKind.ClosePane -> "You closed pane $subject"
+                OperationKind.Attachment -> if (r.aboutTerminal) "You attached a file for $who" else "You dropped a file on the machine"
+                OperationKind.Fetch -> if (r.aboutTerminal) "You fetched a file from $who" else "You fetched a file from the machine"
             }
             // The sentence says what was attempted; how it ended is in the suffix and, in full, in the detail. A prompt's text is
             // never here: the journal keeps a hash unless the user turned on keeping it, and Activity does not show it either way.

@@ -11,6 +11,8 @@ Phase 13 (store, billing, entitlements), as built on 2026-10-04. The plan and it
 | `Distribution.UNLOCKED` | `false` in every published build: Pro capabilities are locked and nothing can be bought; Settings says "Free version" and where Pro comes from. A source build with `-PpaddockUnlocked=true` sets it `true` (Settings then says "Everything is unlocked"); `tools/release-build.sh` always passes `-PpaddockUnlocked=false`. The foss **debug** variant (device harness, flows, instrumentation; never published) defaults to `true` so flows written before Pro existed still reach every screen; `-PpaddockUnlocked=false` builds it locked to rehearse the gate | `false`: Pro is a purchase |
 | Permissions | the six (`INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`, `ACCESS_LOCAL_NETWORK`, `CAMERA`, `USE_BIOMETRIC`) | those six plus `com.android.vending.BILLING` |
 
+Files (Phase 15) are Free in both flavors and add no permission to either list: **Attach** and the camera for a photo (the `CAMERA` permission is the scanner's, asked for only when Take a photo is chosen), **Share to Paddock**, the drop folder and **Get** are not capabilities, nothing joins `ProCapabilities.ALL`, and the size caps are safety bounds, not a tier (X6). The one place Pro shows in them is the share chooser's machine step, which is `hosts.switch` as Home's chips are (X7).
+
 Same application id, same code, same release key. The flag is what turns the gate on: with it `false`, the six capabilities in "What Pro locks" are locked. `tools/check-release-apk.py --flavor foss|play` (foss is the default) holds each artefact to its list; see "What the `play` APK adds" below.
 
 ## How it fits together

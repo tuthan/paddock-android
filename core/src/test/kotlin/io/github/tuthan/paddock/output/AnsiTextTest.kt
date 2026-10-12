@@ -158,4 +158,62 @@ class AnsiTextTest {
             }
         }
     }
+
+    // Phase 15 (C3): a copy says when it is not the whole line, and never holds half of a character.
+
+    @Test fun aLineOverTheLimitIsCutAndSaysSo() {
+        val line = one("y".repeat(Ansi.MAX_LINE_CHARS + 1))
+        assertEquals(Ansi.MAX_LINE_CHARS, line.text.length)
+        assertTrue(line.cut)
+    }
+
+    @Test fun aLineAtTheLimitIsNotCut() {
+        assertFalse(one("y".repeat(Ansi.MAX_LINE_CHARS)).cut)
+        assertFalse(one("short").cut)
+    }
+
+    @Test fun aPairAcrossTheLimitIsDroppedWholeAndNothingAfterItIsKept() {
+        val emoji = "\uD83D\uDE00"
+        val line = one("y".repeat(Ansi.MAX_LINE_CHARS - 1) + emoji + "tail")
+        assertEquals("y".repeat(Ansi.MAX_LINE_CHARS - 1), line.text, "neither half of the pair, and no gap closed by what follows")
+        assertTrue(line.cut)
+        // The pair that fits exactly is kept whole and is not a cut.
+        val fits = one("y".repeat(Ansi.MAX_LINE_CHARS - 2) + emoji)
+        assertEquals(Ansi.MAX_LINE_CHARS, fits.text.length)
+        assertFalse(fits.cut)
+    }
+
+    @Test fun aTabAcrossTheLimitIsCut() {
+        val line = one("y".repeat(Ansi.MAX_LINE_CHARS - 2) + "\tz")
+        assertEquals(Ansi.MAX_LINE_CHARS, line.text.length)
+        assertTrue(line.cut)
+    }
+
+    @Test fun escapesAndDroppedCharactersDoNotCountTowardTheLimit() {
+        val line = one("$esc[31m" + "y".repeat(Ansi.MAX_LINE_CHARS) + "\u200B$esc]0;title\u0007$esc[0m")
+        assertEquals(Ansi.MAX_LINE_CHARS, line.text.length)
+        assertFalse(line.cut)
+    }
+
+    @Test fun theCutIsPerLine() {
+        val lines = Ansi.parse("y".repeat(Ansi.MAX_LINE_CHARS + 5) + "\nfine\n" + "z".repeat(Ansi.MAX_LINE_CHARS + 1))
+        assertEquals(listOf(true, false, true), lines.map { it.cut })
+    }
+
+    @Test fun anUnpairedSurrogateIsDroppedFromTheScreenAndFromSafeText() {
+        assertEquals("ab", one("a\uD83Db").text)
+        assertEquals("ab", one("a\uDE00b").text)
+        assertEquals("ab", SafeText.clean("a\uD83Db"))
+        assertEquals("ab", SafeText.clean("a\uDE00b"))
+        assertEquals("a\uD83D\uDE00b", SafeText.clean("a\uD83D\uDE00b"), "a pair stays")
+    }
+
+    @Test fun aTagCharacterHiddenBetweenTwoHalvesCannotRebuildACharacter() {
+        // Removing the tag character U+E0041 must not leave a high half and a low half side by side, or they join into U+1F600.
+        val smuggled = "x\uD83D\uDB40\uDC41\uDE00y"
+        assertEquals("xy", SafeText.clean(smuggled))
+        assertEquals("xy", one(smuggled).text)
+        val once = SafeText.clean(smuggled)
+        assertEquals(once, SafeText.clean(once), "cleaning twice changes nothing")
+    }
 }

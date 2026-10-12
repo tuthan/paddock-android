@@ -1,13 +1,25 @@
 package io.github.tuthan.paddock.routes
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import io.github.tuthan.paddock.files.DropFolderCheck
+import io.github.tuthan.paddock.ui.screens.GetCopy
+import io.github.tuthan.paddock.hostprofile.HostProfile
+import io.github.tuthan.paddock.live.HostPhase
+import io.github.tuthan.paddock.output.SafeText
+import io.github.tuthan.paddock.reconcile.Freshness
+import io.github.tuthan.paddock.ui.screens.DropFilesUi
+import io.github.tuthan.paddock.ui.screens.DropFolderActions
+import io.github.tuthan.paddock.ui.screens.DropFolderCopy
+import io.github.tuthan.paddock.ui.screens.DropFolderUi
+import io.github.tuthan.paddock.ui.screens.DropRowUi
+import io.github.tuthan.paddock.ui.screens.DropTold
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -26,7 +38,9 @@ import io.github.tuthan.paddock.net.AndroidLanPaths
 import io.github.tuthan.paddock.notify.UnifiedPushConnector
 import io.github.tuthan.paddock.ports.Clock
 import io.github.tuthan.paddock.settings.SettingsController
+import io.github.tuthan.paddock.ui.CopyKind
 import io.github.tuthan.paddock.ui.components.HostHealth
+import io.github.tuthan.paddock.ui.copyText
 import io.github.tuthan.paddock.ui.screens.MachineCard
 import io.github.tuthan.paddock.ui.screens.MachineListState
 import io.github.tuthan.paddock.ui.screens.MachinePage
@@ -139,6 +153,21 @@ internal fun MachineRoute(
     )
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Where files shared with no agent go (Phase 15, X10): judged by the machine itself, so only the machine this phone watches, while it is connected, can be asked.
+    val transfers = (view.phase as? HostPhase.Monitoring)?.host?.transfers
+    val askable = row.watched && transfers != null && view.freshness == Freshness.Live
+    var editingDrop by rememberSaveable(machine.id) { mutableStateOf(false) }
+    var asking by remember(machine.id) { mutableStateOf(false) }
+    var told by remember(machine.id) { mutableStateOf<DropTold?>(null) }
+    var dropFiles by remember(machine.id) { mutableStateOf<DropFilesUi>(DropFilesUi.Idle) }
+    val readDrop: () -> Unit = {
+        val t = transfers
+        if (t != null) scope.launch {
+            dropFiles = DropFilesUi.Reading
+            dropFiles = dropFilesUi(DropFolderCheck.check(t, machine.dropFolderValue), now = System.currentTimeMillis())
+        }
+    }
+    LaunchedEffect(askable, machine.dropFolderValue) { if (askable) readDrop() else { dropFiles = DropFilesUi.Idle; editingDrop = false } }
     androidx.compose.runtime.key(machine.id) {
         MachinePage(
             MachinePageState(
@@ -148,13 +177,39 @@ internal fun MachineRoute(
                 otherNames = machines.filter { it.id != machine.id }.map { it.name }, chosenOs = machine.os, detectedOs = machine.detectedOs,
                 guardedLocked = proService.locked(ProCapabilities.GUARDED_ANSWERS, pro),
                 profile = machine, otherProfiles = machines.filter { it.id != machine.id },
+                drop = DropFolderUi(machine.dropFolderValue, isDefault = machine.dropFolder == null, askable = askable, files = dropFiles, editing = editingDrop && askable, asking = asking, told = told),
+            ),
+            dropActions = DropFolderActions(
+                onReRead = readDrop,
+                onEdit = { told = null; editingDrop = true },
+                onCloseEdit = { editingDrop = false; told = null },
+                onCheck = { value ->
+                    val t = transfers
+                    if (t == null) told = DropTold(value, DropFolderCopy.NOT_CONNECTED, ok = false)
+                    else {
+                        asking = true
+                        scope.launch {
+                            told = when (val r = DropFolderCheck.check(t, value)) {
+                                is DropFolderCheck.Result.Ok -> DropTold(value, DropFolderCheck.sentence(r), ok = true)
+                                is DropFolderCheck.Result.Problem -> DropTold(value, r.sentence, ok = false)
+                            }
+                            asking = false
+                        }
+                    }
+                },
+                // In the graph's scope: leaving the page must not drop a save halfway.
+                onSave = { value ->
+                    appScope.launch { machineBook.setDropFolder(machine.id, value) }
+                    editingDrop = false; told = null
+                    onNotice(DropFolderCopy.saved(machine.name, value ?: HostProfile.DEFAULT_DROP_FOLDER))
+                },
             ),
             onBack = onBack,
             onWatch = { switchMachine(proService, machineBook, appScope, row, onNotice) },
             onRemove = { machineBook.requestRemoval(machine.id, machine.name) },
             onAlertRelay = onAlertRelay,
             onGuardedAnswers = onGuardedAnswers,
-            onCopyWakeCommand = { cmd -> (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Paddock wake command", cmd)) },
+            onCopyWakeCommand = { cmd -> copyText(ctx, CopyKind.WakeCommand, cmd) },
             onSaveWakeRelay = { relay -> scope.launch { machineBook.setWakeRelay(machine.id, relay) } },
             onWake = { wakes.wake(machine.id) },
             onRename = { name -> scope.launch { if (machineBook.rename(machine.id, name)) onNotice(MachineCopy.renamed(name)) } },
@@ -170,3 +225,15 @@ internal fun MachineRoute(
         )
     }
 }
+
+/** What the page shows of a look at the drop folder: its newest files (ten at most), against [now], and what its read said when it did not work. */
+internal fun dropFilesUi(r: DropFolderCheck.Result, now: Long): DropFilesUi = when (r) {
+    is DropFolderCheck.Result.Problem -> DropFilesUi.Failed(r.sentence)
+    is DropFolderCheck.Result.Ok -> DropFilesUi.Listed(
+        r.files.take(DROP_SHOWN).map { DropRowUi(SafeText.clean(it.name), GetCopy.sizeAndAge(it.size, it.mtimeSeconds, now)) },
+        more = (r.files.size - DROP_SHOWN).coerceAtLeast(0), where = SafeText.clean(r.real), exists = r.exists,
+        readAtTime = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(now)),
+    )
+}
+
+private const val DROP_SHOWN = 10

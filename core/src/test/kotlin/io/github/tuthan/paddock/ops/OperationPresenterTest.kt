@@ -42,6 +42,22 @@ class OperationPresenterTest {
         assertEquals("The desktop now has this agent focused · 14:03:12", p.line(OperationKind.Focus, OperationResult.Acknowledged(record(OperationKind.Focus, OperationOutcome.Acknowledged), Unit)).text)
     }
 
+    @Test fun anAttachmentIsSettledByReadingTheInboxAndItsRefusalIsTheMachinesOwnSentence() {
+        val cut = record(OperationKind.Attachment, OperationOutcome.Unknown)
+        assertEquals("attachment sent 14:03:12 · outcome unknown · read the inbox before sending again", p.line(OperationKind.Attachment, OperationResult.Unknown(cut, "cut")).text)
+        assertEquals("attachment sent 14:03:12 · outcome unknown · inbox read 14:05", p.unknownText(cut.copy(resolvedAt = reread)))
+        assertTrue(p.line(OperationKind.Attachment, OperationResult.NeedsReread(cut)).text.contains("Read the inbox"))
+        assertEquals("An earlier send's outcome is unknown. Re-read before sending again.", p.line(OperationKind.Prompt, OperationResult.NeedsReread(record(outcome = OperationOutcome.Unknown))).text)
+        val why = io.github.tuthan.paddock.files.TransferRefusal.Exists
+        val rejected = p.line(OperationKind.Attachment, OperationResult.Rejected(record(OperationKind.Attachment, OperationOutcome.Rejected, why.code), why.code, why.sentence))
+        assertEquals(why.sentence, rejected.text)
+        assertEquals(ResultTone.Refused, rejected.tone)
+        val big = io.github.tuthan.paddock.files.TransferRefusal.OverCap
+        assertEquals(big.sentence, p.line(OperationKind.Attachment, OperationResult.NotSent(record(OperationKind.Attachment, OperationOutcome.NotSent, big.code), big.code, big.sentence)).text)
+        assertTrue(p.line(OperationKind.Attachment, OperationResult.Acknowledged(record(OperationKind.Attachment, OperationOutcome.Acknowledged), "x")).text.startsWith("File sent 14:03:12"))
+        assertTrue(p.describe(record(OperationKind.Fetch, OperationOutcome.Acknowledged)).startsWith("File received 14:03:12"))
+    }
+
     @Test fun herdrsBlockedRefusalIsTheGuardWorkingAndOffersTheTerminal() {
         val line = p.line(OperationKind.Prompt, OperationResult.Rejected(record(outcome = OperationOutcome.Rejected, code = "agent_blocked"), "agent_blocked", "agent w1:p1 is blocked and requires interactive input"))
         assertTrue("blocked" in line.text && "Nothing was typed" in line.text)

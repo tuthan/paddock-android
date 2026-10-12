@@ -36,7 +36,9 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
         is OperationResult.NotSent -> notSent(kind, result)
         is OperationResult.Unknown -> ResultLine(unknownText(result.record), ResultTone.Unknown, unknown = true)
         is OperationResult.Busy -> ResultLine("Another send to this agent is still running (${describe(result.first)}).", ResultTone.Refused)
-        is OperationResult.NeedsReread -> ResultLine("An earlier send's outcome is unknown. Re-read before sending again.", ResultTone.Refused, unknown = true)
+        is OperationResult.NeedsReread ->
+            if (result.unknown.kind == OperationKind.Attachment) ResultLine("An earlier file may already be on the machine. Read the inbox before sending another.", ResultTone.Refused, unknown = true)
+            else ResultLine("An earlier send's outcome is unknown. Re-read before sending again.", ResultTone.Refused, unknown = true)
         is OperationResult.Stale -> ResultLine("This screen is out of date. Re-read the agent, then try again. Nothing was sent.", ResultTone.Problem)
         is OperationResult.JournalFailed -> ResultLine("Nothing was sent: the operation record could not be written on this phone.", ResultTone.Problem)
         is OperationResult.JournalUnreadable -> ResultLine("Nothing was sent: the record of earlier sends on this phone cannot be read. Retry or reset it in Settings.", ResultTone.Problem)
@@ -76,6 +78,9 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
             OperationKind.FocusWorkspace, OperationKind.FocusTab -> "Paddock cannot tell whether the desktop moved its focus. Look at the desktop."
             OperationKind.WorktreeCreate, OperationKind.TabCreate, OperationKind.AgentStart, OperationKind.CloseWorkspace, OperationKind.CloseTab, OperationKind.ClosePane ->
                 "Paddock cannot tell whether herdr did it. Look at the herd and the Spaces list; nothing is repeated."
+            // A re-read of the agent frees neither (X9: a cut attachment is settled by reading the inbox, and a fetch is never unknown); the text is for completeness.
+            OperationKind.Attachment -> "Paddock cannot tell whether the file arrived. Read the inbox, which lists what is there; nothing is repeated."
+            OperationKind.Fetch -> "The file arrived whole, and its bytes were counted."
         }
         return listOf(state, what)
     }
@@ -88,6 +93,8 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
     /** "prompt sent 14:03:12 · outcome unknown · re-read before sending again", the note's own wording. */
     fun unknownText(record: OperationRecord): String {
         val sent = record.sentAt?.let { " ${at(it)}" }.orEmpty()
+        // A cut attachment is settled by reading the inbox, not the agent (X9).
+        if (record.kind == OperationKind.Attachment) return "${record.kind.wire} sent$sent · outcome unknown · ${record.resolvedAt?.let { "inbox read ${short(it)}" } ?: "read the inbox before sending again"}"
         val tail = record.resolvedAt?.let { "re-read ${short(it)}" } ?: "re-read before sending again"
         // Known, not unknown: herdr named another terminal in its answer, so the write landed on a different agent.
         if (record.note.startsWith(Misdelivered.PREFIX)) return "${record.kind.wire} sent$sent · herdr says it reached a different agent than this one · check that agent · $tail"
@@ -117,11 +124,15 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
             OperationKind.FocusWorkspace, OperationKind.FocusTab -> "The desktop now shows this${record.sentAt?.let { " · ${at(it)}" }.orEmpty()}"
             OperationKind.WorktreeCreate, OperationKind.TabCreate, OperationKind.AgentStart, OperationKind.CloseWorkspace, OperationKind.CloseTab, OperationKind.ClosePane ->
                 "${kind.wire.replaceFirstChar { it.uppercase() }} sent$time · accepted by herdr"
+            OperationKind.Attachment -> "File sent$time · the machine counted all its bytes before it gave the file its name"
+            OperationKind.Fetch -> "File received$time · its size matched what was looked at"
         }
     }
 
     private fun rejected(kind: OperationKind, r: OperationResult.Rejected): ResultLine =
-        if (kind == OperationKind.Allow || kind == OperationKind.Deny) ResultLine(io.github.tuthan.paddock.answers.AnswerCodes.sentence(r.code) ?: "The host refused the ${kind.wire}: ${r.message.ifBlank { r.code }}", ResultTone.Refused, opensTerminal = true)
+        // The machine's script refused, not herdr: its code is a TransferRefusal and its sentence says what was and was not done.
+        if (kind == OperationKind.Attachment) ResultLine(r.message.ifBlank { "The machine refused the file (${r.code})." }, ResultTone.Refused)
+        else if (kind == OperationKind.Allow || kind == OperationKind.Deny) ResultLine(io.github.tuthan.paddock.answers.AnswerCodes.sentence(r.code) ?: "The host refused the ${kind.wire}: ${r.message.ifBlank { r.code }}", ResultTone.Refused, opensTerminal = true)
         else rejectedByHerdr(kind, r)
 
     private fun rejectedByHerdr(kind: OperationKind, r: OperationResult.Rejected): ResultLine = when (r.code) {
@@ -135,7 +146,10 @@ class OperationPresenter(private val zone: ZoneId = ZoneId.systemDefault(), loca
     private fun notSent(kind: OperationKind, r: OperationResult.NotSent): ResultLine {
         val notReady = NotReadyReason.entries.firstOrNull { it.code == r.reason }
         val answer = io.github.tuthan.paddock.answers.NotAnswerable.entries.firstOrNull { it.code == r.reason }
+        // The phone refused a file before opening a channel (its size, name or folder), with the same sentence the machine's script would give.
+        val refusal = io.github.tuthan.paddock.files.TransferRefusal.entries.firstOrNull { it.code == r.reason }
         return when {
+            refusal != null && kind == OperationKind.Attachment -> ResultLine(refusal.sentence, ResultTone.Refused)
             answer != null -> ResultLine("${answer.sentence} Nothing was sent.", ResultTone.Refused, opensTerminal = true)
             notReady != null -> ResultLine("${notReady.sentence} Nothing was sent.", ResultTone.Refused, opensTerminal = notReady == NotReadyReason.Blocked)
             r.reason == "pane_moved" -> ResultLine("This agent's pane now holds another terminal. Re-read, then try again. Nothing was sent.", ResultTone.Problem)

@@ -79,10 +79,11 @@ class AgentOperations(
         return ReReadReport(key.target.terminalId, read.readAtMillis, read.agent.agentStatus, resolved)
     }
 
-    suspend fun prompt(key: TerminalKey, text: String, keepText: Boolean = false): OperationResult<Agent> {
+    /** [textSha256] is the hash of the user's own text when [text] also holds an attachment's phrase line before it (X12); the row keeps it for the draft. */
+    suspend fun prompt(key: TerminalKey, text: String, keepText: Boolean = false, textSha256: String? = null): OperationResult<Agent> {
         require(text.isNotBlank()) { "an empty prompt is never sent" }
         require(text.length <= MAX_PROMPT_CHARS) { "a prompt is at most $MAX_PROMPT_CHARS characters" }
-        return Operation.run(journal, key, OperationKind.Prompt, text, keepText,
+        return Operation.run(journal, key, OperationKind.Prompt, text, keepText, textSha256 = textSha256,
             resolveTarget = { resolve(key) },
             preflight = { pane ->
                 val started = clock.nowMillis()
