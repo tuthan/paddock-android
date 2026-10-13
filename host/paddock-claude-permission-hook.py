@@ -45,7 +45,7 @@ import sys
 import time
 
 # This script's version, as host/SOURCE.json pins it; the request file's own `v` (PROTOCOL) is the one paddock-decide.py checks.
-VERSION = 4
+VERSION = 5
 PROTOCOL = 1
 AGENTS = ("claude", "codex", "opencode")
 # Claude Code raises a PermissionRequest for these too, but they ask the user to choose (an option of a question, how to leave plan mode): an allow
@@ -403,6 +403,11 @@ def run():
     prune(directory, patterns)
     supersede(directory, patterns, claude_session)
 
+    # The handlers come before the request is published: a SIGTERM that lands between the rename and the handlers (a slow machine, a hook killed at
+    # once) would end the hook with status -15 and leave a pending request that nobody waits on.
+    import signal
+    for name in ("SIGTERM", "SIGHUP", "SIGINT"):
+        signal.signal(getattr(signal, name), _on_signal)
     request_id = new_request_id()
     request = Request(directory, request_id)
     created = int(time.time() * 1000)
@@ -415,12 +420,8 @@ def run():
         os.write(fd, json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("ascii"))
     finally:
         os.close(fd)
-    os.rename(tmp, request.pending)
-
-    import signal
-    for name in ("SIGTERM", "SIGHUP", "SIGINT"):
-        signal.signal(getattr(signal, name), _on_signal)
     try:
+        os.rename(tmp, request.pending)
         behavior = wait(request, herdr, window, watch_desktop=agent != "codex")
         if behavior:
             honour(request, behavior, "Denied from the Paddock phone" if agent != "claude" else None)
