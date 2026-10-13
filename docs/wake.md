@@ -45,6 +45,43 @@ From Home's degraded banner (offered for *cannot reach the host*, *did not answe
 - **From away** (over a VPN such as Tailscale, where no LAN subnet holds the machine; the relay is used on a VPN path only): the same packet as a **unicast to the relay you saved**, an IPv4 literal and a port (default 9). The relay is a device on the machine's network that re-broadcasts it: a router with a forwarder, or UpSnap or a similar service on another machine. Without a saved relay nothing is sent and the field is offered; a suggestion (the machine's gateway) is never used unsaved; a name, an IPv6 literal, loopback, multicast, broadcast and a wildcard are refused. The sender is pinned to the tunnel's network, and Android refuses that pin (`EPERM` from `Network.bindSocket`) for an app the VPN does not select; for that one case, a tunnel path only, the socket is left unbound so the packet follows the default network, which is the VPN whenever it applies to the app (a LAN pin still fails loudly, and a tunnel that has gone still fails). Before 2026-10-12 the refusal was reported as "local-network access is off" and nothing was sent, which is what the same phone's WireGuard produced in the SteamOS companion app (2026-09-30); the fix is unit-tested (`JavaSocketsTest`) and **not run on a phone through a tunnel**. If the VPN does not apply to Paddock at all, the unbound packet leaves on the underlying network and is lost: the packet line then says "sent to the relay" and the machine does not wake.
 - Android 17 asks for the local-network grant first, as it does for Connect; without it nothing is sent and the sentence says so. If the grant is revoked while the sheet is open, the system itself refuses every send with `EPERM` (measured on API 37: an `IOException`, not a `SecurityException`, for unicast and broadcast alike, spike S3); a send where nothing left the phone and the refusal was `EPERM` is reported as the grant being off, while one destination refused with `EPERM` beside another that went out stays "the network refused it".
 
+## Setting up a relay
+
+The relay is yours; Paddock installs nothing on it. It has two jobs: receive the 102-byte packet by unicast on the saved port, and send it again as a broadcast on the machine's LAN. Send **both** `<your subnet's broadcast>:9` and `255.255.255.255:9`: that pair, three times, is what the phone sends on the LAN, and it is the one known to wake a Wi-Fi laptop from `s2idle` (checked 2026-10-12, a laptop on Intel AX201 that a phone on the same Wi-Fi wakes). Nothing about the relay is Wi-Fi specific. If it sits on a different interface than the machine's LAN, pin it (`so-bindtodevice=<iface>` for socat).
+
+**What went wrong on the author's relay, 2026-10-12** (a Raspberry Pi, `socat -u UDP4-RECVFROM:9,reuseaddr,fork UDP4-DATAGRAM:<broadcast>:9,broadcast` as a systemd service, started 2026-09-30): the phone's packet arrived through WireGuard (`tcpdump` on the Pi showed `192.168.42.46.54818 > 192.168.42.93.9: UDP, length 102`) and **nothing left the Pi**. `ss -ulpn 'sport = :9'` showed two socat processes on UDP 9, the service and a forked child that had been alive since the first Wake twelve days earlier. **Restarting the service made the next Wake work.** That is consistent with the stale child taking later datagrams (each Wake comes from a new NAT source port) and is **not proven**: it did not reproduce with socat 1.8.1.3 (five taps from different source ports all forwarded, no child left), the Pi's version was not read, and whether a second Wake after the restart fails again has not been reported. The cheap check is `ss -ulpn 'sport = :9'` again after the first Wake: two processes on 9 means the child is back.
+
+A relay with no per-sender child cannot do that. This one (standard library only, tested on loopback with valid, junk and truncated packets, not on a real LAN) binds to the relay's own LAN address, so the broadcast it sends is never received back by its own socket, forwards a valid magic packet to every target given, and logs each packet and each error:
+
+```python
+#!/usr/bin/env python3
+# usage: wol-relay.py <this host's LAN IP> <port> <ip:port> [<ip:port> ...]
+# e.g.   sudo python3 -u wol-relay.py 192.168.42.93 9 192.168.42.255:9 255.255.255.255:9
+import socket, sys
+
+listen_ip, listen_port = sys.argv[1], int(sys.argv[2])
+targets = [(t.rsplit(":", 1)[0], int(t.rsplit(":", 1)[1])) for t in sys.argv[3:]]
+
+def is_magic(p):  # 6 x 0xFF, then the MAC 16 times: 102 bytes
+    return len(p) == 102 and p[:6] == b"\xff" * 6 and p[6:] == p[6:12] * 16
+
+rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); rx.bind((listen_ip, listen_port))
+tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+print("listening on %s:%d, forwarding to %s" % (listen_ip, listen_port, ", ".join("%s:%d" % t for t in targets)))
+while True:
+    data, src = rx.recvfrom(2048)
+    if not is_magic(data):
+        print("ignored %d bytes from %s:%d (not a magic packet)" % (len(data), src[0], src[1])); continue
+    mac = data[6:12].hex(":")
+    for host, port in targets:
+        try:
+            tx.sendto(data, (host, port)); print("from %s: wake %s -> %s:%d" % (src[0], mac, host, port))
+        except OSError as e:
+            print("from %s: wake %s -> %s:%d FAILED: %s" % (src[0], mac, host, port, e))
+```
+
+Run it as a service the same way as any socat unit (`ExecStart=/usr/bin/python3 -u /usr/local/bin/wol-relay.py <ip> 9 <broadcast>:9 255.255.255.255:9`; port 9 needs `AmbientCapabilities=CAP_NET_BIND_SERVICE` or root; give the relay a fixed lease, because it binds to its address). `journalctl -u <unit>` then shows one line per Wake and the exact error when a send fails. To see where a Wake stops, `sudo tcpdump -ni any -X 'udp port 9'` on the relay: nothing means the phone, the tunnel or WireGuard's per-app list; an inbound packet with no broadcast out means the relay.
+
 ## Waking a machine that is not watched
 
 Free, like every Wake (decision D2, 2026-10-06). The page of a saved machine Paddock is not watching has the same Wake-on-LAN section and the same **Wake the machine**. The tap sends what a tap for the watched machine sends: the same packet, three times, on the same paths (the machine's LAN, or a VPN with that machine's saved relay), from the hardware address and relay stored with that machine. Nothing is read over SSH and nothing connects: the tap **does not reconnect** and **does not follow** a connection, because the only connection Paddock holds is the watched machine's, and it coming up says nothing about this packet. So the tap reports the packet fact and one sentence instead of the two later facts: "Paddock is not watching this machine, so whether it answered is not observed here. Watch it to find out." (`WakeFacts.NOT_WATCHED`). A tap that sent nothing shows only why, as for the watched machine.
