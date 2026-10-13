@@ -113,6 +113,35 @@ class OperationTest {
         assertEquals("cancelled", row.code)
     }
 
+    /** A store whose first save does not return until the test lets it: a slow disk under the row's write. */
+    private class HeldStore : JournalStore {
+        private val inner = InMemoryJournalStore()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        @Volatile private var first = true
+        override fun load() = inner.load()
+        override fun save(data: JournalData) { if (first) { first = false; entered.countDown(); release.await() }; inner.save(data) }
+        override fun discardUnreadable() = inner.discardUnreadable()
+    }
+
+    @Test fun cancellingWhileTheRowIsBeingWrittenSettlesItAndLeavesTheTerminalFree() = runBlocking<Unit> {
+        val gate = HeldStore()
+        val held = OperationJournal(gate) { now }
+        val job = launch(kotlinx.coroutines.Dispatchers.Default) {
+            Operation.run(held, key, OperationKind.Prompt, payload = "hello", resolveTarget = { "w1:p1" }, send = { _, before -> before(); writes.incrementAndGet(); "ok" })
+        }
+        assertTrue(gate.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the row is being written")
+        job.cancel()
+        gate.release.countDown()
+        job.join()
+        // The switch back from the disk's thread throws the cancel after the row is on disk: without settling it, the terminal would answer Busy until the next start.
+        val row = held.records.value.single()
+        assertEquals(OperationOutcome.NotSent, row.outcome)
+        assertEquals("cancelled", row.code)
+        assertEquals(0, writes.get())
+        assertIs<Begin.Started>(held.begin(key, OperationKind.Prompt, "again"), "the next operation is not Busy")
+    }
+
     // ---- one at a time ---------------------------------------------------------------------------------------------
 
     @Test fun aSecondTapWhileTheFirstIsInFlightIsRefusedAndExactlyOneWriteHappens() = runBlocking<Unit> {

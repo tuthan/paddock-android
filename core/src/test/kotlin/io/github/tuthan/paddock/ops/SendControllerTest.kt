@@ -3,6 +3,7 @@ package io.github.tuthan.paddock.ops
 import io.github.tuthan.paddock.files.ByteSource
 import io.github.tuthan.paddock.files.FileTransfers
 import io.github.tuthan.paddock.files.TransferRefusal
+import io.github.tuthan.paddock.files.TransferReply
 import io.github.tuthan.paddock.herdr.Pane
 import io.github.tuthan.paddock.herdr.Snapshot
 import io.github.tuthan.paddock.identity.HostProfileId
@@ -219,17 +220,29 @@ class SendControllerTest {
     }
 
     @Test fun aRefusedPutSendsNoPromptAndTheOutcomeIsThePutsOwn() = runBlocking<Unit> {
-        val (c, _) = withFiles(exit = TransferRefusal.Exists.exit)
+        val (c, _) = withFiles(exit = TransferRefusal.Unwritable.exit)
         c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
         until("the outcome") { c.outcomes.value["term_1"] != null }
         val o = c.outcomes.value.getValue("term_1")
         assertEquals(OperationKind.Attachment, o.kind)
         val rejected = assertIs<OperationResult.Rejected>(o.result)
-        assertEquals("exists", rejected.code)
+        assertEquals("unwritable", rejected.code)
         assertEquals(0, methods.count { it == "agent.prompt" })
         assertEquals(emptyList(), prompts)
         assertEquals(listOf(OperationKind.Attachment), journal.records.value.map { it.kind })
         assertTrue(c.running.value.isEmpty())
+        scope.cancel()
+    }
+
+    @Test fun aPutRefusedAsExistingUnderEveryNameSendsNoPromptAndSaysSo() = runBlocking<Unit> {
+        val (c, files) = withFiles(exit = TransferRefusal.Exists.exit)
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the outcome") { c.outcomes.value["term_1"] != null }
+        val o = c.outcomes.value.getValue("term_1")
+        assertEquals(OperationKind.Attachment, o.kind)
+        assertEquals("exists", assertIs<OperationResult.Rejected>(o.result).code)
+        assertEquals(FileTransfers.inboxNames(file.name), streamNames(files), "each name is tried once, in order")
+        assertEquals(emptyList(), prompts)
         scope.cancel()
     }
 
@@ -334,6 +347,84 @@ class SendControllerTest {
         assertEquals(OperationKind.Attachment, o.kind)
         assertIs<OperationResult.Unknown>(o.result, "no time at all is a put that was cut, not one that was refused or finished")
         assertEquals(emptyList(), prompts)
+        scope.cancel()
+    }
+
+    // ---- sending the same file again: the machine's inbox, as the put script keeps it ----------------------------------------------
+
+    /** Names the machine's inbox holds. A put on one of them is refused as existing, as the script's `link` refuses it; otherwise the name is given. */
+    private val published = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** A machine whose put script publishes into [published]; [lostAnswer] publishes the file but loses the exit status with the link (143). */
+    private fun machine(lostAnswer: Boolean = false, onExec: (List<String>, ByteArray?) -> io.github.tuthan.paddock.ports.ExecResult = { _, _ -> FakeSession.result(0) }) =
+        FakeSession(onExec = onExec, onStream = { s ->
+            var header = true
+            s.beforeWrite = { bytes ->
+                if (header) {
+                    header = false
+                    val name = bytes.toString(Charsets.UTF_8).lines()[1]
+                    s.exit = if (!published.add(name)) TransferRefusal.Exists.exit else if (lostAnswer) 143 else 0
+                }
+            }
+        })
+
+    private fun streamNames(s: FakeSession) = s.streams.map { it.writtenText().lines()[1] }
+
+    @Test fun aPromptThatDidNotGoAfterItsFileLandedIsSentAgainWithoutWritingTheFileAgain() = runBlocking<Unit> {
+        val files = machine()
+        val c = SendController(scope, ops, FileTransfers(files, journal) { 5_000_000L })
+        status = "working"
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the first outcome") { c.outcomes.value["term_1"] != null && c.running.value.isEmpty() }
+        assertIs<OperationResult.NotSent>(c.outcomes.value.getValue("term_1").result, "the file landed, the prompt did not go")
+        assertEquals(listOf(OperationKind.Attachment, OperationKind.Prompt), journal.records.value.map { it.kind })
+
+        // The draft still holds the same snapshot; Send again.
+        status = "idle"
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the second outcome") { c.outcomes.value["term_1"]?.kind == OperationKind.Prompt && c.running.value.isEmpty() && prompts.isNotEmpty() }
+        assertIs<OperationResult.Acknowledged<*>>(c.outcomes.value.getValue("term_1").result)
+        assertEquals(1, files.streams.size, "the file is not written again: the journal shows it there")
+        assertEquals(listOf("Attached file: .paddock/inbox/${file.name}\nhello"), prompts)
+        assertEquals(listOf(OperationKind.Attachment, OperationKind.Prompt, OperationKind.Prompt), journal.records.value.map { it.kind })
+        scope.cancel()
+    }
+
+    @Test fun aCutFileTheInboxShowedThereWholeIsNotWrittenAgainAndOnlyThePromptGoes() = runBlocking<Unit> {
+        val files = machine(lostAnswer = true, onExec = { _, _ -> FakeSession.result(0, "present\t${file.size}\n") })
+        val transfers = FileTransfers(files, journal) { 5_000_000L }
+        val c = SendController(scope, ops, transfers)
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the cut") { c.outcomes.value["term_1"]?.result is OperationResult.Unknown && c.running.value.isEmpty() }
+        assertTrue(journal.records.value.single().awaitsInboxCheck)
+        // "Read the inbox": the file is there, at its whole size.
+        assertIs<TransferReply.Ok<*>>(transfers.check(key, "/work/proj", file.name))
+
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the prompt") { c.outcomes.value["term_1"]?.kind == OperationKind.Prompt && c.running.value.isEmpty() }
+        assertIs<OperationResult.Acknowledged<*>>(c.outcomes.value.getValue("term_1").result)
+        assertEquals(1, files.streams.size, "a published file is whole: the script names it only after every byte")
+        assertEquals(listOf("Attached file: .paddock/inbox/${file.name}\nhello"), prompts)
+        scope.cancel()
+    }
+
+    @Test fun aNameAnotherFileHoldsIsPassedOverAndThePromptNamesTheFileWhereItLanded() = runBlocking<Unit> {
+        val files = machine()
+        published += file.name // another file got there first, with no row on this phone
+        val c = SendController(scope, ops, FileTransfers(files, journal) { 5_000_000L })
+        c.promptWithAttachment(key, "hello", file, sourceOf, keepText = false, folder = "/work/proj")
+        until("the outcome") { c.outcomes.value["term_1"] != null && c.running.value.isEmpty() }
+        val second = io.github.tuthan.paddock.files.FileNames.retryName(file.name, 2)
+        assertEquals(listOf(file.name, second), streamNames(files))
+        assertIs<OperationResult.Acknowledged<*>>(c.outcomes.value.getValue("term_1").result)
+        assertEquals(listOf("Attached file: .paddock/inbox/$second\nhello"), prompts, "the prompt names the file that was written")
+        val row = journal.records.value.last()
+        assertEquals(OperationKind.Prompt, row.kind)
+        assertEquals("/work/proj/.paddock/inbox/$second", row.path, "the prompt's row keeps the file it named")
+        assertEquals(file.size, row.size)
+        // And the draft lets go of this file for it, under the name the inbox gave.
+        val draft = PromptDraft().typed("term_1", "hello").attached("term_1", DraftAttachment(file.id, file.name, file.size, file.mime))
+        assertNull(draft.accepted("term_1", row).attachmentFor("term_1"))
         scope.cancel()
     }
 

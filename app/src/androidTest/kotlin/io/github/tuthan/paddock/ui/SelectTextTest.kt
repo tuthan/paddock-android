@@ -12,11 +12,13 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInputSelection
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.Density
 import androidx.test.platform.app.InstrumentationRegistry
@@ -125,6 +127,23 @@ class SelectTextTest {
         assertEquals(want, c?.getItemAt(0)?.text?.toString())
         assertTrue("the toolbar's Copy goes through the wrapper, so it is marked", marked(c))
         assertFalse("no escape code or control character in a copy", want.any { it < ' ' && it != '\n' })
+    }
+
+    /**
+     * Long presses as a finger makes them, not semantics actions: the selection asks for the toolbar, and foundation 1.12 then reads the clipboard through
+     * `getNativeClipboardManager`, which threw for a wrapper that was not an `AndroidClipboard` and took the app down. (The toolbar itself is a platform window
+     * that Compose's injected touches do not bring up, so whether it shows is a phone check.)
+     */
+    @Test fun realLongPressesSelectWithoutCrashing() {
+        val words = "the agent wrote a line with some words and a path src/main/kotlin/Foo.kt "
+        show(showing((1..200).joinToString("\n") { i -> val body = "$i $words".repeat(3).take(160); if (i % 5 == 0) "$esc[31m$body$esc[0m" else body }))
+        repeat(2) {
+            rule.onNodeWithTag("SELECT_TEXT").performTouchInput { longClick(center) }
+            rule.waitForIdle(); Thread.sleep(1_000)
+        }
+        val selected = rule.onNodeWithTag("SELECT_TEXT").fetchSemanticsNode().config.getOrNull(SemanticsProperties.TextSelectionRange)
+        // On API 26 an injected long press selects nothing here (seen 2026-10-12); whether a finger does is a phone check. The crash needs a selection, so 26 proves less.
+        if (android.os.Build.VERSION.SDK_INT > 26) assertTrue("a word is selected", selected != null && !selected.collapsed)
     }
 
     @Test fun theToolbarsCopyIsNotMarkedWithTheSettingOff() {

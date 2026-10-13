@@ -13,7 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.OutputTransformation
-import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -52,10 +52,11 @@ import io.github.tuthan.paddock.ui.theme.PaddockTokens
 enum class Since { AgentExited, TerminalClosed }
 
 /**
- * What a Select text view is a copy of, held across a rotation by `Retained` (never in saved state: the lines are not saved anywhere). [snapshot] is replaced in
- * place by Re-read; [startLine] is the line of that copy the view opens at, when it was opened from a line's menu.
+ * What a Select text view is a copy of, held across a rotation and a reconnect by `Retained` (never in saved state: the lines are not saved anywhere). [snapshot]
+ * is replaced in place by Re-read; [startLine] is the line of that copy the view opens at, when it was opened from a line's menu; [title] is the agent's as it was
+ * then, so the view keeps saying whose copy it is while the machine is not connected.
  */
-class SelectHolder(first: OutputState.Showing, val startLine: Int?) {
+class SelectHolder(first: OutputState.Showing, val startLine: Int?, val title: String = "") {
     val snapshot = kotlinx.coroutines.flow.MutableStateFlow(first)
 }
 
@@ -94,6 +95,8 @@ fun SelectText(
     title: String, snapshot: OutputState.Showing, readAtTime: String, since: Since?, protect: Boolean, startLine: Int?, reReading: Boolean,
     onCopyAll: (OutputCopy.Fit) -> Unit, onShare: (OutputCopy.Fit) -> Unit, onReRead: () -> Unit, onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** False while the machine is not connected: the copy stays, and Re-read waits for the connection. */
+    connected: Boolean = true,
 ) {
     val c = PaddockTokens.colors
     val fit = remember(snapshot) { OutputCopy.fit(snapshot.lines) }
@@ -121,7 +124,7 @@ fun SelectText(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 PaddockButton("Copy all", { onCopyAll(fit) }, Modifier.weight(1f), kind = ButtonKind.Secondary, icon = PaddockIcons.Copy)
                 PaddockButton("Share", { onShare(fit) }, Modifier.weight(1f), kind = ButtonKind.Secondary)
-                PaddockButton(if (reReading) "Reading…" else "Re-read", onReRead, Modifier.weight(1f), kind = ButtonKind.Ghost, enabled = since == null && !reReading)
+                PaddockButton(if (reReading) "Reading…" else "Re-read", onReRead, Modifier.weight(1f), kind = ButtonKind.Ghost, enabled = connected && since == null && !reReading)
             }
             Text(SelectTextCopy.NOTE, style = PaddockTokens.type.note, color = c.dim)
         }
@@ -133,7 +136,9 @@ fun SelectText(
 private fun SelectableText(fit: OutputCopy.Fit, startOffsetLine: Int?) {
     val c = PaddockTokens.colors
     val styled = remember(fit, c) { linesToText(fit.lines, c) }
-    val state = rememberTextFieldState(styled.text)
+    // Not `rememberTextFieldState`: that one is saveable, and would put the whole copy (up to 300 KB of output) in the activity's saved state.
+    // A rotation gets the copy back from the holder; the selection is not kept.
+    val state = remember { TextFieldState(styled.text) }
     val scroll = rememberScrollState()
     val transform = remember(styled) {
         OutputTransformation { for (s in styled.spanStyles) addStyle(s.item, s.start, s.end) }

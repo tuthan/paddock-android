@@ -5,6 +5,7 @@ import io.github.tuthan.paddock.identity.TargetRef
 import io.github.tuthan.paddock.identity.TerminalKey
 import io.github.tuthan.paddock.ops.Begin
 import io.github.tuthan.paddock.ops.JournalWriteFailed
+import io.github.tuthan.paddock.ops.Operation
 import io.github.tuthan.paddock.ops.OperationJournal
 import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationOutcome
@@ -86,9 +87,15 @@ class FileTransfers(private val session: SshSession, private val journal: Operat
      * Writes [source] (exactly [size] bytes whose SHA-256 is [sha256]) to `<folder>/.paddock/inbox/<name>` for the agent [key] names. The value of an
      * Acknowledged result is the path under the agent's folder, `.paddock/inbox/<name>`, which is what the prompt's phrase names.
      */
-    suspend fun put(key: TerminalKey, folder: String, name: String, source: ByteSource, size: Long, sha256: String, maxBytes: Long, deadline: Duration): OperationResult<String> {
+    suspend fun put(key: TerminalKey, folder: String, name: String, source: ByteSource, size: Long, sha256: String, maxBytes: Long, deadline: Duration): OperationResult<String> =
+        putAs(key, folder, name, source, size, sha256, maxBytes, deadline, known = null)
+
+    /** [put], or the refusal [known] already (one the phone can see), journaled as not sent before any channel. */
+    private suspend fun putAs(
+        key: TerminalKey, folder: String, name: String, source: ByteSource, size: Long, sha256: String, maxBytes: Long, deadline: Duration, known: TransferRefusal?,
+    ): OperationResult<String> {
         val dest = inboxPath(folder, name)
-        val local = refusalBeforeSending(folder, name, size, maxBytes, folderMustBeAbsolute = true)
+        val local = refusalBeforeSending(folder, name, size, maxBytes, folderMustBeAbsolute = true) ?: known
         return write(key, dest, TransferScripts.putArgv(maxBytes), "$folder\n$name\n$size\n", inboxRelPath(name), source, size, sha256, deadline, local)
     }
 
@@ -105,13 +112,19 @@ class FileTransfers(private val session: SshSession, private val journal: Operat
 
     /**
      * Whether `<folder>/.paddock/inbox/<name>` is there, and how long: what a person reads to settle a cut attachment (X9). Every cut attachment of [key]
-     * for that path stops holding the prompt that would name it, whatever the answer was (it stays Unknown, with the answer as its note); an answer that
-     * did not arrive settles nothing. Creates nothing on the machine.
+     * for that path stops holding the prompt that would name it, whatever the answer was (it stays Unknown, with the answer as its note and the size
+     * found as its [OperationRecord.inboxSize]); an answer that did not arrive settles nothing. A refusal that proves no file can be at the path (the
+     * agent's folder is gone, as a removed worktree's is, or the file is not there to count) settles it as an absent one does, and is still what is
+     * returned; any other refusal settles nothing. Creates nothing on the machine.
      */
     suspend fun check(key: TerminalKey, folder: String, name: String): TransferReply<InboxCheck> {
         if (!validFolder(folder, absolute = true)) return TransferReply.Refused(TransferRefusal.BadPath)
         if (!TransferScripts.NAME.matches(name)) return TransferReply.Refused(TransferRefusal.BadName)
         val r = ask(TransferScripts.checkArgv(), "$folder\n$name\n", SMALL)
+        if (r is Raw.Refused && r.refusal in PROVES_ABSENT) {
+            settleCut(key, folder, name) { "inbox read: ${if (r.refusal == TransferRefusal.NotDirectory) "the agent's folder is not there" else "not there"}" }
+            return TransferReply.Refused(r.refusal)
+        }
         if (r !is Raw.Out) return r.asReply()
         val parts = r.text.trimEnd('\n').split('\t')
         val found = when {
@@ -119,15 +132,52 @@ class FileTransfers(private val session: SshSession, private val journal: Operat
             parts.size == 2 && parts[0] == "present" && DIGITS.matches(parts[1]) -> InboxCheck.Present(parts[1].toLongOrNull() ?: return TransferReply.Failed("the machine's answer did not make sense"))
             else -> return TransferReply.Failed("the machine's answer did not make sense")
         }
-        val dest = inboxPath(folder, name)
-        withContext(NonCancellable + Dispatchers.IO) {
-            for (row in journal.unresolvedAttachments(key).filter { it.path == dest }) {
-                val said = when (found) { is InboxCheck.Present -> "inbox read: there, ${found.size} bytes (sent ${row.size})"; InboxCheck.Absent -> "inbox read: not there" }
-                journal.resolve(row.id, said)
-            }
+        settleCut(key, folder, name, (found as? InboxCheck.Present)?.size) { row ->
+            when (found) { is InboxCheck.Present -> "inbox read: there, ${found.size} bytes (sent ${row.size})"; InboxCheck.Absent -> "inbox read: not there" }
         }
         return TransferReply.Ok(found)
     }
+
+    /** Settles every cut attachment of [key] for `<folder>/.paddock/inbox/<name>` with the note [said] gives it and the size found there, if any. */
+    private suspend fun settleCut(key: TerminalKey, folder: String, name: String, found: Long? = null, said: (OperationRecord) -> String) {
+        val dest = inboxPath(folder, name)
+        withContext(NonCancellable + Dispatchers.IO) {
+            for (row in journal.unresolvedAttachments(key).filter { it.path == dest }) journal.resolve(row.id, said(row), inboxSize = found)
+        }
+    }
+
+    /**
+     * [put] for the file of a prompt, which the composer sends again whole when the prompt after it did not go (X9, X12). Each name the file may take
+     * in the inbox ([inboxNames]: [name], then `name-2`...) is judged by this terminal's journal before anything is written:
+     * - a name that holds this exact file is used as it is, and nothing is written: an attachment row there with the same SHA-256 and size that was
+     *   acknowledged, or that was cut and then read there at its whole size (the script gives a file its name only once every byte arrived). The
+     *   result is Acknowledged with that row;
+     * - a name that holds another file (acknowledged, read there, or refused as existing) is passed over, and so is one the machine refuses as existing;
+     * - the first that is neither is written to, and its outcome is the result.
+     * The value of an Acknowledged result is the path the prompt's phrase names, `.paddock/inbox/<the name used>`. When the journal shows every name
+     * taken, the last is journaled as not sent ([TransferRefusal.Exists]) and nothing is written.
+     */
+    suspend fun attach(key: TerminalKey, folder: String, name: String, source: ByteSource, size: Long, sha256: String, maxBytes: Long, deadline: Duration): OperationResult<String> {
+        val names = inboxNames(name)
+        var last: OperationResult<String>? = null
+        for (candidate in names) {
+            val rows = journal.forTerminal(key).filter { it.kind == OperationKind.Attachment && it.path == inboxPath(folder, candidate) }
+            rows.lastOrNull { holds(it, size, sha256) }?.let { return OperationResult.Acknowledged(it, inboxRelPath(candidate)) }
+            if (rows.any(::taken)) continue
+            val r = put(key, folder, candidate, source, size, sha256, maxBytes, deadline)
+            // The script never overwrites: a name that is taken is the only refusal worth another try, under the next name.
+            if (!(r is OperationResult.Rejected && r.code == TransferRefusal.Exists.code)) return r
+            last = r
+        }
+        return last ?: putAs(key, folder, names.last(), source, size, sha256, maxBytes, deadline, known = TransferRefusal.Exists)
+    }
+
+    /** Whether attachment row [row] shows the file of [size] bytes and [sha256] under its path: acknowledged there, or cut and then read there whole. */
+    private fun holds(row: OperationRecord, size: Long, sha256: String) = row.payloadSha256 == sha256 && row.size == size &&
+        (row.outcome == OperationOutcome.Acknowledged || (row.outcome == OperationOutcome.Unknown && row.inboxSize == size))
+
+    /** Whether attachment row [row] shows a file under its path, whichever it is: one it wrote, one read there, or one the machine said was there. */
+    private fun taken(row: OperationRecord) = row.outcome == OperationOutcome.Acknowledged || row.inboxSize != null || row.code == TransferRefusal.Exists.code
 
     /** A path under the agent's [folder], looked at on its real path (X2): the size, the time and the real path, or the script's refusal. */
     suspend fun stat(folder: String, path: String, maxBytes: Long): TransferReply<RemoteStat> {
@@ -225,7 +275,7 @@ class FileTransfers(private val session: SshSession, private val journal: Operat
     ): OperationResult<String> {
         require(SHA256.matches(sha256)) { "a file is journaled by its SHA-256" }
         val row = try {
-            when (val b = io { journal.begin(key, OperationKind.Attachment, path = dest, size = size, fileSha256 = sha256) }) {
+            when (val b = Operation.begin(journal) { journal.begin(key, OperationKind.Attachment, path = dest, size = size, fileSha256 = sha256) }) {
                 is Begin.Started -> b.record
                 is Begin.InFlight -> return OperationResult.Busy(b.first)
                 is Begin.NeedsReread -> return OperationResult.NeedsReread(b.unknown)
@@ -338,6 +388,18 @@ class FileTransfers(private val session: SshSession, private val journal: Operat
         /** The destination a prompt's phrase names: under the agent's folder, in the inbox. */
         fun inboxRelPath(name: String) = ".paddock/inbox/$name"
         private fun inboxPath(folder: String, name: String) = "${folder.trimEnd('/')}/${inboxRelPath(name)}"
+
+        /** How many names [attach] tries for one file: its own, then `-2` up to this. */
+        const val INBOX_NAMES = 5
+
+        /** The names [attach] may give a file called [name] in the inbox, in the order it tries them: [name], then [FileNames.retryName]'s `-2`, `-3`... */
+        fun inboxNames(name: String): List<String> = listOf(name) + (2..INBOX_NAMES).map { FileNames.retryName(name, it) }
+
+        /**
+         * What [check]'s script refuses only when no file can be at the path: the agent's folder is not a folder, or the file was not there to count. [check]
+         * settles the cut row for these as it does for Absent, so the caller says the file is not there.
+         */
+        val PROVES_ABSENT = setOf(TransferRefusal.NotDirectory, TransferRefusal.NotFound)
 
         private const val CHUNK = 32 * 1024
         private val DIGITS = Regex("[0-9]{1,15}")

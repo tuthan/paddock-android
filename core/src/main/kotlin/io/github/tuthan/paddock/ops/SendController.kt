@@ -58,22 +58,27 @@ class SendController(
      * whole is the prompt sent, with [AttachmentPhrase]'s line before [text] and the hash of [text] alone on the row for the draft. A refused, cut or
      * not-sent put sends no prompt: the outcome shown is the put's (kind [OperationKind.Attachment]), and a cut one is Unknown until the inbox is read.
      * [text] may be empty (a photo with no words). The agent's folder is [folder] when the composer has it, else a fresh read of the agent's.
-     * A put that succeeded stays in the inbox if the prompt is then refused; sending the same snapshot again meets its name, which the caller retries as `-2`.
+     * A put that succeeded stays in the inbox if the prompt is then refused. Sending the same snapshot again writes nothing when the journal shows that
+     * file already there, and only the prompt goes; a name another file holds is passed over for `-2` and on ([FileTransfers.attach]). The prompt
+     * names the file as it is in the inbox, and its row keeps that path and the size, so the draft lets go of this file only.
      */
     fun promptWithAttachment(key: TerminalKey, text: String, file: Snapshot, source: ByteSource, keepText: Boolean, folder: String? = null) {
         val files = checkNotNull(transfers) { "this controller was built without file transfers" }
         // A line break after the phrase alone would be a second Enter for an agent without bracketed paste, so a photo with no words is just the phrase.
-        val prompt = AttachmentPhrase.line(FileTransfers.inboxRelPath(file.name)) + if (text.isBlank()) "" else "\n$text"
-        require(prompt.length <= AgentOperations.MAX_PROMPT_CHARS) { "a prompt is at most ${AgentOperations.MAX_PROMPT_CHARS} characters" }
+        fun promptNaming(relPath: String) = AttachmentPhrase.line(relPath) + if (text.isBlank()) "" else "\n$text"
+        // Whichever name the inbox gives the file, the prompt that names it fits.
+        require(FileTransfers.inboxNames(file.name).all { promptNaming(FileTransfers.inboxRelPath(it)).length <= AgentOperations.MAX_PROMPT_CHARS }) {
+            "a prompt is at most ${AgentOperations.MAX_PROMPT_CHARS} characters"
+        }
         startOutcome(key) {
             val where = folder ?: try { ops.read(key).agent.folder() }
                 catch (e: StalePane) { return@startOutcome SendOutcome(OperationKind.Attachment, OperationResult.Stale(key)) }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { null }
             // No folder is refused by the put, journaled and said, like any other file the machine would not take.
-            val put = files.put(key, where.orEmpty(), file.name, source, file.size, file.sha256, maxFileBytes, transferDeadline(file.size))
+            val put = files.attach(key, where.orEmpty(), file.name, source, file.size, file.sha256, maxFileBytes, transferDeadline(file.size))
             if (put !is OperationResult.Acknowledged) SendOutcome(OperationKind.Attachment, put)
-            else SendOutcome(OperationKind.Prompt, ops.prompt(key, prompt, keepText, textSha256 = OperationJournal.sha256Hex(text)))
+            else SendOutcome(OperationKind.Prompt, ops.prompt(key, promptNaming(put.value), keepText, textSha256 = OperationJournal.sha256Hex(text), filePath = put.record.path, fileSize = file.size))
         }
     }
     fun sendKey(key: TerminalKey, kind: OperationKind) { start(key, kind) { ops.sendKey(key, kind) } }

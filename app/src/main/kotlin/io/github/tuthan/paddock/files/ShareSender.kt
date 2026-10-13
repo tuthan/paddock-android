@@ -7,24 +7,35 @@ import io.github.tuthan.paddock.ops.OperationKind
 import io.github.tuthan.paddock.ops.OperationPresenter
 import io.github.tuthan.paddock.ops.OperationResult
 import io.github.tuthan.paddock.ops.Subject
-import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** Where a send of a shared file with no agent is (Phase 15, slice 11): nothing, the bytes going, or how it ended. */
+/**
+ * Where a send of a shared file with no agent is (Phase 15, slice 11): nothing, the bytes going, or how it ended. A send and its result belong to the item
+ * that was sent: [item] is its snapshot's id, and the chooser shows a state only while that item is the one waiting ([forItem]).
+ */
 sealed interface ShareSend {
-    data object Idle : ShareSend
-    data class Sending(val name: String, val sent: Long, val total: Long) : ShareSend
+    /** The snapshot id of the shared file this state is about; none when nothing is sent. */
+    val item: String?
+
+    data object Idle : ShareSend { override val item: String? get() = null }
+    data class Sending(override val item: String, val name: String, val sent: Long, val total: Long) : ShareSend
 
     /** [path] is where the file is on the machine, only when it arrived: a refusal or a cut has none and says why in [message]. */
-    data class Done(val ok: Boolean, val message: String, val path: String? = null) : ShareSend
+    data class Done(override val item: String, val ok: Boolean, val message: String, val path: String? = null) : ShareSend
 }
+
+/** This state when it is about [waiting], the item the chooser shows; null otherwise, so an earlier share's send or result never shows under a newer one. */
+fun ShareSend.forItem(waiting: SharedItem?): ShareSend? = takeIf { it.item != null && it.item == (waiting as? SharedItem.File)?.snapshot?.id }
 
 object ShareSendCopy {
     const val GONE = "The file is no longer on this phone."
@@ -39,6 +50,9 @@ object ShareSendCopy {
  * A drop writes under the folder the machine resolved ([FileTransfers.resolveDrop] answers the real path or its own refusal), under [FileNames.dropName]'s name of the
  * sender's name: an instruction file (`CLAUDE.md`, `AGENTS.md`, `.mcp.json`...) is refused before a byte leaves. A name that is already there is retried as `name-2`, `name-3`…
  * up to [MAX_TRIES]: the script never overwrites. A folder send keeps the snapshot's timestamped name, which cannot collide.
+ *
+ * Each send is a run for one item. Only the run in hand writes [state]: once it is cancelled, a read that was already under way, and anything it says after,
+ * changes nothing, so a cancelled send's progress or result never lands on the next send. [cancel] and [clear] name the item they are about.
  */
 class ShareSender(
     private val scope: CoroutineScope,
@@ -50,75 +64,116 @@ class ShareSender(
 ) {
     private val _state = MutableStateFlow<ShareSend>(ShareSend.Idle)
     val state: StateFlow<ShareSend> = _state.asStateFlow()
-    private var job: Job? = null
 
-    val busy: Boolean get() = job?.isActive == true
+    private val lock = Any()
+
+    // Guarded by [lock]: the latest run's job and the item it sends, and the number of the run whose writes reach [state].
+    private var job: Job? = null
+    private var runItem: String? = null
+    private var run = 0L
+
+    val busy: Boolean get() = synchronized(lock) { job?.isActive == true }
 
     private fun subjectKey(profile: HostProfileId, session: String) = TerminalKey(TargetRef(profile, session, Subject.drop(profile.value)), epoch = 0)
 
-    /** [folder] is an absolute folder herdr knows; the file goes to its `.paddock/inbox/` under the snapshot's own name. */
-    fun toFolder(transfers: FileTransfers, profile: HostProfileId, session: String, folder: String, snapshot: Snapshot) {
-        if (busy) return
-        job = scope.launch {
-            val source = sourceOf(snapshot.id) ?: run { _state.value = ShareSend.Done(false, ShareSendCopy.GONE); return@launch }
-            _state.value = ShareSend.Sending(snapshot.name, 0, snapshot.size)
-            _state.value = finish(snapshot) { counting ->
-                val r = transfers.put(subjectKey(profile, session), folder, snapshot.name, counting, snapshot.size, snapshot.sha256, maxBytes, deadline(snapshot.size))
-                // The value of a put is the path under the folder (`.paddock/inbox/<name>`); the person is told the whole path.
-                r to if (r is OperationResult.Acknowledged<String>) "${folder.trimEnd('/')}/${r.value}" else null
-            }(source)
+    /** One send's way to [state]: a write lands only while this is still the run in hand. */
+    private inner class Run(val id: Long, val item: String) {
+        fun post(s: ShareSend) = synchronized(lock) { if (run == id) _state.value = s }
+        fun progress(n: Long) = synchronized(lock) { if (run == id) _state.update { if (it is ShareSend.Sending) it.copy(sent = n) else it } }
+    }
+
+    private fun start(item: String, body: suspend Run.() -> Unit) {
+        synchronized(lock) {
+            if (job?.isActive == true) return
+            val r = Run(++run, item)
+            runItem = item
+            job = scope.launch { r.body() }
         }
+    }
+
+    /** [folder] is an absolute folder herdr knows; the file goes to its `.paddock/inbox/` under the snapshot's own name. */
+    fun toFolder(transfers: FileTransfers, profile: HostProfileId, session: String, folder: String, snapshot: Snapshot) = start(snapshot.id) {
+        val source = sourceOf(snapshot.id) ?: return@start post(ShareSend.Done(item, false, ShareSendCopy.GONE))
+        post(ShareSend.Sending(item, snapshot.name, 0, snapshot.size))
+        post(finish(source) { counting ->
+            val r = transfers.put(subjectKey(profile, session), folder, snapshot.name, counting, snapshot.size, snapshot.sha256, maxBytes, deadline(snapshot.size))
+            // The value of a put is the path under the folder (`.paddock/inbox/<name>`); the person is told the whole path.
+            r to if (r is OperationResult.Acknowledged<String>) "${folder.trimEnd('/')}/${r.value}" else null
+        })
     }
 
     /** [value] is the drop folder as the profile holds it (`~/Paddock`); the machine resolves it. [senderName] is the sender's own name for the file. */
-    fun toDrop(transfers: FileTransfers, profile: HostProfileId, session: String, value: String, senderName: String?, snapshot: Snapshot) {
-        if (busy) return
-        job = scope.launch {
-            val shared = senderName ?: snapshot.name.removePrefix(snapshot.name.take(STAMP_CHARS).takeIf { STAMP.matches(it) } ?: "")
-            val base = when (val n = FileNames.dropName(shared)) {
-                is DropName.Refused -> { _state.value = ShareSend.Done(false, ShareSendCopy.refusedName(n.matched)); return@launch }
-                is DropName.Accepted -> n.name
+    fun toDrop(transfers: FileTransfers, profile: HostProfileId, session: String, value: String, senderName: String?, snapshot: Snapshot) = start(snapshot.id) {
+        val shared = senderName ?: snapshot.name.removePrefix(snapshot.name.take(STAMP_CHARS).takeIf { STAMP.matches(it) } ?: "")
+        val base = when (val n = FileNames.dropName(shared)) {
+            is DropName.Refused -> return@start post(ShareSend.Done(item, false, ShareSendCopy.refusedName(n.matched)))
+            is DropName.Accepted -> n.name
+        }
+        val source = sourceOf(snapshot.id) ?: return@start post(ShareSend.Done(item, false, ShareSendCopy.GONE))
+        post(ShareSend.Sending(item, base, 0, snapshot.size))
+        val real = when (val r = transfers.resolveDrop(value)) {
+            is TransferReply.Ok -> r.value
+            is TransferReply.Refused -> return@start post(ShareSend.Done(item, false, r.refusal.sentence))
+            is TransferReply.Failed -> return@start post(ShareSend.Done(item, false, "Could not reach the machine to check the folder: ${r.message}."))
+        }
+        post(finish(source) { counting ->
+            var result: OperationResult<String>? = null
+            var name = base
+            for (n in 1..MAX_TRIES) {
+                if (n > 1) name = FileNames.retryName(base, n)
+                val r = transfers.drop(profile, real, name, counting, snapshot.size, snapshot.sha256, maxBytes, deadline(snapshot.size))
+                result = r
+                // The script never overwrites: a name that is taken is the only refusal worth another try, under the next name.
+                if (!(r is OperationResult.Rejected && r.code == TransferRefusal.Exists.code)) break
             }
-            val source = sourceOf(snapshot.id) ?: run { _state.value = ShareSend.Done(false, ShareSendCopy.GONE); return@launch }
-            _state.value = ShareSend.Sending(base, 0, snapshot.size)
-            val real = when (val r = transfers.resolveDrop(value)) {
-                is TransferReply.Ok -> r.value
-                is TransferReply.Refused -> { _state.value = ShareSend.Done(false, r.refusal.sentence); return@launch }
-                is TransferReply.Failed -> { _state.value = ShareSend.Done(false, "Could not reach the machine to check the folder: ${r.message}."); return@launch }
+            val r = result!!
+            r to if (r is OperationResult.Acknowledged<String>) r.value else null
+        })
+    }
+
+    /** Runs [attempt] with the source counted for this run's progress and turns what it came to into the state shown. */
+    private suspend fun Run.finish(source: ByteSource, attempt: suspend (ByteSource) -> Pair<OperationResult<String>, String?>): ShareSend {
+        val (result, path) = attempt(CountingSource(source, this::progress))
+        return if (result is OperationResult.Acknowledged<String> && path != null) ShareSend.Done(item, true, ShareSendCopy.SENT, path)
+        else ShareSend.Done(item, false, presenter.line(OperationKind.Attachment, result).text)
+    }
+
+    /**
+     * Stops the send of [item], if it is the one running: the row ends Unknown (a part may be on the machine), which holds nothing. What it said is forgotten,
+     * and nothing it says later is heard. Another item's send is not touched.
+     */
+    fun cancel(item: String) {
+        synchronized(lock) {
+            if (runItem == item) {
+                job?.cancel()
+                job = null
+                runItem = null
+                run++
             }
-            _state.value = finish(snapshot) { counting ->
-                var result: OperationResult<String>? = null
-                var name = base
-                for (n in 1..MAX_TRIES) {
-                    if (n > 1) name = FileNames.retryName(base, n)
-                    val r = transfers.drop(profile, real, name, counting, snapshot.size, snapshot.sha256, maxBytes, deadline(snapshot.size))
-                    result = r
-                    // The script never overwrites: a name that is taken is the only refusal worth another try, under the next name.
-                    if (!(r is OperationResult.Rejected && r.code == TransferRefusal.Exists.code)) break
-                }
-                val r = result!!
-                r to if (r is OperationResult.Acknowledged<String>) r.value else null
-            }(source)
+            if (_state.value.item == item) _state.value = ShareSend.Idle
         }
     }
 
-    /** Runs [attempt] with the source counted for progress and turns what it came to into the state shown. */
-    private fun finish(snapshot: Snapshot, attempt: suspend (ByteSource) -> Pair<OperationResult<String>, String?>): suspend (ByteSource) -> ShareSend = { source ->
-        val counting = CountingSource(source) { n -> _state.update { if (it is ShareSend.Sending) it.copy(sent = n) else it } }
-        val (result, path) = try { attempt(counting) } catch (e: CancellationException) { throw e }
-        if (result is OperationResult.Acknowledged<String> && path != null) ShareSend.Done(true, ShareSendCopy.SENT, path)
-        else ShareSend.Done(false, presenter.line(OperationKind.Attachment, result).text)
+    /** [item]'s result was read. A running send, or another item's result, is not touched. */
+    fun clear(item: String) {
+        synchronized(lock) {
+            val s = _state.value
+            if (s is ShareSend.Done && s.item == item) _state.value = ShareSend.Idle
+        }
     }
 
-    /** Stops the send in progress: the row ends Unknown (a part may be on the machine), which holds nothing. */
-    fun cancel() {
-        job?.cancel()
-        job = null
-        _state.value = ShareSend.Idle
+    /**
+     * Keeps the send to the item waiting in [pending]: a send whose file is no longer the one waiting (a newer share took its place, or it was used or
+     * dismissed) is stopped and its result forgotten, so neither shows under another item nor acts on it, and its snapshot, which the inbox deletes with
+     * it, is not opened again. Runs until the caller's scope ends.
+     */
+    suspend fun follow(pending: Flow<SharedItem?>) {
+        combine(pending, state) { waiting, s -> (waiting as? SharedItem.File)?.snapshot?.id to s.item }
+            .distinctUntilChanged()
+            .collect { (waiting, _) ->
+                synchronized(lock) { listOfNotNull(runItem, _state.value.item).distinct().filter { it != waiting }.forEach { cancel(it) } }
+            }
     }
-
-    /** The result was read. */
-    fun clear() { if (!busy) _state.value = ShareSend.Idle }
 
     companion object {
         const val MAX_TRIES = 5

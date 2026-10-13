@@ -77,6 +77,19 @@ class HandoffTest {
         assertFalse(Handoff.saveTo(ctx, file, android.net.Uri.parse("content://${ctx.packageName}.nothing/none")))
     }
 
+    /** The destination's provider is another app's code: whatever unchecked exception binder carries back from its open or its write is a failed save, never a crash. */
+    @Test fun aDestinationThatThrowsAnyUncheckedExceptionIsAFailureNotACrash() {
+        val thrown = listOf(IllegalStateException("provider"), NullPointerException("provider"), UnsupportedOperationException("provider"), IndexOutOfBoundsException("provider"))
+        for (e in thrown) {
+            assertFalse("on the open: $e", Handoff.saveTo(file) { throw e })
+            val failing = object : java.io.OutputStream() {
+                override fun write(b: Int) = throw e
+                override fun write(b: ByteArray, off: Int, len: Int) = throw e
+            }
+            assertFalse("on the write: $e", Handoff.saveTo(file) { failing })
+        }
+    }
+
     @Test fun mimeIsTheKindsTypeAndAnApkIsAPackageArchive() {
         assertEquals("image/png", Handoff.mimeOf(OpenableTypes.kindOf("a.png")))
         assertEquals(OpenableTypes.APK, Handoff.mimeOf(OpenableTypes.kindOf("a.apk")))

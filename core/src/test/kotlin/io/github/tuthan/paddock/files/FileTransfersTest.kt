@@ -212,6 +212,130 @@ class FileTransfersTest {
         assertTrue("not there" in journal.get(b.id)!!.note)
     }
 
+    @Test fun `a check refused because the agent's folder is gone, or the file is not there to count, settles the cut attachment as absent`() = runBlocking<Unit> {
+        val link = Link().also { it.script = { w -> w.exit = 143 } }
+        val gone = assertIs<OperationResult.Unknown>(transfers(link).putDefault(name = "gone.png")).record
+        // A failure says nothing about the disk: the row still holds the next attachment.
+        assertIs<TransferReply.Failed>(transfers(Link { _, _ -> throw IOException("link lost") }).check(key, "/work/proj", "gone.png"))
+        assertTrue(journal.get(gone.id)!!.awaitsInboxCheck)
+        // The worktree was removed: the script cannot find the folder, so no file can be under it.
+        val removed = answer(exit = TransferRefusal.NotDirectory.exit)
+        assertEquals(TransferReply.Refused(TransferRefusal.NotDirectory), transfers(removed).check(key, "/work/proj", "gone.png"), "the refusal is still what is said")
+        val settled = journal.get(gone.id)!!
+        assertFalse(settled.awaitsInboxCheck, "the row no longer holds the next attachment")
+        assertEquals(OperationOutcome.Unknown, settled.outcome)
+        assertNull(settled.inboxSize, "nothing was found there")
+        assertTrue("not there" in settled.note)
+
+        val vanished = assertIs<OperationResult.Unknown>(transfers(link).putDefault(name = "vanished.png")).record
+        transfers(answer(exit = TransferRefusal.NotFound.exit)).check(key, "/work/proj", "vanished.png")
+        assertFalse(journal.get(vanished.id)!!.awaitsInboxCheck)
+        // A refusal that does not prove the file absent (a link where the inbox should be) settles nothing.
+        val linked = assertIs<OperationResult.Unknown>(transfers(link).putDefault(name = "linked.png")).record
+        transfers(answer(exit = TransferRefusal.Symlink.exit)).check(key, "/work/proj", "linked.png")
+        assertTrue(journal.get(linked.id)!!.awaitsInboxCheck)
+    }
+
+    // ---- a prompt's file sent again ------------------------------------------------------------------------------------------
+
+    private suspend fun FileTransfers.attachDefault(name: String = "shot.png", b: ByteArray = content) =
+        attach(key, "/work/proj", name, source(b), b.size.toLong(), sha(b), max, 10.seconds)
+
+    private fun names(link: Link) = link.streams.map { it.text().lines()[1] }
+
+    /** Another file's bytes, one per [seed]. */
+    private fun body(seed: Int) = ByteArray(1_000) { (it * 13 + seed).toByte() }
+
+    @Test fun `attach writes nothing when the journal shows this exact file under the name, and the result names it`() = runBlocking<Unit> {
+        val link = Link()
+        val first = assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault())
+        val again = assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault())
+        assertEquals(".paddock/inbox/shot.png", again.value)
+        assertEquals(first.record.id, again.record.id, "the row that shows it there")
+        assertEquals(1, link.streams.size, "nothing was written the second time")
+        assertEquals(1, journal.records.value.size, "and nothing was journaled")
+        // Another folder is another inbox, and another terminal's rows are not this one's.
+        assertIs<OperationResult.Acknowledged<String>>(transfers(link).attach(key, "/work/other", "shot.png", source(), content.size.toLong(), contentSha, max, 10.seconds))
+        val other = TerminalKey(TargetRef(HostProfileId("h1"), "paddock-test", "term_2"), epoch = 1)
+        assertIs<OperationResult.Acknowledged<String>>(transfers(link).attach(other, "/work/proj", "shot.png", source(), content.size.toLong(), contentSha, max, 10.seconds))
+        assertEquals(3, link.streams.size)
+    }
+
+    @Test fun `attach passes over a name another file holds, by the journal or by the machine's refusal, and stops when every name is taken`() = runBlocking<Unit> {
+        val link = Link()
+        assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault())
+        // Another file, the same name: the journal says the name holds something else, so it goes straight to the next one.
+        val other = body(1)
+        val second = assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault(b = other))
+        assertEquals(".paddock/inbox/shot-2.png", second.value)
+        assertEquals(listOf("shot.png", "shot-2.png"), names(link))
+        // A third file: both names are known taken, and the machine refuses shot-3.png (a file with no row here), so shot-4.png.
+        link.script = { w -> if (link.streams.size == 2) w.exit = TransferRefusal.Exists.exit }
+        val third = assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault(b = body(2)))
+        assertEquals(".paddock/inbox/shot-4.png", third.value)
+        assertEquals(listOf("shot.png", "shot-2.png", "shot-3.png", "shot-4.png"), names(link))
+        // And sending the second file again finds it under shot-2.png.
+        assertEquals(".paddock/inbox/shot-2.png", assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault(b = other)).value)
+        assertEquals(4, link.streams.size)
+        // A fourth file: shot-5.png is free.
+        link.script = {}
+        assertEquals(".paddock/inbox/shot-5.png", assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault(b = body(3))).value)
+        // A fifth: every name is taken by the journal, so nothing is written and the refusal is the machine's own sentence.
+        val full = assertIs<OperationResult.NotSent>(transfers(link).attachDefault(b = body(4)))
+        assertEquals(TransferRefusal.Exists.code, full.reason)
+        assertEquals(TransferRefusal.Exists.sentence, full.message)
+        assertEquals(5, link.streams.size)
+    }
+
+    @Test fun `attach takes a cut file the inbox showed whole as there, and one shown at another size or not at all as not this file`() = runBlocking<Unit> {
+        val cutting = Link().also { it.script = { w -> w.exit = 143 } }
+        val size = content.size.toLong()
+        suspend fun cutAndRead(name: String, said: String) {
+            assertIs<OperationResult.Unknown>(transfers(cutting).attachDefault(name = name))
+            transfers(answer(out = said)).check(key, "/work/proj", name)
+        }
+        val link = Link()
+        cutAndRead("whole.png", "present\t$size\n")
+        assertEquals(".paddock/inbox/whole.png", assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault(name = "whole.png")).value)
+        assertTrue(link.streams.isEmpty(), "a published file is whole: nothing is written")
+
+        cutAndRead("other.png", "present\t${size - 1}\n")
+        assertEquals(".paddock/inbox/other-2.png", assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault(name = "other.png")).value)
+        cutAndRead("absent.png", "absent\n")
+        assertEquals(".paddock/inbox/absent.png", assertIs<OperationResult.Acknowledged<String>>(transfers(link).attachDefault(name = "absent.png")).value, "a name that is free is used")
+        assertEquals(listOf("other-2.png", "absent.png"), names(link))
+    }
+
+    @Test fun `a cancel while the row is being written settles it as not sent, so the terminal is not left busy`() = runBlocking<Unit> {
+        val gate = HeldStore()
+        val held = OperationJournal(gate) { now }
+        val link = Link()
+        val job = async(Dispatchers.Default) { FileTransfers(link, held) { now }.put(key, "/work/proj", "a.png", source(), content.size.toLong(), contentSha, max, 5.seconds) }
+        assertTrue(gate.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the row is being written")
+        job.cancel()
+        gate.release.countDown()
+        assertFailsWith<CancellationException> { job.await() }
+        val row = held.records.value.single()
+        assertEquals(OperationOutcome.NotSent, row.outcome, "a row that was begun is always settled")
+        assertEquals("cancelled", row.code)
+        assertTrue(link.streams.isEmpty(), "nothing was sent")
+        assertIs<OperationResult.Acknowledged<String>>(FileTransfers(link, held) { now }.put(key, "/work/proj", "b.png", source(), content.size.toLong(), contentSha, max, 5.seconds), "the next one is not Busy")
+    }
+
+    /** A store whose first save does not return until the test lets it: a slow disk under the row's write. */
+    private class HeldStore : io.github.tuthan.paddock.ops.JournalStore {
+        private val inner = InMemoryJournalStore()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        @Volatile private var first = true
+        override fun load() = inner.load()
+        override fun save(data: io.github.tuthan.paddock.ops.JournalData) {
+            if (first) { first = false; entered.countDown(); release.await() }
+            inner.save(data)
+        }
+        override fun discardUnreadable() = inner.discardUnreadable()
+    }
+
     @Test fun `the deadline cuts the transfer, closes the channel and leaves the row unknown`() = runBlocking<Unit> {
         val link = Link().also { it.script = { w -> w.hangOnExit = true } }
         val r = withTimeout(5.seconds) { transfers(link).putDefault(deadline = 150.milliseconds) }

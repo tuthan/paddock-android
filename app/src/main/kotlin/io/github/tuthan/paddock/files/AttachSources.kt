@@ -30,7 +30,10 @@ class AttachLaunchers(private val start: (AttachSource) -> Unit) {
 /**
  * The three ways to get a file into the composer (Phase 15, slice 10): the system photo picker, the document picker, and the camera app writing one
  * capture into Paddock's own cache through its provider. None of them reads the file: a result is a URI (or a capture's id) handed to [onPicked] or
- * [onCaptured], and [IncomingFiles] makes the one snapshot (SEC-1, SEC-2).
+ * [onCaptured], and [IncomingFiles] makes the one snapshot (SEC-1, SEC-2). The sender's name for a picked file is a provider query, which can be slow:
+ * the caller asks [displayNameOf] off the main thread.
+ *
+ * The caller keeps this above anything the connection hides: a result that arrives while its launcher is gone from the composition is dropped by the registry.
  *
  * Each launch first calls [TransferHold.hold], so the connection stays while Paddock is behind the picker; the result, or a back press out of it,
  * releases it. A capture's id is kept in saved state, because the camera app can take the process's place in memory and the result then arrives at a
@@ -42,10 +45,12 @@ class AttachLaunchers(private val start: (AttachSource) -> Unit) {
 @Composable
 fun rememberAttachSources(
     hold: TransferHold,
-    onPicked: (uri: Uri, displayName: String?) -> Unit,
+    onPicked: (uri: Uri) -> Unit,
     onCaptured: (captureId: String) -> Unit,
     onCameraDenied: () -> Unit,
     onNothing: () -> Unit = {},
+    /** The phone has no app for [AttachSource]: nothing was started, so nothing is held. */
+    onUnavailable: (AttachSource) -> Unit = {},
     /** Whether the camera grant is held; a seam so a test does not depend on what the device was left with. */
     cameraGranted: (Context) -> Boolean = { it.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED },
 ): AttachLaunchers {
@@ -54,11 +59,12 @@ fun rememberAttachSources(
     val captured by rememberUpdatedState(onCaptured)
     val denied by rememberUpdatedState(onCameraDenied)
     val nothing by rememberUpdatedState(onNothing)
+    val unavailable by rememberUpdatedState(onUnavailable)
     var captureId by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun finished(uri: Uri?) {
         hold.release()
-        if (uri == null) nothing() else picked(uri, displayNameOf(context, uri))
+        if (uri == null) nothing() else picked(uri)
     }
 
     val photo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { finished(it) }
@@ -83,6 +89,11 @@ fun rememberAttachSources(
             hold.release(); captureId = null; TransferCacheHandle.of(context).deleteCamera(id); nothing()
         }
     }
+    // A phone without the documents app has no picker to start (the photo picker falls back to it below Android 11): say so rather than crash.
+    fun picker(source: AttachSource, start: () -> Unit) {
+        hold.hold()
+        try { start() } catch (_: RuntimeException) { hold.release(); unavailable(source) }
+    }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         hold.release()
         if (granted) startCamera() else denied()
@@ -90,8 +101,8 @@ fun rememberAttachSources(
     return remember {
         AttachLaunchers { source ->
             when (source) {
-                AttachSource.Photo -> { hold.hold(); photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-                AttachSource.Document -> { hold.hold(); document.launch(arrayOf("image/*", "application/pdf", "text/*")) }
+                AttachSource.Photo -> picker(source) { photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                AttachSource.Document -> picker(source) { document.launch(arrayOf("image/*", "application/pdf", "text/*")) }
                 AttachSource.Camera ->
                     if (cameraGranted(context)) startCamera()
                     else { hold.hold(); permission.launch(Manifest.permission.CAMERA) }

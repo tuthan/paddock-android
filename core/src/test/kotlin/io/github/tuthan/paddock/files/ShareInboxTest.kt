@@ -6,6 +6,7 @@ import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -72,6 +73,34 @@ class ShareInboxTest {
         assertEquals(listOf<SharedItem>(item), discarded)
         inbox.discard()
         assertEquals(1, discarded.size, "a second discard has nothing to hand over")
+    }
+
+    @Test fun discardingTheItemThePersonSawLeavesANewerOneThatTookItsPlace() {
+        val seen = file(1)
+        val newer = file(2)
+        inbox.offer(seen)
+        inbox.offer(newer)
+        assertEquals(listOf<SharedItem>(seen), discarded, "the offer already let the first one go")
+        assertFalse(inbox.discard(seen), "the item on the screen is no longer the one waiting")
+        assertSame(newer, inbox.pending.value, "the newer item still waits")
+        assertEquals(listOf<SharedItem>(seen), discarded, "and was not handed over")
+        assertTrue(inbox.discard(newer))
+        assertNull(inbox.pending.value)
+        assertEquals(listOf<SharedItem>(seen, newer), discarded)
+        assertFalse(inbox.discard(newer), "nothing waits, nothing is handed over again")
+        assertEquals(2, discarded.size)
+    }
+
+    @Test fun takingTheItemThePersonChoseLeavesANewerOneThatTookItsPlace() {
+        val seen = file(1)
+        val newer = file(2)
+        inbox.offer(seen)
+        inbox.offer(newer)
+        assertFalse(inbox.take(seen), "the item on the screen is no longer the one waiting, so it is not added to a draft")
+        assertSame(newer, inbox.pending.value, "the newer item still waits")
+        assertTrue(inbox.take(newer))
+        assertNull(inbox.pending.value)
+        assertEquals(listOf<SharedItem>(seen), discarded, "a taken item is not discarded: its file now belongs to the draft")
     }
 
     @Test fun offeringTheItemThatWaitsDoesNotDiscardIt() {

@@ -21,6 +21,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -162,8 +164,16 @@ fun SpacesScreen(state: SpacesScreenState, actions: SpacesActions, modifier: Mod
     }
 
     val available = state.start as? StartAvailability.Available
-    if (form && available != null) {
-        StartAgentForm(available.workspaces, available.folders, onCancel = { form = false }, onStart = { form = false; actions.onStart(it) }, modifier = modifier)
+    // The form stays up while the connection is away (the app lets it go a few seconds after it leaves the front), on the choices it last had: what was typed is
+    // kept, and Start waits with the reason. Without a choice ever read (a process restore), it opens once the machine is back, with its fields restored.
+    var lastAvailable by remember { mutableStateOf(available) }
+    SideEffect { if (available != null) lastAvailable = available }
+    val choices = available ?: lastAvailable
+    if (form && choices != null) {
+        StartAgentForm(
+            choices.workspaces, choices.folders, onCancel = { form = false }, onStart = { form = false; actions.onStart(it) }, modifier = modifier,
+            waiting = (state.start as? StartAvailability.Unavailable)?.reason,
+        )
         return
     }
 
@@ -312,7 +322,11 @@ fun RecoveryCard(card: SagaCardModel, hostName: String, onAction: (CardAction) -
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun StartAgentForm(workspaces: List<WorkspaceChoice>, folders: List<String>, onCancel: () -> Unit, onStart: (StartForm) -> Unit, modifier: Modifier = Modifier) {
+fun StartAgentForm(
+    workspaces: List<WorkspaceChoice>, folders: List<String>, onCancel: () -> Unit, onStart: (StartForm) -> Unit, modifier: Modifier = Modifier,
+    /** Why Start cannot run now (the machine is reconnecting): said above the buttons, and Start is off. Null when it can. */
+    waiting: String? = null,
+) {
     val c = PaddockTokens.colors
     var workspace by rememberSaveable { mutableStateOf(workspaces.firstOrNull()?.id) }
     var kind by rememberSaveable { mutableStateOf("claude") }
@@ -394,9 +408,10 @@ fun StartAgentForm(workspaces: List<WorkspaceChoice>, folders: List<String>, onC
             Field("First prompt (optional)", prompt, { prompt = it }, singleLine = false, imeAction = androidx.compose.ui.text.input.ImeAction.Default,
                 placeholder = "Sent once, only if the agent is ready")
             Note("Paddock checks that ${SagaRules.executables(kind).joinToString(" or ")} is installed on the machine, creates the place, checks the new pane, then starts the agent in it. If a step fails, what was created is listed and nothing is repeated.")
+            waiting?.let { Note(it, Modifier.testTag("start-waiting")) }
             ButtonPair(
                 { m -> PaddockButton("Cancel", onCancel, m, kind = ButtonKind.Secondary) },
-                { m -> PaddockButton("Start agent", { onStart(StartForm(workspace!!, kind, name, branch.takeIf { worktree }, prompt.takeIf { it.isNotBlank() }, typedFolder.takeIf { !worktree && ownFolder })) }, m, kind = ButtonKind.Primary, enabled = ready) },
+                { m -> PaddockButton("Start agent", { onStart(StartForm(workspace!!, kind, name, branch.takeIf { worktree }, prompt.takeIf { it.isNotBlank() }, typedFolder.takeIf { !worktree && ownFolder })) }, m, kind = ButtonKind.Primary, enabled = ready && waiting == null) },
             )
         }
     }

@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import io.github.tuthan.paddock.output.SafeText
 import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.Kicker
@@ -55,10 +56,31 @@ data class ShareMachine(val id: String, val name: String, val endpoint: String, 
 /** An agent of the watched machine. A [reason] means it cannot take a prompt right now, and the row is disabled with that sentence. */
 data class ShareAgent(val terminalId: String, val title: String, val context: String, val reason: String? = null)
 
+/** [path] is the folder's real path on the machine, which the send uses; the screen shows it only through [SafeText]. */
 data class ShareFolder(val path: String, val label: String)
 
-/** What a send to a folder or the drop folder said when it ended: [path] is where the file is, on the machine. */
+/** What a send to a folder or the drop folder said when it ended: [path] is where the file is, on the machine, as it is (Copy path and Use in a prompt get it so). */
 data class ShareResult(val ok: Boolean, val message: String, val path: String? = null)
+
+/**
+ * The question before a share to an agent replaces what Paddock holds unsent for another one ([io.github.tuthan.paddock.files.ShareDraft]'s rule: a share
+ * never overwrites what the person wrote). [agent] is that agent's name when the chooser lists it; [words] and [file] say what the draft holds.
+ */
+data class ShareReplace(val agent: String?, val words: Boolean, val file: Boolean)
+
+object ShareReplaceCopy {
+    const val TITLE = "Replace the unsent prompt?"
+    const val REPLACE = "Replace"
+
+    fun body(r: ShareReplace): String {
+        val what = when {
+            r.words && r.file -> "an unsent prompt and its file"
+            r.file -> "an unsent file"
+            else -> "an unsent prompt"
+        }
+        return "Paddock holds $what for ${r.agent ?: "another agent"}. Adding this share replaces ${if (r.words && r.file) "both" else "it"}."
+    }
+}
 
 data class ShareChooserUi(
     val summary: ShareSummary,
@@ -74,6 +96,8 @@ data class ShareChooserUi(
     val busy: Boolean = false,
     val notice: String? = null,
     val result: ShareResult? = null,
+    /** The chosen agent would replace another agent's unsent draft: the screen asks first. */
+    val replace: ShareReplace? = null,
 )
 
 class ShareChooserActions(
@@ -86,6 +110,10 @@ class ShareChooserActions(
     val onCopyPath: (String) -> Unit,
     val onUsePath: (String) -> Unit,
     val onCloseResult: () -> Unit,
+    /** Replace, on [ShareChooserUi.replace]'s question: the share goes to the chosen agent and the other draft goes. */
+    val onReplace: () -> Unit = {},
+    /** Cancel on that question: nothing changes. */
+    val onKeep: () -> Unit = {},
 )
 
 const val SHARE_TITLE = "Share to Paddock"
@@ -123,7 +151,8 @@ fun ShareChooser(ui: ShareChooserUi, actions: ShareChooserActions, modifier: Mod
                 for (a in ui.agents) AgentRowView(a, ui.busy) { actions.onAgent(a) }
                 if (ui.folders.isNotEmpty()) {
                     Kicker("A folder on this machine, with no prompt", Modifier.padding(top = 6.dp))
-                    for (f in ui.folders) PlaceRow(f.label, "In ${f.path}/.paddock/inbox/", !ui.busy) { actions.onFolder(f) }
+                    // The cwd is the machine's word: bidi overrides and zero-width characters go before it is drawn. The send still uses f.path.
+                    for (f in ui.folders) PlaceRow(f.label, "In ${SafeText.clean(f.path)}/.paddock/inbox/", !ui.busy) { actions.onFolder(f) }
                 }
                 ui.dropFolder?.let { PlaceRow("The machine's drop folder", "$it, with no prompt", !ui.busy) { actions.onDrop() } }
             }
@@ -131,6 +160,7 @@ fun ShareChooser(ui: ShareChooserUi, actions: ShareChooserActions, modifier: Mod
         }
     }
     ui.result?.let { ShareResultSheet(it, actions) }
+    ui.replace?.let { r -> ConfirmDialog(ShareReplaceCopy.TITLE, ShareReplaceCopy.body(r), ShareReplaceCopy.REPLACE, actions.onReplace, actions.onKeep, danger = true) }
 }
 
 @Composable
@@ -215,7 +245,8 @@ private fun ShareResultSheet(r: ShareResult, actions: ShareChooserActions) {
             Text(if (r.ok) "Sent" else "Not sent", style = PaddockTokens.type.headerTitle, color = c.title, modifier = Modifier.semantics { heading() })
             Text(r.message, style = PaddockTokens.type.body, color = c.text, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
             r.path?.let { p ->
-                Text(p, style = PaddockTokens.type.monoFact, color = c.dim)
+                // The path the machine answered is shown cleaned, as GetLook and DropFolderCheck show theirs; the buttons get it as it is.
+                Text(SafeText.clean(p), style = PaddockTokens.type.monoFact, color = c.dim)
                 PaddockButton("Copy path", { actions.onCopyPath(p) }, kind = ButtonKind.Secondary)
                 PaddockButton("Use in a prompt", { actions.onUsePath(p) }, kind = ButtonKind.Ghost)
             }

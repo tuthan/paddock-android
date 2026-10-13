@@ -60,7 +60,11 @@ sealed interface GetState {
  */
 class GetController(
     private val scope: CoroutineScope,
-    private val transfers: FileTransfers,
+    /**
+     * The machine's transfers now, or null while it is not connected. The controller is the machine's and the agent's, not one connection's: the app lets
+     * the connection go a few seconds after it leaves the front, and a file read before that stays on the sheet. So it asks for the transfers at each look and read.
+     */
+    private val transfers: () -> FileTransfers?,
     private val cache: TransferCache,
     private val machineId: String,
     /** What an APK in the cache says about itself; the default says nothing (a test or a build without it). */
@@ -95,6 +99,7 @@ class GetController(
     }
 
     private fun lookAt(folder: String, key: TerminalKey, absolute: String, shown: String) {
+        val transfers = transfers() ?: run { _state.value = GetState.Failed(NOT_CONNECTED); return }
         this.key = key
         _state.value = GetState.Looking(shown)
         job = scope.launch {
@@ -111,6 +116,7 @@ class GetController(
         val offer = (_state.value as? GetState.Offer)?.look ?: return
         val key = key ?: return
         if (busy) return
+        val transfers = transfers() ?: run { _state.value = GetState.Failed(NOT_CONNECTED); return }
         _state.value = GetState.Reading(offer, 0)
         job = scope.launch {
             val id = newId()
@@ -166,6 +172,7 @@ class GetController(
 
     companion object {
         const val NOT_UNDER_FOLDER = "That path is not under this agent's folder, so Paddock will not look for it."
+        const val NOT_CONNECTED = "The machine is not connected right now. Try again once it is."
         private const val SHOWN = 100
     }
 }

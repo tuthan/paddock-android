@@ -39,4 +39,18 @@ class ShareInbox(private val onDiscard: (SharedItem) -> Unit = {}) {
     fun discard() {
         _pending.getAndUpdate { null }?.let(onDiscard)
     }
+
+    /** Takes [item] only while it is still the one waiting, as [discard] does; false when a newer item took its place, which the screen then shows instead. */
+    fun take(item: SharedItem): Boolean = _pending.compareAndSet(item, null)
+
+    /**
+     * Clears [item] and hands it to [onDiscard] only while it is still the one waiting: what the person dismissed is the item they saw, never a newer one that
+     * took its place a moment before (a file is told apart by its snapshot; two equal texts are one item). False, and nothing changes, when another item waits
+     * or none does.
+     */
+    fun discard(item: SharedItem): Boolean {
+        if (!_pending.compareAndSet(item, null)) return false
+        onDiscard(item)
+        return true
+    }
 }

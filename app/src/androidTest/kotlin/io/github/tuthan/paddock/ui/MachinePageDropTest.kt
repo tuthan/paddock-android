@@ -223,6 +223,26 @@ class MachinePageDropTest {
         rule.onNodeWithText(DropFolderCopy.EDIT_TITLE).assertDoesNotExist()
     }
 
+    /**
+     * The app lets the connection go a few seconds after it leaves the front. The sheet stays open through that: the text is kept, Check waits and says why, and it
+     * can be asked once the machine is back. (It used to close, and what was typed went with it.)
+     */
+    @Test fun theSheetKeepsItsTextWhileTheMachineIsNotConnectedAndChecksOnceItIsBack() {
+        val calls = show()
+        rule.onNodeWithText("Change…").performScrollTo().performClick()
+        field().performTextClearance(); field().performTextInput("~/Drop/phone")
+        drop = drop.copy(askable = false)
+        rule.waitForIdle()
+        field().assert(hasText("~/Drop/phone"))
+        rule.onNodeWithText(DropFolderCopy.NOT_CONNECTED).assertIsDisplayed()
+        check().assertIsNotEnabled()
+        drop = drop.copy(askable = true)
+        rule.waitForIdle()
+        field().assert(hasText("~/Drop/phone"))
+        check().assertIsEnabled().performClick()
+        assertEquals(listOf("~/Drop/phone"), calls.checks)
+    }
+
     @Test fun whileTheMachineIsBeingAskedNothingCanBeChecked() {
         drop = drop.copy(editing = true, asking = true)
         show()

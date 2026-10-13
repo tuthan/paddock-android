@@ -155,6 +155,29 @@ class PromptDraftTest {
         assertEquals("", d.accepted("term_1", 7, sha("A")).textFor("term_1"), "the three-argument form is unchanged")
     }
 
+    @Test fun aPlainPromptAcceptedAfterAFileWasAttachedTakesTheTextAndLeavesTheFile() {
+        // "A" was sent with no file; while herdr's answer was on its way, the user attached a photo.
+        val d = PromptDraft().typed("term_1", "A").attached("term_1", photo)
+        val after = d.accepted("term_1", promptRow(7, "A", withPhrase = false))
+        assertEquals("", after.textFor("term_1"), "the text that went is gone")
+        assertEquals(photo, after.attachmentFor("term_1"), "the file did not go with it, so it stays (and its snapshot is not deleted)")
+        assertEquals(mapOf("term_1" to 7L), after.acceptedThrough)
+    }
+
+    private fun namingRow(id: Long, userText: String, name: String, size: Long? = photo.size) = promptRow(id, userText).copy(path = "/work/proj/.paddock/inbox/$name", size = size)
+
+    @Test fun anAcceptedPromptTakesOnlyTheFileItNamedUnderItsOwnNameOrTheNameTheInboxGave() {
+        val d = PromptDraft().typed("term_1", "look").attached("term_1", photo)
+        assertNull(d.accepted("term_1", namingRow(7, "look", photo.name)).attachmentFor("term_1"))
+        assertNull(d.accepted("term_1", namingRow(7, "look", "2026-10-11-143205-shot-2.png")).attachmentFor("term_1"), "the name the inbox gave when the first was taken")
+        assertNull(d.accepted("term_1", namingRow(7, "look", photo.name, size = null)).attachmentFor("term_1"), "a row with no size is judged by the name")
+        // The prompt named another file (the user swapped the photo while it was on its way): the text goes, this file stays.
+        val swapped = d.accepted("term_1", namingRow(7, "look", "2026-10-11-150000-other.png"))
+        assertEquals("", swapped.textFor("term_1"))
+        assertEquals(photo, swapped.attachmentFor("term_1"))
+        assertEquals(photo, d.accepted("term_1", namingRow(7, "look", photo.name, size = photo.size + 1)).attachmentFor("term_1"), "the same name at another size is another file")
+    }
+
     @Test fun anOldAcceptedOutcomeSeenAgainChangesNeitherTheTextNorTheFile() {
         val d = PromptDraft().typed("term_1", "A").accepted("term_1", promptRow(7, "A")).typed("term_1", "B").attached("term_1", photo)
         val again = d.accepted("term_1", promptRow(7, "A"))

@@ -15,6 +15,7 @@ import io.github.tuthan.paddock.files.TransferRefusal.NotYours
 import io.github.tuthan.paddock.files.TransferRefusal.OutsideFolder
 import io.github.tuthan.paddock.files.TransferRefusal.OutsideHome
 import io.github.tuthan.paddock.files.TransferRefusal.OverCap
+import io.github.tuthan.paddock.files.TransferRefusal.SharedFolder
 import io.github.tuthan.paddock.files.TransferRefusal.Symlink
 import io.github.tuthan.paddock.files.TransferRefusal.Truncated
 import io.github.tuthan.paddock.files.TransferRefusal.Unwritable
@@ -46,7 +47,9 @@ enum class TransferRefusal(val exit: Int, val sentence: String) {
     OutsideHome(25, "That folder is outside the home folder. Nothing was written."),
     NotFound(26, "That is not on the machine. Nothing was fetched."),
     /** A file whose size is not the one the phone looked at: it changed in between. */
-    Changed(27, "The file changed size after it was looked at. Nothing was kept.");
+    Changed(27, "The file changed size after it was looked at. Nothing was kept."),
+    /** A folder a write would go into that its group or other accounts may write in too: one of them could swap the part for a link before it is filled. */
+    SharedFolder(28, "Other accounts on the machine can write in that folder, so Paddock did not write there. Nothing was transferred.");
 
     /** `over_cap`, `bad_name`: what a journal row holds as its code. */
     val code: String get() = name.replace(Regex("(?<=[a-z])(?=[A-Z])"), "_").lowercase()
@@ -70,7 +73,10 @@ enum class TransferRefusal(val exit: Int, val sentence: String) {
  * - **The header** (a write script reads `folder`, `name` and `size` as three lines, after one cap as `$1`) is checked before any file is touched:
  *   the size as 1 to 15 digits within the cap, the name against `[A-Za-z0-9][A-Za-z0-9._-]{0,99}`, the folder absolute with no control character.
  * - **The folders.** `.paddock` and the inbox must not be links and must be the user's, checked before and after `mkdir`. `.paddock/.gitignore`
- *   (`*`, X1) is written only into a `.paddock` this run created, so nothing can be planted there first and no git process runs.
+ *   (`*`, X1) is written only into a `.paddock` this run created, so nothing can be planted there first and no git process runs. Every folder a
+ *   write goes into (`.paddock`, the inbox, the drop folder) must give other accounts no write, and its group none unless it is the user's own private
+ *   group ([ownOnly]): the part is filled by its path, and an account that could write there could swap it for a link in between. The folders a script
+ *   creates are 0700.
  * - **The part** is made by `mktemp` (exclusive, 0600, an unpredictable name), filled by `head -c`, counted by `wc -c` as a number, and published
  *   by `link`, which fails whenever the name exists as a file, a link or a directory. `ln` is never used: given a directory (or a link to one) at the
  *   name it puts the file inside it. A trap on EXIT, HUP, INT, TERM and PIPE removes the part; one a dead run left behind is swept after an hour.
@@ -91,6 +97,18 @@ object TransferScripts {
     private fun x(r: TransferRefusal) = r.exit
 
     private fun tools(names: String) = "for t in $names; do command -v \"@t\" >/dev/null 2>&1 || exit ${x(MissingTool)}; done;"
+
+    /**
+     * Refuses the folder [d] (shell text, `@dir`) unless other accounts have no write on it: `find` prints it only then, and prints nothing when it fails,
+     * so a folder it could not judge is refused too. Its group may write only when that group is the user's own private group, one named as the user and
+     * their primary group (Debian, Ubuntu and Fedora make one per user and default to umask 002, so a folder made by hand there is 0775; Debian's OpenSSH
+     * accepts the same case for its own checks). A shared primary group, such as macOS's `staff`, gets no such allowance. `-perm -g+w`, `-group` and
+     * `-prune` are POSIX, and GNU, BSD and busybox `find` read them alike.
+     */
+    private fun ownOnly(d: String) =
+        "w=@(find \"$d\" -prune ! -perm -g+w ! -perm -o+w 2>/dev/null); " +
+            "if [ -z \"@w\" ] && [ \"@(id -gn 2>/dev/null)\" = \"@(id -un 2>/dev/null)\" ]; then w=@(find \"$d\" -prune ! -perm -o+w -group \"@(id -un)\" 2>/dev/null); fi; " +
+            "[ -n \"@w\" ] || exit ${x(SharedFolder)};"
 
     private val PRELUDE = """
         LC_ALL=C; export LC_ALL; umask 077; set -C;
@@ -134,6 +152,7 @@ object TransferScripts {
         [ -e "@p" ] || exit ${x(Unwritable)};
         [ -d "@p" ] || exit ${x(NotDirectory)};
         [ -O "@p" ] || exit ${x(NotYours)};
+        ${ownOnly("@p")}
         if [ -n "@made" ]; then echo "*" > "@p/.gitignore" 2>/dev/null || { rm -f -- "@p/.gitignore"; rmdir -- "@p"; exit ${x(Unwritable)}; }; fi;
         [ ! -L "@dir" ] || exit ${x(Symlink)};
         if [ ! -e "@dir" ]; then mkdir -m 700 -- "@dir" 2>/dev/null; fi;
@@ -141,6 +160,7 @@ object TransferScripts {
         [ -e "@dir" ] || exit ${x(Unwritable)};
         [ -d "@dir" ] || exit ${x(NotDirectory)};
         [ -O "@dir" ] || exit ${x(NotYours)};
+        ${ownOnly("@dir")}
     """
 
     /**
@@ -177,13 +197,17 @@ object TransferScripts {
         if [ -z "@made" ]; then [ -O "@real" ] || exit ${x(NotYours)}; fi;
     """
 
-    /** Creates the resolved folder 0700 when it was new, then checks what is there again (a link planted in between is refused); `dir` is the folder. */
+    /**
+     * Creates the resolved folder 0700 when it was new, then checks what is there again (a link planted in between is refused, and so is a folder
+     * other accounts may write in); `dir` is the folder.
+     */
     private val DROP_CREATE = """
         if [ -n "@made" ]; then mkdir -m 700 -- "@real" 2>/dev/null; fi;
         [ ! -L "@real" ] || exit ${x(Symlink)};
         [ -e "@real" ] || exit ${x(Unwritable)};
         [ -d "@real" ] || exit ${x(NotDirectory)};
         [ -O "@real" ] || exit ${x(NotYours)};
+        ${ownOnly("@real")}
         dir="@real";
     """
 

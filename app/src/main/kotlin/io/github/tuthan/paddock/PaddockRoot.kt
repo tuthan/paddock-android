@@ -94,7 +94,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     // The composer's text lives here, above the route: leaving the composer (Edit snippets, Back) or a reconnect that swaps it for "not available" must not lose it.
     var draft by rememberSaveable(stateSaver = PromptDraftSaver) { mutableStateOf(PromptDraft()) }
     // Once per composition of the root, after the saved state is back: what the file features left in the cache goes unless the draft still names it (Phase 15, SEC-2).
-    LaunchedEffect(Unit) { graph.sweepFiles(setOfNotNull(draft.attachment?.snapshotId)) }
+    LaunchedEffect(Unit) { graph.sweepFiles(draft.attachment?.snapshotId) }
 
     AlertEvents(graph.alerts, graph.alertService, graph.hostUi, graph.proService, nav, boot)
     PairingEvents(graph.pairing, nav, boot)
@@ -161,7 +161,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                 )
                 Route.Compose -> ComposeRoute(
                     graph.hostUi, graph.prefs, graph.machineBook, graph.journal, graph.manualInput, nav.terminalId, draft, { change -> draft = change(draft) },
-                    graph.incoming, graph.transferHold, onBack = { nav.route = Route.Output },
+                    graph.incoming, graph.transferHold, graph.uploads, graph.scope, onBack = { nav.route = Route.Output },
                     onOpenTerminal = { nav.outputTab = AgentTab.Terminal; nav.route = Route.Output },
                     onEditSnippets = { nav.openSnippets(Route.Compose) },
                 )

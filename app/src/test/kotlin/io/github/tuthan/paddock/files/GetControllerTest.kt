@@ -87,8 +87,10 @@ class GetControllerTest {
     private fun answer(exit: Int, out: String = "") = ExecResult(exit, out.toByteArray(), ByteArray(0), false, false, Duration.ZERO)
     private fun chunks(b: ByteArray, n: Int) = b.toList().chunked(b.size / n + 1).map { it.toByteArray() }
 
-    private fun controller(link: Link, apk: (File) -> List<String> = { emptyList() }, deadline: (Long) -> Duration = { 5.seconds }) =
-        GetController(scope, FileTransfers(link, journal) { 1_000L }, TransferCache(tmp.root), "m1", apk, maxBytes = 1_000_000, deadline = deadline, newId = { "fetch1" })
+    private fun controller(link: Link, apk: (File) -> List<String> = { emptyList() }, deadline: (Long) -> Duration = { 5.seconds }): GetController {
+        val transfers = FileTransfers(link, journal) { 1_000L }
+        return GetController(scope, { transfers }, TransferCache(tmp.root), "m1", apk, maxBytes = 1_000_000, deadline = deadline, newId = { "fetch1" })
+    }
 
     private fun statOf(path: String, size: Long = content.size.toLong()) = Link { answer(0, "$size\t1791700000\t$path\n") }
 
@@ -108,6 +110,23 @@ class GetControllerTest {
         assertFalse(offer.look.nameChanged)
         assertEquals("/work/proj/out", offer.look.shownFolder)
         assertEquals(OpenableTypes.Kind.Openable("application/pdf"), offer.look.kind)
+    }
+
+    /** The controller is the machine's and the agent's, not one connection's: while the connection is away it says so, and it uses the transfers that come back. */
+    @Test fun withNoConnectionALookOrAReadSaysSoAndTheTransfersThatComeBackAreUsed() = runBlocking<Unit> {
+        val link = statOf("/work/proj/out/report.pdf")
+        var now: FileTransfers? = null
+        val c = GetController(scope, { now }, TransferCache(tmp.root), "m1", maxBytes = 1_000_000, newId = { "fetch1" })
+        c.look("/work/proj", key, "out/report.pdf")
+        assertEquals(GetState.Failed(GetController.NOT_CONNECTED), c.state.value)
+        c.dismiss()
+        now = FileTransfers(link, journal) { 1_000L }
+        c.look("/work/proj", key, "out/report.pdf")
+        assertTrue(c.until("an offer") { it is GetState.Offer } is GetState.Offer)
+        now = null
+        c.get()
+        assertEquals("a read with the connection gone says so", GetState.Failed(GetController.NOT_CONNECTED), c.state.value)
+        assertTrue("nothing was kept", File(tmp.root, "transfers").walkTopDown().none { it.isFile })
     }
 
     @Test fun aPathOutsideTheFolderIsRefusedHereWithoutAskingTheMachine() = runBlocking<Unit> {

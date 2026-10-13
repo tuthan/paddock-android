@@ -13,8 +13,11 @@ import io.github.tuthan.paddock.ports.StreamChannel
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.security.MessageDigest
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
@@ -27,7 +30,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -186,9 +191,9 @@ class ShareSenderTest {
         val link = Link(answer())
         val s = sender { null }
         s.toFolder(transfers(link), profile, "paddock-test", "/work/proj", snapshot)
-        assertEquals(ShareSend.Done(false, ShareSendCopy.GONE), s.settled())
+        assertEquals(ShareSend.Done(snapshot.id, false, ShareSendCopy.GONE), s.settled())
         s.toDrop(transfers(link), profile, "paddock-test", "~/Paddock", "a.txt", snapshot)
-        assertEquals(ShareSend.Done(false, ShareSendCopy.GONE), s.settled())
+        assertEquals(ShareSend.Done(snapshot.id, false, ShareSendCopy.GONE), s.settled())
         assertTrue(link.asked.isEmpty() && link.wires.isEmpty())
     }
 
@@ -202,10 +207,12 @@ class ShareSenderTest {
         s.toDrop(transfers(link), profile, "paddock-test", "~/Paddock", "a.txt", snapshot)
         delay(100)
         assertEquals("the second and third were ignored", 1, link.wires.size)
-        s.cancel()
+        s.cancel("another-item")
+        assertTrue("a cancel for another item leaves this send running", s.busy)
+        s.cancel(snapshot.id)
         assertEquals(ShareSend.Idle, s.state.value)
         assertFalse(s.busy)
-        s.clear()
+        s.clear(snapshot.id)
         assertEquals(ShareSend.Idle, s.state.value)
     }
 
@@ -214,7 +221,96 @@ class ShareSenderTest {
         val s = sender()
         s.toFolder(transfers(link), profile, "paddock-test", "/work/proj", snapshot)
         assertTrue(s.settled() is ShareSend.Done)
-        s.clear()
+        s.clear(snapshot.id)
         assertEquals(ShareSend.Idle, s.state.value)
+    }
+
+    // ---- a send and its result belong to the item that was sent ----
+
+    private val other = Snapshot("snap2", "2026-10-11-143300-other.txt", "text/plain", content.size.toLong(), sha)
+    private fun file(s: Snapshot) = SharedItem.File(s, senderName = s.name)
+
+    @Test fun aResultNamesItsItemAndOnlyThatItemShowsItOrClearsIt() = runBlocking<Unit> {
+        val link = Link(answer())
+        val s = sender()
+        s.toFolder(transfers(link), profile, "paddock-test", "/work/proj", snapshot)
+        val done = s.settled() as ShareSend.Done
+        assertEquals(snapshot.id, done.item)
+        assertEquals("the item it was sent for sees its result", done, done.forItem(file(snapshot)))
+        assertNull("a newer item never sees an earlier one's result", done.forItem(file(other)))
+        assertNull("a text has no send", done.forItem(SharedItem.Text("a path")))
+        assertNull("nothing waits, nothing shows", done.forItem(null))
+        s.clear(other.id)
+        s.cancel(other.id)
+        assertEquals("another item's Done or close leaves this result alone", done, s.state.value)
+        s.clear(snapshot.id)
+        assertEquals(ShareSend.Idle, s.state.value)
+    }
+
+    /**
+     * A cancel cannot stop a read that is already under way on a blocking stream. When that read returns, after the next send has begun, what it counted must
+     * not land on the next send's progress: only the run in hand writes the state.
+     */
+    @Test fun aCancelledSendsLateProgressNeverLandsOnTheNextSend() = runBlocking<Unit> {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val holdB = CountDownLatch(1)
+        val slowA = ByteSource {
+            object : InputStream() {
+                override fun read(): Int = throw UnsupportedOperationException()
+                override fun read(b: ByteArray, off: Int, len: Int): Int { entered.countDown(); release.await(); return len } // ignores the cancel, as a blocking read does
+            }
+        }
+        val stuckB = ByteSource {
+            object : InputStream() {
+                override fun read(): Int = throw UnsupportedOperationException()
+                override fun read(b: ByteArray, off: Int, len: Int): Int { holdB.await(); return -1 }
+            }
+        }
+        val s = sender { id -> if (id == snapshot.id) slowA else stuckB }
+        try {
+            s.toFolder(transfers(Link(answer())), profile, "paddock-test", "/work/a", snapshot)
+            assertTrue("A's read began", withContext(Dispatchers.IO) { entered.await(5, TimeUnit.SECONDS) })
+            s.cancel(snapshot.id)
+            assertFalse(s.busy)
+            // B goes to another machine: A's row is still in flight on this one's journal subject until A's read returns, and would hold a send here.
+            s.toFolder(transfers(Link(answer())), HostProfileId("m2"), "paddock-test", "/work/b", other)
+            withTimeout(5_000) { while (s.state.value !is ShareSend.Sending) delay(5) }
+            assertEquals(ShareSend.Sending(other.id, other.name, 0, other.size), s.state.value)
+            release.countDown() // A's read returns now, with bytes it counts
+            delay(300)
+            assertEquals("B's progress is still B's own", ShareSend.Sending(other.id, other.name, 0, other.size), s.state.value)
+        } finally {
+            release.countDown()
+            holdB.countDown()
+            s.cancel(other.id)
+        }
+    }
+
+    @Test fun followStopsTheSendOfAnItemThatIsNoLongerWaitingAndForgetsItsResult() = runBlocking<Unit> {
+        val inbox = ShareInbox()
+        val s = sender()
+        val following = scope.launch { s.follow(inbox.pending) }
+        try {
+            // B arrives while A is sending: A's send stops, and nothing of it is left to show under B.
+            inbox.offer(file(snapshot))
+            val hanging = Link(answer()).also { it.hang = true }
+            s.toFolder(transfers(hanging), profile, "paddock-test", "/work/a", snapshot)
+            withTimeout(5_000) { while (hanging.wires.isEmpty()) delay(5) }
+            assertTrue(s.busy)
+            inbox.offer(file(other))
+            withTimeout(5_000) { while (s.busy || s.state.value != ShareSend.Idle) delay(5) }
+
+            // B's own result stays while B waits; a newer item C forgets it, and C's chooser can never close it.
+            s.toFolder(transfers(Link(answer())), profile, "paddock-test", "/work/b", other)
+            val done = s.settled() as ShareSend.Done
+            assertEquals(other.id, done.item)
+            delay(100)
+            assertEquals("the waiting item's result is kept", done, s.state.value)
+            inbox.offer(SharedItem.Text("something else"))
+            withTimeout(5_000) { while (s.state.value != ShareSend.Idle) delay(5) }
+        } finally {
+            following.cancel()
+        }
     }
 }

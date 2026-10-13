@@ -51,6 +51,7 @@ object Operation {
      * screen opened in is gone or the terminal is. [preflight] reads the agent again and decides whether to go.
      * [send] must call its `beforeWrite` argument once, immediately before the request's first byte, and return herdr's
      * success value or throw (a [HerdrError] for herdr's refusal, anything else for a transport failure).
+     * [path] and [size] are, on a prompt that carries an attachment, the file its phrase names ([OperationRecord.path]).
      */
     suspend fun <T> run(
         journal: OperationJournal,
@@ -60,6 +61,8 @@ object Operation {
         keepText: Boolean = false,
         requestId: String? = null,
         textSha256: String? = null,
+        path: String? = null,
+        size: Long? = null,
         resolveTarget: () -> String,
         preflight: suspend (paneId: String) -> Preflight = { Preflight.Go() },
         send: suspend (paneId: String, beforeWrite: suspend () -> Unit) -> T,
@@ -67,7 +70,7 @@ object Operation {
         val pane = try { resolveTarget() } catch (e: StalePane) { return OperationResult.Stale(e.key) }
 
         val row = try {
-            when (val b = io { journal.begin(key, kind, payload, keepText, requestId, textSha256) }) {
+            when (val b = begin(journal) { journal.begin(key, kind, payload, keepText, requestId, textSha256, path = path, size = size) }) {
                 is Begin.Started -> b.record
                 is Begin.InFlight -> return OperationResult.Busy(b.first)
                 is Begin.NeedsReread -> return OperationResult.NeedsReread(b.unknown)
@@ -119,6 +122,21 @@ object Operation {
         OperationResult.NotSent(settle { journal.notSent(row.id, code, message) }, code, message)
 
     private fun cause(e: Throwable) = (e.message ?: e::class.simpleName).orEmpty().lineSequence().first().take(OperationJournal.MAX_NOTE)
+
+    /**
+     * [start] (a call to [OperationJournal.begin]) off the caller's thread. A cancel that lands while it runs is thrown on the way back, after the row
+     * is on disk; nothing would settle that Requested row, and the terminal would answer Busy until the next start. A row begun then is settled
+     * NotSent ("cancelled") before the cancel goes on: nothing was written to the host yet.
+     */
+    internal suspend fun begin(journal: OperationJournal, start: () -> Begin): Begin {
+        var begun: OperationRecord? = null
+        try {
+            return withContext(Dispatchers.IO) { start().also { if (it is Begin.Started) begun = it.record } }
+        } catch (e: CancellationException) {
+            begun?.let { row -> settle { journal.notSent(row.id, "cancelled") } }
+            throw e
+        }
+    }
 
     private suspend fun <R> io(block: () -> R): R = withContext(Dispatchers.IO) { block() }
 

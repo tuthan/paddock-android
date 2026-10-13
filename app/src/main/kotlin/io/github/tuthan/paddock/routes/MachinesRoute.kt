@@ -167,7 +167,8 @@ internal fun MachineRoute(
             dropFiles = dropFilesUi(DropFolderCheck.check(t, machine.dropFolderValue), now = System.currentTimeMillis())
         }
     }
-    LaunchedEffect(askable, machine.dropFolderValue) { if (askable) readDrop() else { dropFiles = DropFilesUi.Idle; editingDrop = false } }
+    // The edit sheet stays open when the connection goes (a few seconds after the app leaves the front): its text is kept, and the sheet waits to be asked again.
+    LaunchedEffect(askable, machine.dropFolderValue) { if (askable) readDrop() else dropFiles = DropFilesUi.Idle }
     androidx.compose.runtime.key(machine.id) {
         MachinePage(
             MachinePageState(

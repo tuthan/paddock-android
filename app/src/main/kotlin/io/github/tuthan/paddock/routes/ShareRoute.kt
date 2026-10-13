@@ -24,6 +24,7 @@ import io.github.tuthan.paddock.files.ShareSender
 import io.github.tuthan.paddock.files.SharedItem
 import io.github.tuthan.paddock.files.Thumbnails
 import io.github.tuthan.paddock.files.folder
+import io.github.tuthan.paddock.files.forItem
 import io.github.tuthan.paddock.host.HostUiModel
 import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.hostprofile.MachineRoster
@@ -45,6 +46,7 @@ import io.github.tuthan.paddock.ui.screens.ShareChooserActions
 import io.github.tuthan.paddock.ui.screens.ShareChooserUi
 import io.github.tuthan.paddock.ui.screens.ShareFolder
 import io.github.tuthan.paddock.ui.screens.ShareMachine
+import io.github.tuthan.paddock.ui.screens.ShareReplace
 import io.github.tuthan.paddock.ui.screens.ShareResult
 import io.github.tuthan.paddock.ui.screens.ShareSummary
 import io.github.tuthan.paddock.ui.screens.Sizes
@@ -76,7 +78,7 @@ internal fun ShareRoute(
     onBack: () -> Unit, onComposeAgent: (String) -> Unit, onNotice: (String) -> Unit,
 ) {
     val item by shares.pending.collectAsState()
-    val sending by sender.state.collectAsState()
+    val sendState by sender.state.collectAsState()
     val view by hostUi.view.collectAsState()
     val settings by prefs.settings.collectAsState()
     val machines by machineBook.machines.collectAsState()
@@ -86,14 +88,20 @@ internal fun ShareRoute(
     var notice by remember { mutableStateOf<String?>(null) }
 
     val shared = item
-    // Nothing waits (a restored screen after the process died, or the item was used): back to where this was opened from.
-    LaunchedEffect(shared == null && sending is ShareSend.Idle) { if (shared == null && sending is ShareSend.Idle) onBack() }
+    // Nothing waits (a restored screen after the process died, or the item was used or dismissed): back to where this was opened from.
+    LaunchedEffect(shared == null) { if (shared == null) onBack() }
     if (shared == null) return
 
+    val file = (shared as? SharedItem.File)?.snapshot
+    // This item's send or result only: an earlier share's is never shown under it, and its Done never closes it.
+    val sending = sendState.forItem(shared)
+    // The question before the share replaces another agent's draft; it belongs to this item and goes when another one takes its place.
+    var replacing by remember(shared) { mutableStateOf<ReplaceAsk?>(null) }
+
     val leave = {
-        if (sender.busy) sender.cancel() else sender.clear()
-        shares.discard()
-        onBack()
+        file?.let { sender.cancel(it.id) }
+        // Only the item on the screen is dropped: a newer one that came a moment before stays, and the chooser shows it.
+        if (shares.discard(shared)) onBack()
     }
     BackHandler(enabled = sending !is ShareSend.Sending) { leave() }
 
@@ -102,7 +110,6 @@ internal fun ShareRoute(
     val home by (host?.home ?: remember { kotlinx.coroutines.flow.MutableStateFlow(null) }).collectAsState()
     val transfers = host?.transfers
     val live = host != null && view.freshness == Freshness.Live && installed != null
-    val file = (shared as? SharedItem.File)?.snapshot
 
     val switchLocked = proService.locked(ProCapabilities.SWITCH_MACHINE, pro)
     val rows = MachineRoster.rows(machines, profile?.id, settings.chosenProfileId)
@@ -138,21 +145,24 @@ internal fun ShareRoute(
         )
     }
 
-    fun addTo(agent: ShareAgent) {
+    /** [confirmed]: the person said Replace to the question about another agent's draft. */
+    fun addTo(agent: ShareAgent, confirmed: Boolean) {
         val id = agent.terminalId
-        val words = when (shared) { is SharedItem.Text -> shared.text; is SharedItem.File -> shared.text }
-        val merged = if (words == null) draft.textFor(id) else ShareDraft.merge(draft.textFor(id), words)
-        if (merged == null) { notice = ShareDraft.TOO_LONG; return }
-        val removed = when (shared) { is SharedItem.Text -> shared.removed; is SharedItem.File -> shared.removed }
-        if (shared is SharedItem.File) {
-            val s = shared.snapshot
-            // A draft holds one attachment: the one it had, if it is another file, is replaced and its copy deleted.
-            draft.attachment?.takeIf { it.snapshotId != s.id }?.let { files.delete(it.snapshotId) }
-            onDraft { it.typed(id, merged).attached(id, DraftAttachment(s.id, s.name, s.size, s.mime)) }
-        } else onDraft { it.typed(id, merged) }
-        shares.take()
-        if (removed > 0) onNotice(ShareCopy.removed(removed))
-        onComposeAgent(id)
+        when (val plan = shareToAgent(draft, id, shared, confirmed)) {
+            is ShareToAgent.Ask -> replacing = ReplaceAsk(id, ShareReplace(agents.firstOrNull { it.terminalId == plan.other }?.title, plan.words, plan.file))
+            ShareToAgent.TooLong -> notice = ShareDraft.TOO_LONG
+            is ShareToAgent.Add -> {
+                // Taken first, and only while it is still the item on screen: a share that arrived a moment before the tap replaced this one (and deleted its
+                // file), and the chooser now shows that one instead.
+                if (!shares.take(shared)) return
+                val attachment = plan.attachment
+                plan.dropped?.let { files.delete(it) }
+                onDraft { d -> d.typed(id, plan.text).let { if (attachment != null) it.attached(id, attachment) else it } }
+                val removed = when (shared) { is SharedItem.Text -> shared.removed; is SharedItem.File -> shared.removed }
+                if (removed > 0) onNotice(ShareCopy.removed(removed))
+                onComposeAgent(id)
+            }
+        }
     }
 
     val ui = ShareChooserUi(
@@ -162,13 +172,21 @@ internal fun ShareRoute(
         dropFolder = if (live && file != null && transfers != null) profile?.dropFolderValue else null,
         busy = sending is ShareSend.Sending, notice = notice,
         result = (sending as? ShareSend.Done)?.let { ShareResult(it.ok, it.message, it.path) },
+        replace = replacing?.question,
     )
     ShareChooser(
         ui,
         ShareChooserActions(
             onBack = leave,
             onMachine = { m -> rows.firstOrNull { it.id == m.id }?.let { switchMachine(proService, machineBook, appScope, it, onNotice) } },
-            onAgent = { a -> if (a.reason == null) addTo(a) },
+            onAgent = { a -> if (a.reason == null) addTo(a, confirmed = false) },
+            onReplace = {
+                val asked = replacing?.terminalId
+                replacing = null
+                // The agent is looked up again: it may have gone, or stopped taking a prompt, while the question was up.
+                agents.firstOrNull { it.terminalId == asked && it.reason == null }?.let { addTo(it, confirmed = true) }
+            },
+            onKeep = { replacing = null },
             onFolder = { f ->
                 val p = profile
                 if (file != null && transfers != null && host != null && p != null) sender.toFolder(transfers, p.hostId, host.sessionName, f.path, file)
@@ -180,19 +198,55 @@ internal fun ShareRoute(
             onDismissNotice = { notice = null },
             onCopyPath = { path -> onNotice(if (copyPath(context, path)) ShareRouteCopy.PATH_COPIED else ShareRouteCopy.NO_PATH) },
             onUsePath = { path ->
-                // The path becomes the waiting item, so the chooser now lists agents; the file's own snapshot goes with the item it replaces.
+                // The path becomes the waiting item in this item's place, so the chooser now lists agents; the file's own snapshot goes with the item it replaces.
+                // A newer share that already took its place is left as it is.
                 val cleaned = SafeText.cleanPrompt(path).text
-                sender.clear()
-                if (cleaned.isNotBlank()) shares.offer(SharedItem.Text(cleaned)) else shares.discard()
+                file?.let { sender.clear(it.id) }
+                if (shares.discard(shared) && cleaned.isNotBlank()) shares.offer(SharedItem.Text(cleaned))
             },
             onCloseResult = {
                 val ok = (sending as? ShareSend.Done)?.ok == true
-                sender.clear()
-                if (ok) { shares.discard(); onBack() }
+                file?.let { sender.clear(it.id) }
+                // A sent file's item goes with its result; never a newer share that took its place.
+                if (ok && shares.discard(shared)) onBack()
             },
         ),
     )
-    (sending as? ShareSend.Sending)?.let { TransferSheet(TransferUi(it.name, it.sent, it.total, TransferWay.ToMachine), onCancel = { sender.cancel() }) }
+    (sending as? ShareSend.Sending)?.let { s -> TransferSheet(TransferUi(s.name, s.sent, s.total, TransferWay.ToMachine), onCancel = { sender.cancel(s.item) }) }
+}
+
+/** The question up, for the agent [terminalId] the person chose. */
+private data class ReplaceAsk(val terminalId: String, val question: ShareReplace)
+
+/** What choosing an agent for a shared item does to the one prompt draft the app holds. */
+internal sealed interface ShareToAgent {
+    /** The draft holds unsent words or a file for [other], another agent: nothing changes until the person says Replace. */
+    data class Ask(val other: String, val words: Boolean, val file: Boolean) : ShareToAgent
+
+    /** The shared text and the words already there would pass the prompt limit together: nothing changes ([ShareDraft.TOO_LONG]). */
+    data object TooLong : ShareToAgent
+
+    /** The draft becomes [text] for the agent, waiting with [attachment] when a file was shared; [dropped] is the snapshot the draft lets go of, to delete. */
+    data class Add(val text: String, val attachment: DraftAttachment?, val dropped: String?) : ShareToAgent
+}
+
+/**
+ * [ShareDraft]'s rule (nothing the person wrote is lost or overwritten by a share) over the whole draft. The app holds one prompt draft, one agent's words and
+ * file, so adding a share for [id] while it is another agent's would drop those words and delete that file: unless [confirmed], that is asked first. The agent's
+ * own draft is merged into and never asked about.
+ */
+internal fun shareToAgent(draft: PromptDraft, id: String, shared: SharedItem, confirmed: Boolean): ShareToAgent {
+    val other = draft.terminalId?.takeIf { it != id }
+    val words = draft.text.isNotBlank()
+    val file = draft.attachment != null
+    if (other != null && (words || file) && !confirmed) return ShareToAgent.Ask(other, words, file)
+    val sharedText = when (shared) { is SharedItem.Text -> shared.text; is SharedItem.File -> shared.text }
+    val text = if (sharedText == null) draft.textFor(id) else ShareDraft.merge(draft.textFor(id), sharedText) ?: return ShareToAgent.TooLong
+    val attachment = (shared as? SharedItem.File)?.snapshot?.let { DraftAttachment(it.id, it.name, it.size, it.mime) }
+    // A draft holds one attachment: the one it had goes, and its copy is deleted, when the new draft does not keep it (another file took its place, or the
+    // draft is now another agent's).
+    val kept = attachment ?: draft.attachmentFor(id)
+    return ShareToAgent.Add(text, attachment, dropped = draft.attachment?.snapshotId?.takeIf { it != kept?.snapshotId })
 }
 
 /** The path is cleaned as a prompt is (SEC-3) and never marked: a place on a machine is not a secret. */

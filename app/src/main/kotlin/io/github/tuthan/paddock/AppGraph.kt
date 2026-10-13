@@ -41,6 +41,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import io.github.tuthan.paddock.files.IncomingFiles
 import io.github.tuthan.paddock.files.TransferCache
+import io.github.tuthan.paddock.files.UploadProgress
+import io.github.tuthan.paddock.files.filesInUse
 import io.github.tuthan.paddock.hostprofile.PairingInbox
 import io.github.tuthan.paddock.lifecycle.TransferHold
 import io.github.tuthan.paddock.identity.HostProfileId
@@ -214,8 +216,15 @@ class AppGraph(private val app: Application) {
     val shares = ShareInbox { item -> (item as? SharedItem.File)?.let { incoming.delete(it.snapshot.id) } }
     private val shareIntake = ShareIntake(app, incoming)
 
+    /** How far the composer's upload has got, per agent: the graph's, so the progress and its Cancel outlive the composer's screen. */
+    val uploads = UploadProgress()
+
     /** Sends a shared file to a folder or the drop folder with no agent (Phase 15, X10, X13); in the graph's scope, so turning the phone does not cut it. */
-    val shareSender = ShareSender(scope, incoming::source)
+    val shareSender = ShareSender(scope, incoming::source).also { s ->
+        // A send and its result belong to the item they sent: when another item takes its place (a new share while it was sending, or while its result was up),
+        // the old send stops and its result is forgotten, whether or not the chooser is on screen.
+        scope.launch { s.follow(shares.pending) }
+    }
 
     /** What the last share said when it was refused or when its text lost characters; the root shows it once. */
     val shareNotice = MutableStateFlow<String?>(null)
@@ -429,11 +438,13 @@ class AppGraph(private val app: Application) {
     }
 
     /**
-     * Deletes what the file features left in the cache: a snapshot the draft does not name once it is past its grace, anything past a day. [referenced] is the
-     * snapshot the draft holds, read after the saved state is restored, so a draft that survived a process death keeps its file.
+     * Deletes what the file features left in the cache: a snapshot nothing names once it is past its grace, anything past a day. [draftAttachment] is the
+     * snapshot the draft holds, read after the saved state is restored, so a draft that survived a process death keeps its file; a share waiting in the chooser
+     * keeps its own ([filesInUse]).
      */
-    fun sweepFiles(referenced: Set<String>) {
-        scope.launch(Dispatchers.IO) { runCatching { transferCache.sweep(referenced) } }
+    fun sweepFiles(draftAttachment: String?) {
+        val keep = filesInUse(draftAttachment, shares.pending.value)
+        scope.launch(Dispatchers.IO) { runCatching { transferCache.sweep(keep) } }
     }
 
     /** The one imported-key slot: importing again replaces the key, and profiles that use it keep working. */

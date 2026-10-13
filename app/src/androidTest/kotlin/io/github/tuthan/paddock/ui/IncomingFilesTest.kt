@@ -27,6 +27,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -190,6 +191,37 @@ class IncomingFilesTest {
         assertEquals(Intake.Refused(IntakeRefusal.Unreadable), runBlocking { f.take(Uri.parse("content://x/y"), "a.jpg") })
         val g = IncomingFiles(ctx, cache, admit, open = { throw SecurityException("no grant") })
         assertEquals(Intake.Refused(IntakeRefusal.Unreadable), runBlocking { g.take(Uri.parse("content://x/y"), "a.jpg") })
+    }
+
+    /**
+     * A sender's provider is another app's code, and binder carries its unchecked exceptions back to the caller. Whether it throws on the open or partway
+     * through the read, the share is a file Paddock could not read: never a crash of the graph's scope (which has no handler), and no snapshot left behind.
+     */
+    @Test fun aSendersProviderThatThrowsAnyUncheckedExceptionIsUnreadableAndLeavesNothing() {
+        val thrown = listOf(IllegalStateException("provider"), NullPointerException("provider"), UnsupportedOperationException("provider"), IndexOutOfBoundsException("provider"))
+        for (e in thrown) {
+            val atOpen = UUID.randomUUID().toString()
+            val opens = IncomingFiles(ctx, cache, admit, open = { throw e }, newId = { atOpen })
+            assertEquals("on the open: $e", Intake.Refused(IntakeRefusal.Unreadable), runBlocking { opens.take(Uri.parse("content://x/y"), "a.jpg") })
+            assertNull("on the open: $e: no snapshot is left", cache.existingSnapshotDir(atOpen))
+
+            val atRead = UUID.randomUUID().toString()
+            val failing = object : InputStream() {
+                private var calls = 0
+                override fun read(): Int = throw e
+                override fun read(b: ByteArray, off: Int, len: Int): Int { if (calls++ > 0) throw e; java.util.Arrays.fill(b, off, off + len, 7); return len }
+            }
+            val reads = IncomingFiles(ctx, cache, admit, open = { failing }, newId = { atRead })
+            assertEquals("on the read: $e", Intake.Refused(IntakeRefusal.Unreadable), runBlocking { reads.take(Uri.parse("content://x/y"), "a.jpg") })
+            assertNull("on the read: $e: no snapshot is left", cache.existingSnapshotDir(atRead))
+        }
+    }
+
+    @Test fun aCancellationDuringTheCopyIsNotTakenForAnUnreadableFileAndStillLeavesNothing() {
+        val id = UUID.randomUUID().toString()
+        val f = IncomingFiles(ctx, cache, admit, open = { throw kotlinx.coroutines.CancellationException("stopped") }, newId = { id })
+        assertThrows(java.util.concurrent.CancellationException::class.java) { runBlocking { f.take(Uri.parse("content://x/y"), "a.jpg") } }
+        assertNull(cache.existingSnapshotDir(id))
     }
 
     @Test fun aSweptSnapshotHasNoSourceNoFileAndNoSnapshot() {

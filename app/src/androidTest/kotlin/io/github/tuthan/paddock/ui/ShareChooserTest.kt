@@ -25,6 +25,8 @@ import io.github.tuthan.paddock.ui.screens.ShareChooserActions
 import io.github.tuthan.paddock.ui.screens.ShareChooserUi
 import io.github.tuthan.paddock.ui.screens.ShareFolder
 import io.github.tuthan.paddock.ui.screens.ShareMachine
+import io.github.tuthan.paddock.ui.screens.ShareReplace
+import io.github.tuthan.paddock.ui.screens.ShareReplaceCopy
 import io.github.tuthan.paddock.ui.screens.ShareResult
 import io.github.tuthan.paddock.ui.screens.ShareSummary
 import io.github.tuthan.paddock.ui.theme.PaddockTheme
@@ -46,6 +48,7 @@ class ShareChooserTest {
     private class Calls {
         val machines = mutableListOf<String>(); val agents = mutableListOf<String>(); val folders = mutableListOf<String>()
         var drop = 0; var back = 0; var dismiss = 0; val copied = mutableListOf<String>(); val used = mutableListOf<String>(); var closed = 0
+        var replaced = 0; var kept = 0
     }
 
     private var ui by mutableStateOf(ShareChooserUi(summary, listOf(watched, other), live = true, agents = agents, folders = folders, dropFolder = "~/Paddock"))
@@ -61,6 +64,7 @@ class ShareChooserTest {
                         ShareChooserActions(
                             onBack = { calls.back++ }, onMachine = { calls.machines += it.id }, onAgent = { calls.agents += it.terminalId }, onFolder = { calls.folders += it.path },
                             onDrop = { calls.drop++ }, onDismissNotice = { calls.dismiss++ }, onCopyPath = { calls.copied += it }, onUsePath = { calls.used += it }, onCloseResult = { calls.closed++ },
+                            onReplace = { calls.replaced++ }, onKeep = { calls.kept++ },
                         ),
                     )
                 }
@@ -154,6 +158,51 @@ class ShareChooserTest {
         show(ShareChooserUi(summary, listOf(watched), live = true, result = ShareResult(false, "That name is not allowed in a drop folder.")))
         rule.onNodeWithText("Not sent").assertIsDisplayed()
         rule.onAllNodesWithText("Copy path").assertCountEquals(0)
+    }
+
+    @Test fun aShareThatWouldReplaceAnotherAgentsDraftAsksFirstWithReplaceAndCancel() {
+        val calls = show(ui.copy(replace = ShareReplace("Fix the build", words = true, file = true)))
+        rule.onNodeWithText(ShareReplaceCopy.TITLE).assertIsDisplayed()
+        rule.onNodeWithText("Paddock holds an unsent prompt and its file for Fix the build. Adding this share replaces both.").assertIsDisplayed()
+        rule.onNodeWithText("Cancel").performClick()
+        assertEquals(1, calls.kept)
+        assertEquals("Cancel changes nothing", 0, calls.replaced)
+        rule.onNodeWithText(ShareReplaceCopy.REPLACE).performClick()
+        assertEquals(1, calls.replaced)
+        assertTrue("the question is not a choice of agent by itself", calls.agents.isEmpty())
+    }
+
+    @Test fun anAgentTheChooserDoesNotListIsAnotherAgentInTheQuestion() {
+        show(ui.copy(replace = ShareReplace(null, words = true, file = false)))
+        rule.onNodeWithText("Paddock holds an unsent prompt for another agent. Adding this share replaces it.").assertIsDisplayed()
+    }
+
+    @Test fun withNoQuestionThereIsNoDialog() {
+        show()
+        rule.onAllNodesWithText(ShareReplaceCopy.TITLE).assertCountEquals(0)
+    }
+
+    // A pane's folder and the path a send answered are the machine's words: a bidi override or a zero-width character is not drawn (the RLO would show
+    // `/home/jdoe/Paddock/gnp.exe` as `…exe.png`), but the send, Copy path and Use in a prompt get the machine's real path.
+
+    @Test fun aPanesFolderIsShownCleanedAndTheSendGetsTheRealOne() {
+        val folder = "/home/jdoe/bl​ind‮pass"
+        val calls = show(ui.copy(folders = listOf(ShareFolder(folder, "blindpass"))))
+        rule.onNodeWithText("In /home/jdoe/blindpass/.paddock/inbox/").assertIsDisplayed()
+        rule.onAllNodesWithText("In $folder/.paddock/inbox/").assertCountEquals(0)
+        rule.onNode(androidx.compose.ui.test.hasText("In /home/jdoe/blindpass/.paddock/inbox/", substring = true) and androidx.compose.ui.test.hasClickAction()).performClick()
+        assertEquals("the send uses the real folder", listOf(folder), calls.folders)
+    }
+
+    @Test fun theResultsPathIsShownCleanedAndCopyAndUseGetTheRealOne() {
+        val path = "/home/jdoe/Paddock/‮gnp.exe"
+        val calls = show(ShareChooserUi(summary, listOf(watched), live = true, result = ShareResult(true, "The file is on jdoe-arch.", path)))
+        rule.onNodeWithText("/home/jdoe/Paddock/gnp.exe").assertIsDisplayed()
+        rule.onAllNodesWithText(path).assertCountEquals(0)
+        rule.onNodeWithText("Copy path").performClick()
+        rule.onNodeWithText("Use in a prompt").performClick()
+        assertEquals(listOf(path), calls.copied)
+        assertEquals(listOf(path), calls.used)
     }
 
     @Test fun backDropsWhatWasShared() {

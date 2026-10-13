@@ -7,6 +7,7 @@ import android.net.Uri
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 
 /**
  * Handing a fetched file to another app or to a place the person chooses (Phase 15, SEC-5, SEC-6, X5). Every intent here names the file by a `content://`
@@ -43,9 +44,16 @@ object Handoff {
     }
 
     /** Copies [file] into the document at [to], replacing what it holds. False when the destination cannot be written. */
-    fun saveTo(context: Context, file: File, to: Uri): Boolean = try {
-        val out = context.contentResolver.openOutputStream(to, "wt") ?: return false
+    fun saveTo(context: Context, file: File, to: Uri): Boolean = saveTo(file) { context.contentResolver.openOutputStream(to, "wt") }
+
+    /**
+     * [saveTo] with the opening of the destination as a seam, so a test can be a provider that throws. The destination's provider is another app's code: its
+     * open or write may throw any unchecked exception (binder carries an IllegalStateException, a NullPointerException or an UnsupportedOperationException
+     * back to this caller), and each is a save that failed, never a crash.
+     */
+    internal fun saveTo(file: File, open: () -> OutputStream?): Boolean = try {
+        val out = open() ?: return false
         out.use { sink -> file.inputStream().use { it.copyTo(sink) } }
         true
-    } catch (_: IOException) { false } catch (_: SecurityException) { false } catch (_: IllegalArgumentException) { false }
+    } catch (_: IOException) { false } catch (_: RuntimeException) { false }
 }

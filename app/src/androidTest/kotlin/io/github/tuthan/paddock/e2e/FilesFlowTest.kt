@@ -30,6 +30,8 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.core.app.ActivityOptionsCompat
+import androidx.lifecycle.Lifecycle
+import io.github.tuthan.paddock.live.HostPhase
 import android.content.ClipboardManager
 import android.content.Intent
 import io.github.tuthan.paddock.ui.EXTRA_IS_SENSITIVE_KEY
@@ -60,6 +62,8 @@ import org.junit.Test
  * t5: Get. The agent's output names three files of its `.paddock/outbox/`: a link to a file outside it, a file over the cap and a small text file. A tap
  *     on each: the first two are refused with the machine's sentences, the third is read into the app's cache with the hash the script computed, and the
  *     Files list shows the outbox without the link.
+ * t6: the app is sent to the back until its connection closes (the owner's grace), then brought back. What the user had open is where it was: the Get
+ *     sheet with its file, the Select text copy, and in the composer the typed text and the Attach menu.
  */
 class FilesFlowTest {
     @get:Rule val rule: AndroidComposeTestRule<*, MainActivity> = createAndroidComposeRule<MainActivity>()
@@ -199,6 +203,26 @@ class FilesFlowTest {
         waitFor("the attachment chip") { hasNode(hasTestTag("attachment-chip")) }
     }
 
+    /**
+     * The app goes to the back (its activity stopped, as the Home button does) and stays there until its connection has closed, which the owner does a few seconds
+     * after the last screen goes; then it comes back. The test does not wait for the reconnect: the caller does, on what it expects to see.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun scenario() = (rule.activityRule as androidx.test.ext.junit.rules.ActivityScenarioRule<MainActivity>).scenario
+
+    private fun connected() = (ctx.applicationContext as PaddockApp).graph.hostUi.view.value.phase is HostPhase.Monitoring
+
+    private fun awayUntilTheConnectionCloses() {
+        scenario().moveToState(Lifecycle.State.CREATED)
+        val until = System.currentTimeMillis() + 60_000
+        while (connected()) {
+            check(System.currentTimeMillis() < until) { "the connection never closed while the app was away" }
+            Thread.sleep(250)
+        }
+        log("AWAY the connection closed while the app was away")
+        scenario().moveToState(Lifecycle.State.RESUMED)
+    }
+
     @After fun cleanUp() {
         (ctx.applicationContext as PaddockApp).graph.activityResultsOverride = null
         inserted.forEach { runCatching { ctx.contentResolver.delete(it, null, null) } }
@@ -249,7 +273,15 @@ class FilesFlowTest {
         // The link freezes the moment the part exists. The put is cut at its deadline and the row goes Unknown, but by then the app has also noticed the
         // dead link and the composer is replaced by "not available": the script waits for the row, thaws the link, and releases the test.
         checkpoint("t2-sent", timeoutMs = 240_000)
-        waitFor("the unknown attachment, once the link is back and the composer with it", 120_000) { hasNode(text("This file may already be on the machine. Read the inbox first.", substring = true)) }
+        // The composer kept its state through the reconnect (2026-10-12), so it first asks for a re-read: the connection is not the one the screen opened in.
+        val stale = "The connection was re-established since this screen opened. Re-read the agent first."
+        val unknown = "This file may already be on the machine. Read the inbox first."
+        waitFor("the composer back after the reconnect", 120_000) { hasNode(text(stale, substring = true)) || hasNode(text(unknown, substring = true)) }
+        if (hasNode(text(stale, substring = true))) {
+            shoot("stale-after-reconnect")
+            rule.onNodeWithText("Re-read").performClick()
+        }
+        waitFor("the unknown attachment, once the composer has re-read", 60_000) { hasNode(text(unknown, substring = true)) }
         rule.onNodeWithText("Send prompt").assertIsNotEnabled()
         shoot("unknown")
         waitFor("Read the inbox is offered") { hasNode(text("Read the inbox")) }
@@ -379,5 +411,45 @@ class FilesFlowTest {
         waitFor("the sheet is gone") { !hasNode(text("Get this file?")) }
         rule.onNodeWithText("Close").performClick()
         checkpoint("t5-done")
+    }
+
+    /**
+     * t6 (2026-10-12, a phone report): the connection closes a few seconds after the app leaves the front, and each screen used to drop what it had open with it.
+     * Now the Get sheet keeps its file, the Select text copy stays, and the composer keeps its text and its open Attach menu, through the app being away
+     * long enough for the connection to close and the reconnect after it.
+     */
+    @Test fun t6_whatWasOpenOutlivesTheConnectionClosingWhileTheAppIsAway() {
+        openAgentFromHome()
+        waitFor("the outbox path in the output", 60_000) { hasNode(text(".paddock/outbox/report.txt", substring = true)) }
+        tapPath(".paddock/outbox/report.txt")
+        waitFor("the offer", 30_000) { hasNode(text("Get this file?")) }
+        rule.onNodeWithText("Get").performClick()
+        waitFor("the file in hand", 60_000) { hasNode(text("Open")) && hasNode(text("Save")) }
+        awayUntilTheConnectionCloses()
+        waitFor("the Get sheet, still holding the file", 10_000) { hasNode(text("Open")) && hasNode(text("Save")) }
+        waitFor("connected again", 90_000) { connected() }
+        assertTrue("and still the Get sheet after the reconnect", hasNode(text("Open")) && hasNode(text("Save")))
+        shoot("t6-get-kept")
+        rule.onNodeWithText("Done").performClick()
+        waitFor("the sheet is gone") { !hasNode(text("Save")) }
+
+        rule.onNodeWithText("Select text").performClick()
+        waitFor("the Select text view") { hasNode(hasTestTag("SELECT_TEXT")) }
+        awayUntilTheConnectionCloses()
+        waitFor("the copy, still open", 10_000) { hasNode(hasTestTag("SELECT_TEXT")) }
+        waitFor("connected again: Re-read is on", 90_000) { hasNode(hasText("Re-read") and isEnabled()) }
+        assertTrue("and still the copy after the reconnect", hasNode(hasTestTag("SELECT_TEXT")))
+        shoot("t6-select-kept")
+        back()
+        waitFor("the Output tab") { hasNode(desc("Terminal output")) }
+
+        openComposer("kept across a reconnect")
+        rule.onNodeWithText("Attach").performClick()
+        waitFor("the Attach menu") { hasNode(text("Photo")) }
+        awayUntilTheConnectionCloses()
+        waitFor("connected again: the composer", 90_000) { hasNode(hasSetTextAction()) && hasNode(text("Photo")) }
+        assertEquals("kept across a reconnect", fieldText())
+        shoot("t6-composer-kept")
+        log("AT t6-done")
     }
 }

@@ -15,9 +15,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.platform.LocalContext
+import io.github.tuthan.paddock.files.AttachLaunchers
+import io.github.tuthan.paddock.files.UploadProgress
+import io.github.tuthan.paddock.files.displayNameOf
+import io.github.tuthan.paddock.live.MonitoredHost
+import io.github.tuthan.paddock.ops.SendController
+import io.github.tuthan.paddock.ui.screens.AttachSource
+import kotlinx.coroutines.CoroutineScope
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import io.github.tuthan.paddock.files.CountingSource
+import io.github.tuthan.paddock.files.FileTransfers
 import io.github.tuthan.paddock.files.IncomingFiles
 import io.github.tuthan.paddock.files.InboxCheck
 import io.github.tuthan.paddock.files.Intake
@@ -35,7 +46,6 @@ import io.github.tuthan.paddock.ui.screens.AttachmentUi
 import io.github.tuthan.paddock.ui.screens.Sizes
 import io.github.tuthan.paddock.ui.screens.TransferUi
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -84,19 +94,49 @@ internal val PromptDraftSaver = listSaver<PromptDraft, Any>(save = { it.saved() 
  * The prompt composer for one agent. Everything it shows is derived from the host's installed read, the journal and the
  * send controller; the text and the epoch the screen opened in survive a rotation. A send runs in the host's scope, so
  * turning the phone cannot cancel it, and a refused one keeps the text.
+ *
+ * The app lets the connection go a few seconds after it leaves the front, and this screen says "not available" until it is back. What the user had here
+ * outlives that: the text is the root's ([PromptDraft]), the connected part keeps its saved state in [keep], and the ways to attach a file (the pickers and
+ * the camera, whose results can arrive while the connection is away) sit above the connection check, with the intake in [appScope] so nothing cancels it.
  */
 @Composable
 internal fun ComposeRoute(
     hostUi: HostUiModel, prefs: SettingsController, machineBook: MachineBook, journal: OperationJournal, manualInput: ManualInputMode,
     terminalId: String?, draft: PromptDraft, onDraft: ((PromptDraft) -> PromptDraft) -> Unit,
-    files: IncomingFiles, hold: TransferHold,
+    files: IncomingFiles, hold: TransferHold, uploads: UploadProgress, appScope: CoroutineScope,
     onBack: () -> Unit, onOpenTerminal: () -> Unit, onEditSnippets: () -> Unit,
 ) {
     val view by hostUi.view.collectAsState()
-    val settings by prefs.settings.collectAsState()
-    val profile by machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
     val sends = host?.sends
+    val keep = rememberSaveableStateHolder()
+
+    // ---- Phase 15: the ways to attach a file ----
+    val app = LocalContext.current.applicationContext
+    var notice by rememberSaveable { mutableStateOf<String?>(null) }
+    val forTerminal by rememberUpdatedState(terminalId)
+    val draftNow by rememberUpdatedState(draft)
+    // A result goes to the agent whose composer started it, through the draft as it is when the snapshot is made. The intake does its reading on IO; the
+    // draft and the notice change on the main thread, as typing does, so neither write races the other.
+    val take = { intake: suspend () -> Intake ->
+        forTerminal?.let { id ->
+            appScope.launch(Dispatchers.Main.immediate) {
+                when (val r = intake()) {
+                    is Intake.Taken -> attach(files, id, draftNow.attachmentFor(id), r.snapshot, onDraft)
+                    is Intake.Refused -> notice = r.reason.sentence
+                }
+            }
+        }
+        Unit
+    }
+    val sources = rememberAttachSources(
+        hold,
+        onPicked = { uri -> take { files.take(uri, withContext(Dispatchers.IO) { displayNameOf(app, uri) }) } },
+        onCaptured = { id -> take { files.takeCapture(id) } },
+        onCameraDenied = { notice = "Camera access is off, so Paddock cannot take a photo. Choose Photo to pick one from this phone, or allow the camera in the phone's settings." },
+        onUnavailable = { source -> notice = if (source == AttachSource.Photo) "This phone has no app to pick a photo with." else "This phone has no app to pick a file with." },
+    )
+
     if (terminalId == null || host == null || sends == null) {
         Column(Modifier.fillMaxSize()) {
             ScreenHeader("Prompt", onBack = onBack, compact = true)
@@ -107,6 +147,24 @@ internal fun ComposeRoute(
         }
         return
     }
+    keep.SaveableStateProvider("compose:$terminalId") {
+        ComposeConnected(
+            host, sends, prefs, machineBook, journal, manualInput, terminalId, draft, onDraft, files, uploads, sources, notice, { notice = it },
+            onBack, onOpenTerminal, onEditSnippets,
+        )
+    }
+}
+
+/** The composer while the machine is connected: the gate, the send, the attachment chip and its upload, Esc and the re-read. */
+@Composable
+private fun ComposeConnected(
+    host: MonitoredHost, sends: SendController, prefs: SettingsController, machineBook: MachineBook, journal: OperationJournal, manualInput: ManualInputMode,
+    terminalId: String, draft: PromptDraft, onDraft: ((PromptDraft) -> PromptDraft) -> Unit, files: IncomingFiles, uploads: UploadProgress,
+    sources: AttachLaunchers, notice: String?, onNotice: (String?) -> Unit,
+    onBack: () -> Unit, onOpenTerminal: () -> Unit, onEditSnippets: () -> Unit,
+) {
+    val settings by prefs.settings.collectAsState()
+    val profile by machineBook.profile.collectAsState()
     SecureWindow(settings.protectSensitiveScreens)
     val installed by host.reconciler.installed.collectAsState()
     val freshness by host.freshness.collectAsState()
@@ -132,9 +190,10 @@ internal fun ComposeRoute(
     val key = TerminalKey(TargetRef(host.profile.hostId, host.sessionName, terminalId), openedEpoch ?: liveEpoch ?: 0L)
     val journalUnreadable by host.journalUnreadable.collectAsState()
     val attachment = draft.attachmentFor(terminalId)
+    // A cut upload holds only the prompt that would name its file (X9): a draft with no file sends as before.
     val gate = ComposerRules.gate(
         agent, installed?.readAtMillis, openedAt, freshness == Freshness.Live, records, key, text, currentEpoch = liveEpoch, journalUnreadable = journalUnreadable != null,
-        hasAttachment = attachment != null, attachmentUnknown = ComposerRules.attachmentUnknown(records, key),
+        hasAttachment = attachment != null, attachmentUnknown = attachment != null && ComposerRules.attachmentUnknown(records, key),
     )
     val outcome = outcomes[terminalId]
     // The text goes with the prompt: cleared only when herdr accepted it, kept for a refusal, a failure or an unknown outcome.
@@ -153,36 +212,13 @@ internal fun ComposeRoute(
     // ---- Phase 15: the attachment ----
     val scope = rememberCoroutineScope()
     var menuOpen by rememberSaveable { mutableStateOf(false) }
-    var notice by rememberSaveable { mutableStateOf<String?>(null) }
-    var transferring by remember { mutableStateOf(false) }
-    val sent = remember { MutableStateFlow(0L) }
-    val sentBytes by sent.collectAsState()
+    val uploading by uploads.sent.collectAsState()
     val folder = agent?.folder()
     // The thumbnail and whether the snapshot is still there are read off the main thread; a swept file shows as gone and Send is off until it is removed.
     val look by produceState<AttachmentLook?>(null, attachment?.snapshotId) {
         value = attachment?.let { a -> withContext(Dispatchers.IO) { val f = files.file(a.snapshotId); AttachmentLook(f?.let { Thumbnails.load(it)?.asImageBitmap() }, gone = f == null) } }
     }
-    val sources = rememberAttachSources(
-        hold,
-        onPicked = { uri, name ->
-            scope.launch {
-                when (val r = files.take(uri, name)) {
-                    is Intake.Taken -> attach(files, terminalId, attachment, r.snapshot, onDraft)
-                    is Intake.Refused -> notice = r.reason.sentence
-                }
-            }
-        },
-        onCaptured = { id ->
-            scope.launch {
-                when (val r = files.takeCapture(id)) {
-                    is Intake.Taken -> attach(files, terminalId, attachment, r.snapshot, onDraft)
-                    is Intake.Refused -> notice = r.reason.sentence
-                }
-            }
-        },
-        onCameraDenied = { notice = "Camera access is off, so Paddock cannot take a photo. Choose Photo to pick one from this phone, or allow the camera in the phone's settings." },
-    )
-    LaunchedEffect(running) { if (terminalId !in running) transferring = false }
+    LaunchedEffect(running) { if (terminalId !in running) uploads.ended(terminalId) }
     val attachUi = when {
         host.transfers == null -> AttachUi.Hidden
         folder == null -> AttachUi.Off(ATTACH_NOTE_OFF_NO_FOLDER)
@@ -191,7 +227,7 @@ internal fun ComposeRoute(
     val attachmentUi = attachment?.let { a ->
         AttachmentUi(a.name, Sizes.text(a.size), kindText(a.mime), look?.thumbnail, gone = look?.gone == true)
     }
-    val transferUi = if (transferring && terminalId in running && attachment != null) TransferUi(attachment.name, sentBytes, attachment.size) else null
+    val transferUi = uploading[terminalId]?.takeIf { terminalId in running && attachment != null }?.let { TransferUi(attachment!!.name, it, attachment.size) }
     var inboxNote by remember { mutableStateOf<String?>(null) }
 
     val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
@@ -219,7 +255,8 @@ internal fun ComposeRoute(
                         is InboxCheck.Present -> "The file is on the machine (${Sizes.text(c.size)}). Its prompt was not sent."
                         InboxCheck.Absent -> "The file is not on the machine. Nothing was sent."
                     }
-                    is TransferReply.Refused -> r.refusal.sentence
+                    // The agent's folder is gone (a removed worktree): no file can be there, and the check has settled the cut upload as it does for Absent.
+                    is TransferReply.Refused -> if (r.refusal in FileTransfers.PROVES_ABSENT) "The file is not on the machine: the agent's folder is not there. Nothing was sent." else r.refusal.sentence
                     is TransferReply.Failed -> "Paddock could not read the inbox: ${r.message}"
                     null -> null
                 }
@@ -238,16 +275,15 @@ internal fun ComposeRoute(
             else scope.launch {
                 val snap = files.snapshot(attachment.snapshotId, attachment.name, attachment.mime)
                 val source = files.source(attachment.snapshotId)
-                if (snap == null || source == null) { notice = "The file is no longer on this phone. Remove it and attach it again."; return@launch }
-                sent.value = 0L
-                transferring = true
-                sends.promptWithAttachment(key, text, snap, CountingSource(source) { sent.value = it }, settings.keepPromptText, folder)
+                if (snap == null || source == null) { onNotice("The file is no longer on this phone. Remove it and attach it again."); return@launch }
+                uploads.started(terminalId)
+                sends.promptWithAttachment(key, text, snap, CountingSource(source) { uploads.sent(terminalId, it) }, settings.keepPromptText, folder)
             }
         },
         onAttach = { menuOpen = true },
         onRemoveAttachment = { attachment?.let { files.delete(it.snapshotId) }; onDraft { it.detached(terminalId) }; inboxNote = null },
         onCancelTransfer = { sends.cancel(terminalId) },
-        onDismissAttachNotice = { notice = null; inboxNote = null },
+        onDismissAttachNotice = { onNotice(null); inboxNote = null },
         onBack = onBack, onEditSnippets = onEditSnippets, onOpenTerminal = onOpenTerminal, onDismissOutcome = { sends.dismiss(terminalId) },
         onReread = reread, onDismissReread = { sends.dismissReread(terminalId) },
         gateActionLabel = when { stale || block == SendBlock.NeedsReread -> "Re-read"; block == SendBlock.JournalUnreadable -> "Retry"; block == SendBlock.InboxUnread -> "Read the inbox"; else -> null },

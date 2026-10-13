@@ -1,8 +1,12 @@
 package io.github.tuthan.paddock.ui
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
@@ -188,6 +192,29 @@ class SpacesTest {
         show(state(listOf(main), start = StartAvailability.Unavailable("Connect to the machine first.")))
         rule.onNodeWithText("Connect to the machine first.").assertIsDisplayed()
         button("Start an agent…").assertDoesNotExist()
+    }
+
+    /**
+     * The app lets the connection go a few seconds after it leaves the front, and Spaces cannot start an agent until it is back. The form stays up through that on
+     * the choices it had: what was typed is kept, and Start waits with the reason. (It used to close, and came back empty.)
+     */
+    @Test fun theStartFormKeepsWhatWasTypedWhileTheMachineReconnects() {
+        var s by mutableStateOf(state(listOf(main)))
+        val actions = SpacesActions(onRefresh = {}, onStop = {}, onDelete = {}, onReread = {}, onStart = {}, onCard = { _, _ -> }, onRetryName = { _, _ -> })
+        rule.setContent { PaddockTheme(darkTheme = true) { SpacesScreen(s, actions, clock = ::clock) } }
+        button("Start an agent…").performScrollTo().performClick()
+        rule.onNodeWithText("Name").performTextInput("worker-1")
+        val why = "Starting an agent needs this phone to be watching a live session on Laptop."
+        s = state(listOf(main), start = StartAvailability.Unavailable(why))
+        rule.waitForIdle()
+        rule.onNodeWithText("Start an agent").assertExists() // the keyboard is still up from typing, so the header may be panned out of view
+        rule.onNodeWithText("Name").assert(hasText("worker-1"))
+        rule.onNodeWithText(why).performScrollTo().assertIsDisplayed()
+        button("Start agent").performScrollTo().assertIsNotEnabled()
+        s = state(listOf(main))
+        rule.waitForIdle()
+        rule.onNodeWithText("Name").assert(hasText("worker-1"))
+        button("Start agent").performScrollTo().assertIsEnabled()
     }
 
     @Test fun theStartFormNeedsAValidNameAndABranchWhenAWorktreeIsAskedFor() {

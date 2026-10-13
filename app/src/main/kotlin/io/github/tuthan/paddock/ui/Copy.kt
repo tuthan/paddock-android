@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.PersistableBundle
+import androidx.compose.ui.platform.AndroidClipboard
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.ClipEntry
 
@@ -86,14 +87,17 @@ fun clearClip(context: Context) {
 /**
  * The clipboard for Compose's own text widgets: the system toolbar's Copy in the Select text view goes through here, so it is marked like Copy all.
  * [protect] is read at each copy, so the setting changing while the view is open takes effect on the next one.
+ *
+ * It is an [AndroidClipboard], not a plain [Clipboard]: when a text field shows its toolbar, foundation 1.12 reads the platform clipboard through
+ * `getNativeClipboardManager`, which throws for any other [Clipboard], so a plain wrapper crashed the app on the first long press.
  */
-class SensitiveClipboard(private val inner: Clipboard, private val protect: () -> Boolean) : Clipboard {
+class SensitiveClipboard(private val inner: Clipboard, private val protect: () -> Boolean) : AndroidClipboard {
     override suspend fun getClipEntry(): ClipEntry? = inner.getClipEntry()
     override suspend fun setClipEntry(clipEntry: ClipEntry?) {
         if (clipEntry != null && protect()) markSensitive(clipEntry.clipData)
         inner.setClipEntry(clipEntry)
     }
-    override val nativeClipboard: ClipboardManager get() = inner.nativeClipboard
+    override val clipboardManager: ClipboardManager get() = inner.nativeClipboard
 }
 
 /** What the clipboard says about the clip it holds: its label and when it was set, never its text. */

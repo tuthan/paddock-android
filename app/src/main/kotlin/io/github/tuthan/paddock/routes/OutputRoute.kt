@@ -6,6 +6,8 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import io.github.tuthan.paddock.output.OutputFeed
 import io.github.tuthan.paddock.files.ApkCheck
 import io.github.tuthan.paddock.files.ApkNotes
 import io.github.tuthan.paddock.files.FileTransfers
@@ -95,7 +97,39 @@ internal fun OutputRoute(
     val settings by prefs.settings.collectAsState()
     val profile by machineBook.profile.collectAsState()
     val host = (view.phase as? HostPhase.Monitoring)?.host
-    if (terminalId == null || host == null) {
+    val ctx = LocalContext.current
+    val activity = remember(ctx) { generateSequence(ctx) { (it as? android.content.ContextWrapper)?.baseContext }.firstOrNull { it is android.app.Activity } as? android.app.Activity }
+    val now = rememberNow()
+    // What the user had open here outlives the connection, which the app lets go a few seconds after it leaves the front: the Select text copy and the Get
+    // sheet are the machine's and the agent's (keyed by the machine's id, not by one connection), and the connected part below keeps its saved state in [keep]
+    // while the screen says the machine is not connected. `selecting` is saved (the view comes back after a rotation, held by `selections`); after a process death
+    // it is restored with no copy behind it, so the Output tab comes back instead.
+    val keep = rememberSaveableStateHolder()
+    var selecting by rememberSaveable(terminalId) { mutableStateOf(false) }
+    var outboxOpen by rememberSaveable(terminalId) { mutableStateOf(false) }
+    val machineId = profile?.id
+    val agentKey = remember(machineId, terminalId) { machineId to terminalId }
+    val holder = if (selecting) remember(agentKey, selecting) { selections.current(agentKey) } else null
+    LaunchedEffect(selecting, holder) { if (selecting && holder == null) selecting = false }
+    DisposableEffect(holder) {
+        onDispose { holder?.let { selections.release(it, recreating = activity?.isChangingConfigurations == true) } }
+    }
+    // Phase 15, Get: paths the agent printed are links and the agent has a Files list. The controller asks for the watched machine's transfers at each look and read.
+    val getter = if (machineId != null && terminalId != null) remember(agentKey) {
+        val app = ctx.applicationContext
+        gets.acquire(agentKey) {
+            GetController(
+                CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+                transfers = { (hostUi.view.value.phase as? HostPhase.Monitoring)?.host?.takeIf { it.profile.id == machineId }?.transfers },
+                transferCache, machineId,
+                apk = { f -> ApkNotes.lines(ApkCheck.read(app, f), app.packageName, ApkCheck.ownSigners(app)) },
+            )
+        }
+    } else null
+    DisposableEffect(getter) {
+        onDispose { getter?.let { gets.release(it, recreating = activity?.isChangingConfigurations == true) } }
+    }
+    if (terminalId == null || (host == null && holder == null)) {
         // The connection is not up (or the app was restored without one): say so and offer the way back.
         Column(Modifier.fillMaxSize()) {
             ScreenHeader("Agent", onBack = onBack, compact = true)
@@ -104,112 +138,107 @@ internal fun OutputRoute(
                 PaddockButton("Back to the herd", onBack, kind = ButtonKind.Secondary, icon = PaddockIcons.Back)
             }
         }
-        return
-    }
-    SecureWindow(settings.protectSensitiveScreens)
-    val feed = remember(host, terminalId) { host.outputFeed(terminalId) }
-    val owner = LocalContext.current as? LifecycleOwner
-    var resumed by remember(feed) { mutableStateOf(false) }
-    DisposableEffect(feed, owner) {
-        feed.start()
-        val observer = LifecycleEventObserver { _, e ->
-            when (e) { Lifecycle.Event.ON_RESUME -> resumed = true; Lifecycle.Event.ON_PAUSE -> resumed = false; else -> Unit }
+    } else {
+        SecureWindow(settings.protectSensitiveScreens)
+        // Polling needs the screen in the foreground and the Output tab shown: the Terminal tab streams on its own. The Select text view shows a frozen copy, so
+        // the feed reads nothing while it is open. There is no feed while the machine is not connected.
+        val feed = if (host != null) remember(host, terminalId) { host.outputFeed(terminalId) } else null
+        val owner = LocalContext.current as? LifecycleOwner
+        var resumed by remember(feed) { mutableStateOf(false) }
+        DisposableEffect(feed, owner) {
+            if (feed == null) return@DisposableEffect onDispose { }
+            feed.start()
+            val observer = LifecycleEventObserver { _, e ->
+                when (e) { Lifecycle.Event.ON_RESUME -> resumed = true; Lifecycle.Event.ON_PAUSE -> resumed = false; else -> Unit }
+            }
+            owner?.lifecycle?.addObserver(observer)
+            if (owner?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == true) resumed = true
+            onDispose { owner?.lifecycle?.removeObserver(observer); feed.setVisible(false); feed.stop() }
         }
-        owner?.lifecycle?.addObserver(observer)
-        if (owner?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == true) resumed = true
-        onDispose { owner?.lifecycle?.removeObserver(observer); feed.setVisible(false); feed.stop() }
-    }
-    // Polling needs the screen in the foreground and the Output tab shown: the Terminal tab streams on its own.
-    // The Select text view shows a frozen copy, so the feed reads nothing while it is open. `selecting` is saved (the view comes back after a rotation, held by
-    // `selections`); after a process death it is restored with no copy behind it, so the Output tab comes back instead.
-    var selecting by rememberSaveable(terminalId) { mutableStateOf(false) }
-    val outputShown = outputFeedVisible(resumed, tab, selecting)
-    LaunchedEffect(feed, outputShown) { feed.setVisible(outputShown) }
-    val output by feed.state.collectAsState()
-    val following by feed.following.collectAsState()
-    val home by host.home.collectAsState()
-    val now = rememberNow()
-    val row: AgentRowModel? = home?.rows?.firstOrNull { it.key.target.terminalId == terminalId }
-    // "claude · api › tab 2 · main · laptop": what it is, where, which session, which machine.
-    val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host.sessionName, profile?.name).joinToString(" · ")
-    val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
-    val focus = focusView(host, terminalId)
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    // Phase 15, Get: paths the agent printed are links and the agent has a Files list, wherever the machine can transfer and herdr reports the agent's folder.
-    val transfers = host.transfers
-    val getKey = remember(host, terminalId) { host to terminalId }
-    val getter = if (transfers != null) remember(getKey) {
-        gets.acquire(getKey) {
-            GetController(
-                CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), transfers, transferCache, host.profile.id,
-                apk = { f -> ApkNotes.lines(ApkCheck.read(ctx, f), ctx.packageName, ApkCheck.ownSigners(ctx)) },
+        val outputShown = outputFeedVisible(resumed, tab, selecting)
+        LaunchedEffect(feed, outputShown) { feed?.setVisible(outputShown) }
+        val output = if (feed != null) feed.state.collectAsState().value else null
+        val home = if (host != null) host.home.collectAsState().value else null
+        val row: AgentRowModel? = home?.rows?.firstOrNull { it.key.target.terminalId == terminalId }
+        // "claude · api › tab 2 · main · laptop": what it is, where, which session, which machine.
+        val context = listOfNotNull(row?.agentKind, row?.context?.ifEmpty { null }, host?.sessionName, profile?.name).joinToString(" · ")
+        val header = AgentHeader(row?.title ?: "Agent", context, row?.state ?: StateWord.Unknown, row?.observedAtMillis, agentKind = row?.agentKind)
+        val openSelect = { shown: OutputState.Showing, startLine: Int? -> selections.acquire(agentKey) { SelectHolder(shown, startLine, header.title) }; selecting = true }
+        if (holder != null) {
+            val scope = rememberCoroutineScope()
+            var reReading by remember { mutableStateOf(false) }
+            val snap by holder.snapshot.collectAsState()
+            val since = when (output) { OutputState.AgentGone -> Since.AgentExited; OutputState.PaneGone -> Since.TerminalClosed; else -> null }
+            val readAtTime = remember(snap.readAtMillis) { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(snap.readAtMillis)) }
+            BackHandler { selecting = false }
+            SelectText(
+                holder.title, snap, readAtTime, since, settings.protectSensitiveScreens, holder.startLine, reReading,
+                onCopyAll = { fit ->
+                    val said = if (copyText(ctx, CopyKind.Output, fit.text, settings.protectSensitiveScreens)) copyNotice(Build.VERSION.SDK_INT, fit.lines.size, fit.cut, fit.leftOut) else CopyWords.COULD_NOT
+                    said?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
+                },
+                onShare = { fit -> ctx.startActivity(Intent.createChooser(commandShareIntent(fit.text), "Share the output")) },
+                onReRead = {
+                    val f = feed
+                    if (!reReading && f != null) scope.launch {
+                        reReading = true
+                        try {
+                            if (f.readOnce()) (f.state.value as? OutputState.Showing)?.let { holder.snapshot.value = it }
+                            else holder.snapshot.value = holder.snapshot.value.copy(stale = true)
+                        } finally { reReading = false }
+                    }
+                },
+                onClose = { selecting = false },
+                connected = feed != null,
+            )
+        } else keep.SaveableStateProvider("output:$terminalId") {
+            OutputConnected(
+                host!!, feed!!, output, header, settings.protectSensitiveScreens, settings.desktopFocusConfirmed, prefs, proService, manualInput, terminals, getter,
+                terminalId, tab, now, onTab, onBack, onCompose, onDecision, outboxOpen = outboxOpen, onOutbox = { outboxOpen = it }, openSelect = openSelect,
             )
         }
-    } else null
+    }
+    // One place for the Get sheet, over the outbox list and over the screen whatever it shows, so its Save launcher is the same one when the connection comes back.
+    if (getter != null) GetSheetHost(getter, transferHold, now)
+}
+
+/** The part of the agent screen that needs the connection: the Output and Terminal tabs, the desktop focus, Manual input, the permission entry and the Files list. */
+@Composable
+private fun OutputConnected(
+    host: MonitoredHost, feed: OutputFeed, output: OutputState?, header: AgentHeader, protect: Boolean, desktopFocusConfirmed: Boolean, prefs: SettingsController,
+    proService: ProService, manualInput: ManualInputMode, terminals: Retained<TerminalSession>, getter: GetController?, terminalId: String, tab: AgentTab, now: Long,
+    onTab: (AgentTab) -> Unit, onBack: () -> Unit, onCompose: () -> Unit, onDecision: () -> Unit,
+    outboxOpen: Boolean, onOutbox: (Boolean) -> Unit, openSelect: (OutputState.Showing, Int?) -> Unit,
+) {
+    val ctx = LocalContext.current
+    val following by feed.following.collectAsState()
+    val focus = focusView(host, terminalId)
+    val transfers = host.transfers
     val getFolder = focus.folder
     val getAgentKey = focus.key
-    val canGet = getter != null && getFolder != null && getAgentKey != null
-    val selectKey = remember(host, terminalId) { host to terminalId }
-    val holder = if (selecting) remember(selectKey, selecting) { selections.current(selectKey) } else null
-    LaunchedEffect(selecting, holder) { if (selecting && holder == null) selecting = false }
-    val activity = remember(ctx) { generateSequence(ctx) { (it as? android.content.ContextWrapper)?.baseContext }.firstOrNull { it is android.app.Activity } as? android.app.Activity }
-    DisposableEffect(holder) {
-        onDispose { holder?.let { selections.release(it, recreating = activity?.isChangingConfigurations == true) } }
-    }
-    DisposableEffect(getter) {
-        onDispose { getter?.let { gets.release(it, recreating = activity?.isChangingConfigurations == true) } }
-    }
-    var outboxOpen by rememberSaveable(terminalId) { mutableStateOf(false) }
+    val canGet = getter != null && transfers != null && getFolder != null && getAgentKey != null
     var outboxVersion by remember { mutableStateOf(0) }
     var outbox by remember { mutableStateOf<OutboxUi>(OutboxUi.Reading) }
-    LaunchedEffect(outboxOpen, outboxVersion, getFolder) {
+    LaunchedEffect(outboxOpen, outboxVersion, getFolder, transfers) {
         if (outboxOpen && transfers != null && getFolder != null) {
             outbox = OutboxUi.Reading
             outbox = readOutbox(transfers, getFolder, now = { System.currentTimeMillis() })
         }
     }
-    var reReading by remember { mutableStateOf(false) }
-    val openSelect = { shown: OutputState.Showing, startLine: Int? -> selections.acquire(selectKey) { SelectHolder(shown, startLine) }; selecting = true }
     // A permission request the hook published for this agent: the entry above the output opens the sheet. Nothing here can answer it.
     // The entry is the only reader of the request, and it is not offered without Pro (below), so without Pro the host's request files are not polled over SSH
     // and there is no decision here at all. `locked` is read from state: when Pro appears the watch starts without the screen restarting.
     val pro by proService.view.collectAsState()
     val answersLocked = proService.locked(ProCapabilities.GUARDED_ANSWERS, pro)
     val decision = rememberDecision(host, terminalId, now, watch = !answersLocked)?.takeIf { !answersLocked }
-    if (holder != null) {
-        val snap by holder.snapshot.collectAsState()
-        val since = when (output) { OutputState.AgentGone -> Since.AgentExited; OutputState.PaneGone -> Since.TerminalClosed; else -> null }
-        val readAtTime = remember(snap.readAtMillis) { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(snap.readAtMillis)) }
-        BackHandler { selecting = false }
-        SelectText(
-            header.title, snap, readAtTime, since, settings.protectSensitiveScreens, holder.startLine, reReading,
-            onCopyAll = { fit ->
-                val said = if (copyText(ctx, CopyKind.Output, fit.text, settings.protectSensitiveScreens)) copyNotice(Build.VERSION.SDK_INT, fit.lines.size, fit.cut, fit.leftOut) else CopyWords.COULD_NOT
-                said?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
-            },
-            onShare = { fit -> ctx.startActivity(Intent.createChooser(commandShareIntent(fit.text), "Share the output")) },
-            onReRead = {
-                if (!reReading) scope.launch {
-                    reReading = true
-                    try {
-                        if (feed.readOnce()) (feed.state.value as? OutputState.Showing)?.let { holder.snapshot.value = it }
-                        else holder.snapshot.value = holder.snapshot.value.copy(stale = true)
-                    } finally { reReading = false }
-                }
-            },
-            onClose = { selecting = false },
-        )
-        return
-    }
     // The tap checks the gate again, as for the keys; the first time ever it asks what focus does.
-    FocusGuard(settings.desktopFocusConfirmed, onConfirmed = prefs::setDesktopFocusConfirmed, focus = { focus.key?.takeIf { focus.gate is OperationGate.Open }?.let { host.sends?.focus(it) } }) { requestFocus ->
+    FocusGuard(desktopFocusConfirmed, onConfirmed = prefs::setDesktopFocusConfirmed, focus = { focus.key?.takeIf { focus.gate is OperationGate.Open }?.let { host.sends?.focus(it) } }) { requestFocus ->
         val manual = rememberManualInput(
             manualInput, host, terminalId, focus.gate, now, (output as? OutputState.Showing)?.lines?.map { it.text },
             onOpenTerminal = { onTab(AgentTab.Terminal) }, onFocus = requestFocus,
         )
         AgentOutput(
-            header, output, following, now, tab, onTab, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() },
+            header, output ?: OutputState.Loading, following, now, tab, onTab, onBack, onUserScrolledUp = { feed.userScrolledUp() }, onResumeFollowing = { feed.resumeFollowing() },
             terminal = { TerminalRoute(terminals, host, terminalId) },
             onCompose = if (host.sends != null) onCompose else null,
             manualInput = manual?.first, manualActions = manual?.second,
@@ -218,27 +247,25 @@ internal fun OutputRoute(
             decision = decision?.entry, onOpenDecision = { decision?.answers?.review(terminalId); onDecision() },
             onSelectText = (output as? OutputState.Showing)?.let { shown -> { openSelect(shown, null) } },
             onPath = if (canGet) { token -> getter!!.look(getFolder!!, getAgentKey!!, token) } else null,
-            onFiles = if (canGet) { { outboxOpen = true } } else null,
+            onFiles = if (canGet) { { onOutbox(true) } } else null,
             onLineAction = { captured, index, action ->
-                val shown = output as? OutputState.Showing
                 when (action) {
-                    LineAction.SelectFromHere -> if (shown != null) openSelect(shown.copy(lines = captured), index)
+                    LineAction.SelectFromHere -> if (output is OutputState.Showing) openSelect(output.copy(lines = captured), index)
                     LineAction.CopyLine, LineAction.CopyToNewest -> {
                         val fit = OutputCopy.fit(if (action == LineAction.CopyLine) listOf(captured[index]) else captured.subList(index, captured.size))
-                        val said = if (copyText(ctx, CopyKind.Output, fit.text, settings.protectSensitiveScreens)) copyNotice(Build.VERSION.SDK_INT, fit.lines.size, fit.cut, fit.leftOut) else CopyWords.COULD_NOT
+                        val said = if (copyText(ctx, CopyKind.Output, fit.text, protect)) copyNotice(Build.VERSION.SDK_INT, fit.lines.size, fit.cut, fit.leftOut) else CopyWords.COULD_NOT
                         said?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
                     }
                 }
             },
         )
-        // The outbox list, then the Get sheet over it (a tap on a row, or on a path in the output).
+        // The outbox list; the Get sheet opens over it (the route draws it after this part).
         if (canGet && outboxOpen) OutboxSheet(
             outbox,
             onGet = { row -> getter!!.lookAtPath(getFolder!!, getAgentKey!!, "${getFolder.trimEnd('/')}/.paddock/outbox/${row.key}") },
             onReRead = { outboxVersion++ },
-            onClose = { outboxOpen = false },
+            onClose = { onOutbox(false) },
         )
-        if (getter != null) GetSheetHost(getter, transferHold, now)
     }
 }
 

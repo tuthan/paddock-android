@@ -81,8 +81,10 @@ enum class OperationOutcome { Requested, NotSent, Sent, Acknowledged, Rejected, 
  * [requestId] is the hook-minted id of the permission request an [OperationKind.Allow] or [OperationKind.Deny] answered, so
  * a lost answer can be settled later from the host's request files; it is null for every other kind.
  * [path] and [size] describe the file of an [OperationKind.Attachment] or [OperationKind.Fetch] (where it was written or read, and how long it is;
- * its SHA-256 is [payloadSha256]); they are never the content. [textSha256] is, on a prompt that carries an attachment, the hash of the user's
+ * its SHA-256 is [payloadSha256]); they are never the content. On a prompt that carries an attachment they are the file its phrase names, so the
+ * draft can tell which file went. [textSha256] is, on a prompt that carries an attachment, the hash of the user's
  * own text without the phrase line before it (X12): the draft compares that one, because [payloadSha256] covers the phrase too.
+ * [inboxSize] is what reading the inbox found for a cut attachment: the size of the file under [path], null when none was there or it was not read.
  */
 @Serializable
 data class OperationRecord(
@@ -106,6 +108,7 @@ data class OperationRecord(
     val path: String? = null,
     val size: Long? = null,
     val textSha256: String? = null,
+    val inboxSize: Long? = null,
 ) {
     val inFlight get() = outcome == OperationOutcome.Requested || outcome == OperationOutcome.Sent
     /** True when the row is about a terminal (an agent); false for a session, workspace, tab, pane, saga or drop row (Phase 09, Phase 15). */
@@ -274,12 +277,15 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
     /** The request was written and the answer was lost with the link. */
     fun unknown(id: Long, note: String = ""): OperationRecord = move(id, OperationOutcome.Unknown, mustPersist = false) { it.copy(note = note.take(MAX_NOTE)) }
 
-    /** The user re-read the terminal after an unknown outcome. The row stays unknown; it no longer blocks the terminal. */
-    fun resolve(id: Long, note: String = ""): OperationRecord = synchronized(lock) {
+    /**
+     * The user re-read the terminal after an unknown outcome. The row stays unknown; it no longer blocks the terminal. A cut attachment is settled by
+     * reading its inbox instead, and [inboxSize] is the size of the file found there, if one was ([OperationRecord.inboxSize]).
+     */
+    fun resolve(id: Long, note: String = "", inboxSize: Long? = null): OperationRecord = synchronized(lock) {
         val row = find(id)
         if (row.outcome != OperationOutcome.Unknown) throw IllegalOutcomeTransition(id, row.outcome, row.outcome)
         if (row.resolvedAt != null) return row
-        val next = row.copy(resolvedAt = clock.nowMillis(), note = note.take(MAX_NOTE).ifEmpty { row.note })
+        val next = row.copy(resolvedAt = clock.nowMillis(), note = note.take(MAX_NOTE).ifEmpty { row.note }, inboxSize = inboxSize)
         commit(replace(next), mustPersist = false)
         next
     }

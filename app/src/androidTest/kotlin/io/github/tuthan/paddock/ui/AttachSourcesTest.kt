@@ -71,7 +71,7 @@ class AttachSourcesTest {
         rule.setContent {
             CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
                 val sources = rememberAttachSources(
-                    hold, onPicked = { uri, _ -> seen.picked += uri }, onCaptured = { seen.captured += it }, onCameraDenied = { seen.denied++ }, onNothing = { seen.nothing++ },
+                    hold, onPicked = { uri -> seen.picked += uri }, onCaptured = { seen.captured += it }, onCameraDenied = { seen.denied++ }, onNothing = { seen.nothing++ },
                     cameraGranted = { cameraGranted },
                 )
                 Column { Text("go", Modifier.clickable { sources.launch(source) }) }

@@ -143,7 +143,8 @@ private fun DropFolderDialog(ui: DropFolderUi, actions: DropFolderActions) {
     val value = text.trim()
     val told = ui.told?.takeIf { it.forValue == value }
     val valid = value.isEmpty() || HostProfile.validDropFolder(value)
-    val canCheck = valid && value.isNotEmpty() && !ui.asking
+    // The sheet stays open while the connection is away (the app lets it go a few seconds after it leaves the front): what was typed is kept, and Check waits.
+    val canCheck = valid && value.isNotEmpty() && !ui.asking && ui.askable
     val canSave = (value.isEmpty() || told?.ok == true) && !ui.asking
     Dialog(onDismissRequest = actions.onCloseEdit, properties = DialogProperties(dismissOnClickOutside = false, usePlatformDefaultWidth = false)) {
         Column(
@@ -158,6 +159,7 @@ private fun DropFolderDialog(ui: DropFolderUi, actions: DropFolderActions) {
                 keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done, onDone = { if (canCheck) actions.onCheck(value) }, placeholder = HostProfile.DEFAULT_DROP_FOLDER, mono = true,
             )
             when {
+                !ui.askable -> Text(DropFolderCopy.NOT_CONNECTED, style = PaddockTokens.type.secondary, color = c.dim, modifier = Modifier.testTag("drop-not-connected"))
                 ui.asking -> Text(DropFolderCopy.CHECKING, style = PaddockTokens.type.secondary, color = c.dim)
                 told?.ok == true -> Text(told.sentence, style = PaddockTokens.type.body, color = c.title, modifier = Modifier.testTag("drop-told"))
             }

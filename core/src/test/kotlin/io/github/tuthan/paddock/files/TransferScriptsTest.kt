@@ -482,6 +482,91 @@ class TransferScriptsTest {
         expectRefused(put(inboxFile, "a.bin", body(5)), TransferRefusal.NotDirectory)
     }
 
+    private fun chmod(f: File, mode: String) = Files.setPosixFilePermissions(f.toPath(), PosixFilePermissions.fromString(mode))
+
+    private fun idOf(flag: String): String = ProcessBuilder("id", flag).start().inputStream.bufferedReader().readText().trim()
+
+    /** A group the user is in besides their primary one, by name, or null when there is none: a group shared with other accounts, as far as the test can tell. */
+    private fun otherGroup(): String? = idOf("-Gn").split(' ').firstOrNull { it.isNotEmpty() && it != idOf("-gn") }
+
+    private fun chgrp(f: File, group: String) =
+        Files.setAttribute(f.toPath(), "posix:group", f.toPath().fileSystem.userPrincipalLookupService.lookupPrincipalByGroupName(group))
+
+    @Test fun `a put or a drop into a folder other accounts may write in is refused before a part is made`() {
+        notRoot()
+        // Another account that can write in the folder could swap the part for a link between mktemp and the write, and the put would write through it.
+        for ((what, paddock, inbox) in listOf(
+            Triple("a paddock folder anyone may write in", "rwx---rwx", null),
+            Triple("an inbox anyone may write in", "rwxr-xr-x", "rwx----w-"),
+        )) {
+            val folder = project("shared-${what.replace(' ', '-')}")
+            File(folder, ".paddock").mkdirs(); chmod(File(folder, ".paddock"), paddock)
+            if (inbox != null) { inboxOf(folder).mkdirs(); chmod(inboxOf(folder), inbox) }
+            val before = tree(root)
+            expectRefused(put(folder, "a.bin", body(5)), TransferRefusal.SharedFolder)
+            assertEquals(before, tree(root), "$what: no inbox, no part, no file")
+        }
+        // A sticky folder anyone may write in is still one where a name can be planted before the part is made: refused too.
+        val sticky = project("sticky")
+        File(sticky, ".paddock/inbox").mkdirs()
+        ProcessBuilder(realTool("chmod"), "1777", inboxOf(sticky).path).start().waitFor()
+        expectRefused(put(sticky, "a.bin", body(5)), TransferRefusal.SharedFolder)
+        assertEquals(emptyList(), inboxOf(sticky).list().orEmpty().toList())
+        // Read and search for others are not write: a 0755 inbox takes the file.
+        val open = project("readable")
+        File(open, ".paddock/inbox").mkdirs(); chmod(File(open, ".paddock"), "rwxr-xr-x"); chmod(inboxOf(open), "rwxr-xr-x")
+        assertEquals(0, put(open, "a.bin", body(5)).exit)
+
+        val shared = File(home, "Shared").also { it.mkdirs(); chmod(it, "rwxr-xrwx") }
+        val before = tree(root)
+        expectRefused(drop("~/Shared", "f.txt", body(5)), TransferRefusal.SharedFolder)
+        assertEquals(before, tree(root), "a drop folder anyone may write in gets nothing")
+        chmod(shared, "rwxr-xr-x")
+        assertEquals(0, drop("~/Shared", "f.txt", body(5)).exit)
+    }
+
+    @Test fun `a folder a shared group may write in is refused, and one only the user's own private group may write in is taken`() {
+        notRoot()
+        // A group the user shares with other accounts: its members could plant a link as anyone could.
+        val group = otherGroup()
+        assumeTrue("the account is in no group besides its primary one", group != null)
+        for ((what, paddock, inbox) in listOf(
+            Triple("a paddock folder a shared group may write in", "rwxrwx---", null),
+            Triple("an inbox a shared group may write in", "rwx------", "rwxrwxr-x"),
+        )) {
+            val folder = project("group-${what.replace(' ', '-')}")
+            File(folder, ".paddock").mkdirs(); chmod(File(folder, ".paddock"), paddock)
+            if (inbox != null) { inboxOf(folder).mkdirs(); chmod(inboxOf(folder), inbox); chgrp(inboxOf(folder), group!!) } else chgrp(File(folder, ".paddock"), group!!)
+            val before = tree(root)
+            expectRefused(put(folder, "a.bin", body(5)), TransferRefusal.SharedFolder)
+            assertEquals(before, tree(root), "$what: no inbox, no part, no file")
+        }
+        val shared = File(home, "GroupShared").also { it.mkdirs(); chmod(it, "rwxrwxr-x"); chgrp(it, group!!) }
+        expectRefused(drop("~/GroupShared", "f.txt", body(5)), TransferRefusal.SharedFolder)
+        assertEquals(emptyList(), shared.list().orEmpty().toList())
+
+        // The user's own private group (named as the user, and their primary group): what umask 002 makes on Debian, Ubuntu and Fedora. Taken.
+        assumeTrue("the account's primary group is not a private one", idOf("-gn") == idOf("-un"))
+        val own = project("private-group")
+        File(own, ".paddock/inbox").mkdirs(); chmod(File(own, ".paddock"), "rwxrwxr-x"); chmod(inboxOf(own), "rwxrwxr-x")
+        assertEquals(0, put(own, "a.bin", body(5)).exit, "a 0775 inbox of the user's private group takes the file")
+        File(home, "Downloads").also { it.mkdirs(); chmod(it, "rwxrwxr-x") }
+        assertEquals(0, drop("~/Downloads", "f.txt", body(5)).exit, "so does a 0775 drop folder made by hand")
+    }
+
+    @Test fun `the folders a write makes are 0700 whatever umask the account runs with`() {
+        // The script's own umask and mkdir mode decide, not the login's: here the caller's umask is 000.
+        fun loose(argv: List<String>) = listOf("/bin/sh", "-c", "umask 000; exec \"\$@\"", "loose") + argv
+        val folder = project()
+        assertEquals(0, run(loose(TransferScripts.putArgv(cap)), header(folder.path, "a.bin", 5).toByteArray() + body(5)).exit)
+        assertEquals("rwx------", mode(File(folder, ".paddock")))
+        assertEquals("rwx------", mode(inboxOf(folder)))
+        assertEquals("rw-------", mode(File(inboxOf(folder), "a.bin")))
+        assertEquals(0, run(loose(TransferScripts.dropArgv(cap)), header("~/Paddock", "b.bin", 5).toByteArray() + body(5)).exit)
+        assertEquals("rwx------", mode(File(home, "Paddock")))
+        assertEquals("rw-------", mode(File(home, "Paddock/b.bin")))
+    }
+
     @Test fun `a program the script needs that is missing is its own refusal and touches nothing`() {
         val folder = project()
         val writeTools = listOf("head", "wc", "mktemp", "link", "mkdir", "rmdir", "rm", "find")

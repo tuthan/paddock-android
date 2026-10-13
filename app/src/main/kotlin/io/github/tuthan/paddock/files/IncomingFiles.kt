@@ -106,9 +106,12 @@ class IncomingFiles(
         val dir = cache.snapshotDir(id)
         return try {
             val raw = File(dir, RAW)
+            // The sender's provider is another app's code: besides an IOException its open or read may throw any unchecked exception (binder carries an
+            // IllegalStateException, a NullPointerException or an UnsupportedOperationException back to this caller). Each is a file Paddock could not read,
+            // never a crash of the graph's scope. A cancellation is not the sender's word and goes on, to the cleanup below.
             val copied = try {
                 opener()?.use { copyBounded(it, raw, TransferLimits.MAX_PUT_BYTES) }
-            } catch (_: IOException) { null } catch (_: SecurityException) { null } catch (_: IllegalArgumentException) { null }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: IOException) { null } catch (_: RuntimeException) { null }
             when {
                 copied == null -> fail(id, IntakeRefusal.Unreadable)
                 copied < 0 -> fail(id, IntakeRefusal.TooLarge)
