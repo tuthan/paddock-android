@@ -38,6 +38,12 @@ def load(name, path):
     return module
 
 
+def close_stdin(proc):
+    """Ends a hook's input and forgets the pipe: `communicate()` flushes a closed `stdin`, which Python 3.12 (the CI runner's) raises ValueError for."""
+    proc.stdin.close()
+    proc.stdin = None
+
+
 H = load("permission_hook", HOOK)
 D = load("decide", DECIDE)
 
@@ -293,7 +299,7 @@ class PublicationTests(SandboxCase):
         sb = self.sandbox(window=2)
         proc, payload = sb.hook(hook_input(tool_input={"command": "rm -rf build", "description": "clean"}, mode="acceptEdits"))
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         self.assertRegex(request_id, UUID4)
         body = sb.read(request_id + ".pending.json")
@@ -318,7 +324,7 @@ class PublicationTests(SandboxCase):
         sb = self.sandbox(window=1)
         proc, payload = sb.hook()
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         sb.wait_for("pending")
         self.assertEqual(stat.S_IMODE(os.stat(os.path.join(sb.run, "paddock")).st_mode), 0o700)
         proc.communicate(timeout=10)
@@ -346,7 +352,7 @@ class PublicationTests(SandboxCase):
         big = "x" * (H.MAX_INPUT * 2)
         proc, payload = sb.hook(hook_input(tool_input={"content": big}))
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         path = os.path.join(sb.requests_dir, request_id + ".pending.json")
         self.assertLess(os.path.getsize(path), D.READ_LIMIT, "a truncated request still fits the phone's bounded read")
@@ -363,7 +369,7 @@ class PublicationTests(SandboxCase):
         sb = self.sandbox(window=2)
         proc, payload = sb.hook(hook_input(tool_input={"content": "y" * (H.MAX_INPUT - 100)}))
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         body = sb.read(request_id + ".pending.json")
         self.assertFalse(body["truncated"])
@@ -376,7 +382,7 @@ class PublicationTests(SandboxCase):
         text = "echo 'héllo ☃ \U0001f600' && printf '\\n'"
         proc, payload = sb.hook(raw=json.dumps(hook_input(tool_input={"command": text})).encode())
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         self.assertEqual(sb.read(request_id + ".pending.json")["tool_input"]["command"], text)
         proc.communicate(timeout=10)
@@ -436,7 +442,7 @@ class WindowTests(SandboxCase):
         sb = self.sandbox(window=10)
         proc, payload = sb.hook()
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         rc, out, err = sb.run_decide(["decide", SESSION, PANE, CLAUDE, request_id])
         self.assertEqual(rc, 0, err)
@@ -450,7 +456,7 @@ class WindowTests(SandboxCase):
         sb = self.sandbox(window=10)
         proc, payload = sb.hook()
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         rc, _, err = sb.run_decide(["decide", SESSION, PANE, CLAUDE, request_id], json.dumps({"behavior": "deny", "phone": "pixel", "at": "x"}))
         self.assertEqual(rc, 0, err)
@@ -464,7 +470,7 @@ class WindowTests(SandboxCase):
         sb = self.sandbox(window=2)
         proc, payload = sb.hook()
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         other = "11111111-1111-4111-8111-111111111111"
         put(os.path.join(sb.requests_dir, request_id + ".decision.json"), json.dumps({"request_id": other, "behavior": "allow"}))
@@ -476,7 +482,7 @@ class WindowTests(SandboxCase):
         sb = self.sandbox(window=1)
         proc, payload = sb.hook()
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         put(os.path.join(sb.requests_dir, request_id + ".decision.json"), '{"request_id": "%s", "behav' % request_id)
         stdout, _ = proc.communicate(timeout=10)
@@ -487,7 +493,7 @@ class WindowTests(SandboxCase):
             sb = self.sandbox(window=30)
             proc, payload = sb.hook()
             proc.stdin.write(payload)
-            proc.stdin.close()
+            close_stdin(proc)
             request_id = sb.wait_for("pending")
             time.sleep(0.3)
             proc.send_signal(getattr(signal, name))
@@ -499,7 +505,7 @@ class WindowTests(SandboxCase):
         sb = self.sandbox(window=10)
         proc, payload = sb.hook()
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         proc.stdout.close()      # Claude Code went away: printing the decision fails
         rc, _, err = sb.run_decide(["decide", SESSION, PANE, CLAUDE, request_id])
@@ -514,7 +520,7 @@ class WindowTests(SandboxCase):
         sb.herdr.status = "blocked"
         proc, payload = sb.hook()
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         request_id = sb.wait_for("pending")
         time.sleep(0.8)                      # the hook has seen the pane blocked
         sb.herdr.status = "working"          # the desktop answered; the agent moves on
@@ -715,7 +721,7 @@ class SupersedeTests(SandboxCase):
     def start(self, sb, command):
         proc, payload = sb.hook(hook_input(tool_input={"command": command}))
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         return proc
 
     def test_a_newer_request_of_the_same_session_expires_the_older_pending_one_and_its_hook_leaves(self):
@@ -991,7 +997,7 @@ class DeadHookTests(SandboxCase):
         sb = self.sandbox(window=30)
         proc, payload = sb.hook()
         proc.stdin.write(payload)
-        proc.stdin.close()
+        close_stdin(proc)
         rid = sb.wait_for("pending")
         body = sb.read(rid + ".pending.json")
         self.assertEqual(body["pid"], proc.pid)
@@ -1012,7 +1018,7 @@ class SessionKeyTests(SandboxCase):
         for name in ("session-a", "session-b"):
             proc, payload = sb.hook(HERDR_SESSION=name)
             proc.stdin.write(payload)
-            proc.stdin.close()
+            close_stdin(proc)
             procs.append(proc)
         end = time.time() + 10
         while time.time() < end and not all(os.path.isdir(os.path.join(sb.run, "paddock", n, PANE)) and os.listdir(os.path.join(sb.run, "paddock", n, PANE)) for n in ("session-a", "session-b")):
@@ -1116,15 +1122,15 @@ class RaceTests(SandboxCase):
         for i in range(50):
             proc, payload = sb.hook()
             proc.stdin.write(payload)
-            proc.stdin.close()
+            close_stdin(proc)
             rid = sb.wait_for("pending")
             args = ["decide", SESSION, PANE, CLAUDE, rid]
             a, body_a = sb.decide(args, json.dumps({"behavior": "allow", "phone": "A", "at": "t"}))
             b, body_b = sb.decide(args, json.dumps({"behavior": "deny", "phone": "B", "at": "t"}))
             for p, body in ((a, body_a), (b, body_b)):      # both are up and waiting on stdin: release them together
                 p.stdin.write(body)
-            a.stdin.close()
-            b.stdin.close()
+            close_stdin(a)
+            close_stdin(b)
             codes = {"allow": a.wait(timeout=20), "deny": b.wait(timeout=20)}
             for p in (a, b):
                 p.stdout.close()
@@ -1146,7 +1152,7 @@ class RaceTests(SandboxCase):
         for i in range(20):
             proc, payload = sb.hook()
             proc.stdin.write(payload)
-            proc.stdin.close()
+            close_stdin(proc)
             rid = sb.wait_for("pending")
             expires = sb.read(rid + ".pending.json")["expires_at"] / 1000.0
             delay = expires - time.time() + (i - 10) * 0.012      # from 120 ms before the lapse to 100 ms after it
@@ -1186,7 +1192,7 @@ class AgentTests(SandboxCase):
         proc = subprocess.Popen([sys.executable, HOOK, *agent_args], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=sb.env(**over), cwd=sb.dir)
         proc.stdin.write(json.dumps(data if data is not None else hook_input()).encode())
-        proc.stdin.close()
+        close_stdin(proc)
         return proc
 
     def under_daemon(self, sb, data):
@@ -1194,7 +1200,7 @@ class AgentTests(SandboxCase):
         proc = subprocess.Popen([sys.executable, "-c", DAEMON_PARENT, "app-server", HOOK, "--agent", "codex"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, env=sb.env(HERDR_PANE_ID="w1:p1"), cwd=sb.dir)
         proc.stdin.write(json.dumps(data).encode())
-        proc.stdin.close()
+        close_stdin(proc)
         return proc
 
     def methods(self, sb):
