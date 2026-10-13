@@ -14,8 +14,8 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
 /** A pane as the saga's own creates leave it: in the tab and workspace they returned, unless a test says it moved. */
-private fun facts(terminal: String, revision: Long, cwd: String, hasAgent: Boolean = false, atShellPrompt: Boolean = false, tab: String? = null, ws: String? = null) =
-    PaneFacts(true, terminal, tab ?: (if (terminal == "term_wt") "w9:t1" else "w1:t7"), ws ?: (if (terminal == "term_wt") "w9" else "w1"), revision, cwd, hasAgent, atShellPrompt)
+private fun facts(terminal: String, cwd: String, hasAgent: Boolean = false, atShellPrompt: Boolean = false, busy: Boolean = false, tab: String? = null, ws: String? = null) =
+    PaneFacts(true, terminal, tab ?: (if (terminal == "term_wt") "w9:t1" else "w1:t7"), ws ?: (if (terminal == "term_wt") "w9" else "w1"), cwd, hasAgent, atShellPrompt, busy)
 
 /** The start-agent saga with a failure injected at every step: what is created, what is persisted, what is never repeated. */
 class StartAgentSagaTest {
@@ -33,7 +33,7 @@ class StartAgentSagaTest {
         var folder: (String) -> String? = { it }
         var worktree: () -> Created = { Created("w9", "w9:t1", "w9:p1", "term_wt", "/wt/feat", worktreePath = "/wt/feat", repository = "repo") }
         var tab: () -> Created = { Created(null, "w1:t7", "w1:p7", "term_tab", "/work") }
-        var pane: (n: Int) -> PaneFacts = { facts("term_tab", 1, "/work", hasAgent = false, atShellPrompt = true) }
+        var pane: (n: Int) -> PaneFacts = { facts("term_tab", "/work", hasAgent = false, atShellPrompt = true) }
         var start: (name: String) -> StartedAgent = { StartedAgent("term_tab", "w1:p7") }
         var close: () -> Unit = {}
         var inspects = 0
@@ -75,7 +75,7 @@ class StartAgentSagaTest {
     }
 
     @Test fun withAWorktreeTheAgentStartsInTheRootPaneThatCameBackAndItsCwdIsTheWorktreePath() = runBlocking<Unit> {
-        host.pane = { facts("term_wt", 1, "/wt/feat", atShellPrompt = true) }
+        host.pane = { facts("term_wt", "/wt/feat", atShellPrompt = true) }
         host.start = { StartedAgent("term_wt", "w9:p1") }
         val rec = saga().run(req(branch = "feat"))
         assertEquals(SagaState.Succeeded, rec.state)
@@ -120,7 +120,7 @@ class StartAgentSagaTest {
     @Test fun aFolderIsResolvedFirstAndTheTabIsCreatedThereAndCheckedAgainstTheRealPath() = runBlocking<Unit> {
         host.folder = { "/srv/real/api" }
         host.tab = { Created(null, "w1:t7", "w1:p7", "term_tab", "/srv/real/api") }
-        host.pane = { facts("term_tab", 1, "/srv/real/api", hasAgent = false, atShellPrompt = true) }
+        host.pane = { facts("term_tab", "/srv/real/api", hasAgent = false, atShellPrompt = true) }
         val rec = saga().run(req(folder = "~/api"))
         assertEquals(SagaState.Succeeded, rec.state)
         // The host is asked about what the user typed; the tab is made in what it answered; both are in the record.
@@ -333,7 +333,7 @@ class StartAgentSagaTest {
     // ---- step 3: the check of the new pane -----------------------------------------------------------------------------------
 
     @Test fun aPaneThatNeverReachesAPromptStopsTheSagaAfterTheWindowAndRecordsItsIds() = runBlocking<Unit> {
-        host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        host.pane = { facts("term_tab", "/work", atShellPrompt = false) }
         val rec = saga(window = 10_000).run(req())
         assertEquals(SagaFailure.PANE_NOT_READY, rec.failure)
         assertTrue(host.inspects >= 20, "polled for the window, not once: ${host.inspects}")
@@ -342,14 +342,14 @@ class StartAgentSagaTest {
     }
 
     @Test fun aShellThatTakesAMomentIsWaitedFor() = runBlocking<Unit> {
-        host.pane = { n -> if (n < 3) facts("term_tab", 0, "/work", atShellPrompt = false) else facts("term_tab", 1, "/work", atShellPrompt = true) }
+        host.pane = { n -> if (n < 3) facts("term_tab", "/work", atShellPrompt = false) else facts("term_tab", "/work", atShellPrompt = true) }
         assertEquals(SagaState.Succeeded, saga().run(req()).state)
         assertEquals(4, host.inspects)
     }
 
     @Test fun aPaneInTheWrongFolderIsNotStartedIn() = runBlocking<Unit> {
         host.worktree = { Created("w9", "w9:t1", "w9:p1", "term_wt", "/wt/feat", worktreePath = "/wt/feat") }
-        host.pane = { facts("term_wt", 1, "/home/u", atShellPrompt = true) }
+        host.pane = { facts("term_wt", "/home/u", atShellPrompt = true) }
         val rec = saga().run(req(branch = "feat"))
         assertEquals(SagaFailure.WRONG_CWD, rec.failure)
         assertTrue("/wt/feat" in rec.message && "/home/u" in rec.message)
@@ -358,15 +358,15 @@ class StartAgentSagaTest {
     }
 
     @Test fun aPaneRunningSomethingElseOrAlreadyHoldingAnAgentIsNotStartedIn() = runBlocking<Unit> {
-        host.pane = { facts("term_tab", 1, "/work", atShellPrompt = false) }
+        host.pane = { facts("term_tab", "/work", busy = true) }
         assertEquals(SagaFailure.PANE_BUSY, saga().run(req(name = "a")).failure)
-        host.pane = { facts("term_tab", 3, "/work", hasAgent = true, atShellPrompt = false) }
+        host.pane = { facts("term_tab", "/work", hasAgent = true, atShellPrompt = false) }
         assertEquals(SagaFailure.PANE_BUSY, saga().run(req(name = "b")).failure)
         assertEquals(0, host.calls.count { it.startsWith("start") })
     }
 
     @Test fun aPaneMovedToAnotherTabKeepsItsIdButNotItsTabSoOnlyThePaneIsOfferedForClosing() = runBlocking<Unit> {
-        host.pane = { facts("term_tab", 1, "/work", atShellPrompt = true, tab = "w1:t99") }
+        host.pane = { facts("term_tab", "/work", atShellPrompt = true, tab = "w1:t99") }
         val s = saga()
         val rec = s.run(req())
         assertEquals(SagaFailure.PANE_MOVED, rec.failure)
@@ -376,14 +376,14 @@ class StartAgentSagaTest {
         assertEquals(CloseTarget.Pane("w1:p7"), s.closeTarget(rec))
         assertTrue(host.calls.none { it.startsWith("start") })
         // A worktree pane that left its workspace is the same: the workspace recorded is no longer its own, so it is never closed.
-        host.pane = { facts("term_wt", 1, "/wt/feat", atShellPrompt = true, ws = "w1") }
+        host.pane = { facts("term_wt", "/wt/feat", atShellPrompt = true, ws = "w1") }
         val wt = saga().run(req(branch = "feat", name = "wt"))
         assertEquals(SagaFailure.PANE_MOVED, wt.failure)
         assertEquals(CloseTarget.Pane("w9:p1"), saga().closeTarget(wt))
     }
 
     @Test fun aPaneThatChangedHandsOrWentAwayIsRefusedEvenWhenItsIdIsStillThere() = runBlocking<Unit> {
-        host.pane = { facts("term_somebody_else", 1, "/work", atShellPrompt = true) }
+        host.pane = { facts("term_somebody_else", "/work", atShellPrompt = true) }
         assertEquals(SagaFailure.PANE_MOVED, saga().run(req(name = "a")).failure)
         host.pane = { PaneFacts(exists = false) }
         assertEquals(SagaFailure.PANE_MOVED, saga().run(req(name = "b")).failure)
@@ -429,7 +429,7 @@ class StartAgentSagaTest {
         assertEquals(SagaState.Succeeded, ok.state)
         // A saga that succeeded, or failed some other way, cannot be "retried".
         assertFailsWith<IllegalArgumentException> { s.retryWithName(rec.id, "again") }
-        host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        host.pane = { facts("term_tab", "/work", atShellPrompt = false) }
         val stuck = s.run(req(name = "n2"))
         assertFailsWith<IllegalArgumentException> { s.retryWithName(stuck.id, "n3") }
     }
@@ -468,7 +468,7 @@ class StartAgentSagaTest {
     // ---- recovery -------------------------------------------------------------------------------------------------------------
 
     @Test fun closingWhatAWorktreeSagaCreatedIsOneConfirmedCloseOfItsWorkspaceAndLeavesTheCheckout() = runBlocking<Unit> {
-        host.pane = { facts("term_wt", 0, "/wt/feat", atShellPrompt = false) }
+        host.pane = { facts("term_wt", "/wt/feat", atShellPrompt = false) }
         val s = saga(window = 1_000)
         val rec = s.run(req(branch = "feat"))
         assertTrue(rec.needsRecovery)
@@ -487,7 +487,7 @@ class StartAgentSagaTest {
     }
 
     @Test fun withoutAWorktreeTheTabIsClosedAndAGoneTargetCountsAsDone() = runBlocking<Unit> {
-        host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        host.pane = { facts("term_tab", "/work", atShellPrompt = false) }
         val s = saga(window = 1_000)
         val rec = s.run(req())
         host.close = { throw HerdrError("tab_not_found", "no such tab") }
@@ -498,7 +498,7 @@ class StartAgentSagaTest {
     }
 
     @Test fun aCloseThatFailsOtherwiseLeavesTheCardAndAnUnknownCloseIsNotRepeated() = runBlocking<Unit> {
-        host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        host.pane = { facts("term_tab", "/work", atShellPrompt = false) }
         val s = saga(window = 1_000)
         val rec = s.run(req())
         host.close = { throw IOException("reset") }
@@ -547,7 +547,7 @@ class StartAgentSagaTest {
 
     /** The finding: the same small ids in two sessions. Closing in B must never be answered by A's card, nor the other way round. */
     @Test fun twoSessionsWithTheSameIdsEachCloseOnlyTheirOwnAndTheJournalNamesTheSessionItActedIn() = runBlocking<Unit> {
-        host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        host.pane = { facts("term_tab", "/work", atShellPrompt = false) }
         // One instance at a time, as in the app (a profile that changes its session gets a new instance, which reads what the file already holds).
         val inA = saga(session = "paddock-a", window = 1_000).run(req().copy(session = "paddock-a"))
         val b = saga(session = "paddock-b", window = 1_000)
@@ -564,7 +564,7 @@ class StartAgentSagaTest {
     // ---- a close checks that what it closes is still what the saga made ---------------------------------------------------------
 
     private fun failedWithPane(workspace: Boolean = false): SagaRecord = runBlocking {
-        if (workspace) host.pane = { facts("term_wt", 0, "/wt/feat", atShellPrompt = false) } else host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        if (workspace) host.pane = { facts("term_wt", "/wt/feat", atShellPrompt = false) } else host.pane = { facts("term_tab", "/work", atShellPrompt = false) }
         val s = saga(window = 1_000)
         s.run(req(branch = if (workspace) "feat" else null)).also { assertTrue(it.needsRecovery) }
     }
@@ -577,7 +577,7 @@ class StartAgentSagaTest {
 
     @Test fun aPaneThatNowHoldsAnotherTerminalIsNotClosedAndTheCardStays() = runBlocking<Unit> {
         val rec = failedWithPane()
-        host.pane = { facts("term_someone_elses", 4, "/work", tab = "w1:t7", ws = "w1") }
+        host.pane = { facts("term_someone_elses", "/work", tab = "w1:t7", ws = "w1") }
         val s = saga()
         assertRefused(s.closeCreated(rec.id), CloseRefusal.PANE_CHANGED)
         assertFalse(s.get(rec.id)!!.recovered, "nothing was dealt with")
@@ -586,10 +586,10 @@ class StartAgentSagaTest {
 
     @Test fun aPaneMovedToAnotherTabLeavesTheTabAndTheWorkspaceAlone() = runBlocking<Unit> {
         val rec = failedWithPane()
-        host.pane = { facts("term_tab", 1, "/work", tab = "w1:t9", ws = "w1") }
+        host.pane = { facts("term_tab", "/work", tab = "w1:t9", ws = "w1") }
         assertRefused(saga().closeCreated(rec.id), CloseRefusal.PANE_MOVED)
         val wt = failedWithPane(workspace = true)
-        host.pane = { facts("term_wt", 1, "/wt/feat", tab = "w9:t1", ws = "w3") }
+        host.pane = { facts("term_wt", "/wt/feat", tab = "w9:t1", ws = "w3") }
         assertRefused(saga().closeCreated(wt.id), CloseRefusal.PANE_MOVED)
     }
 
@@ -617,13 +617,13 @@ class StartAgentSagaTest {
 
     @Test fun aPaneThatIsStillTheSagasOwnIsClosedAsBefore() = runBlocking<Unit> {
         val rec = failedWithPane()
-        host.pane = { facts("term_tab", 7, "/work", tab = "w1:t7", ws = "w1", atShellPrompt = true) }
+        host.pane = { facts("term_tab", "/work", tab = "w1:t7", ws = "w1", atShellPrompt = true) }
         assertIs<OperationResult.Acknowledged<*>>(saga().closeCreated(rec.id))
         assertEquals(listOf("closeTab w1:t7"), host.calls.filter { it.startsWith("close") })
     }
 
     @Test fun leavingItDismissesTheCardButKeepsTheIds() = runBlocking<Unit> {
-        host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        host.pane = { facts("term_tab", "/work", atShellPrompt = false) }
         val s = saga(window = 1_000)
         val rec = s.run(req())
         s.leave(rec.id)
@@ -657,7 +657,7 @@ class StartAgentSagaTest {
     }
 
     @Test fun everyFailureHasACardThatNamesWhatExists() = runBlocking<Unit> {
-        host.pane = { facts("term_tab", 0, "/work", atShellPrompt = false) }
+        host.pane = { facts("term_tab", "/work", atShellPrompt = false) }
         val s = saga(window = 1_000)
         val rec = s.run(req())
         val card = SagaCard.of(rec, "laptop")

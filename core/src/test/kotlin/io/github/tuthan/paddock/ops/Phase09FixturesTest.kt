@@ -63,7 +63,7 @@ class Phase09FixturesTest {
         assertTrue(wt.worktree.path.endsWith("/fx-branch"))
     }
 
-    @Test fun aFreshPaneShowsRevisionZeroThenOneWhenItsShellDrawsAndItsForegroundIsTheShell() {
+    @Test fun aFreshPaneHasNoAgentAndItsForegroundIsTheShell() {
         val pane = success("pane-get-fresh-shell.json").result["pane"]!!.toString()
         assertFalse("\"agent\":" in pane, "a plain shell has no agent")
         val info = success("pane-process-info-shell.json").result["process_info"]!!.toString()

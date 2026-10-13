@@ -29,10 +29,11 @@ data class PaneFacts(
     /** Where the pane is now. A pane keeps its id when it is moved to another tab, so the tab and workspace are what show a move. */
     val tabId: String? = null,
     val workspaceId: String? = null,
-    val revision: Long = 0,
     val cwd: String? = null,
     val hasAgent: Boolean = false,
     val atShellPrompt: Boolean = false,
+    /** Something other than a shell is in the foreground. False while nothing is readable yet (a shell still starting), so it tells "busy" from "not ready". */
+    val foregroundBusy: Boolean = false,
 )
 
 data class StartedAgent(val terminalId: String, val paneId: String)
@@ -321,7 +322,7 @@ class StartAgentSaga(
                     return fail(moved, SagaFailure.PANE_MOVED, "The pane $pane was moved to tab ${facts.tabId} since it was created, so the tab and workspace recorded for it are no longer its own. Nothing was started. Only the pane is offered for closing.")
                 }
                 if (facts.hasAgent) return fail(rec, SagaFailure.PANE_BUSY, "An agent is already running in the new pane. Nothing was started.")
-                if (facts.atShellPrompt && facts.revision >= 1 && cwdMatches(rec, facts)) return Step.Next(rec)
+                if (facts.atShellPrompt && cwdMatches(rec, facts)) return Step.Next(rec)
             }
             if (clock.nowMillis() >= deadline) break
             pause(pollMillis)
@@ -331,7 +332,7 @@ class StartAgentSaga(
             f == null -> fail(rec, SagaFailure.PANE_NOT_READY, "The new pane could not be read for ${verifyWindowMillis / 1000} seconds (${unreadable ?: "no answer"}). Nothing was started.")
             f.atShellPrompt && !cwdMatches(rec, f) -> fail(rec, SagaFailure.WRONG_CWD,
                 "The new pane is at a shell prompt in ${f.cwd ?: "an unknown folder"}, not in ${rec.worktreePath ?: rec.expectedCwd ?: "the folder herdr created it in"}. Nothing was started.")
-            !f.atShellPrompt && f.revision >= 1 -> fail(rec, SagaFailure.PANE_BUSY, "Something other than the shell is running in the new pane. Nothing was started.")
+            f.foregroundBusy -> fail(rec, SagaFailure.PANE_BUSY, "Something other than the shell is running in the new pane. Nothing was started.")
             else -> fail(rec, SagaFailure.PANE_NOT_READY, "The new pane did not reach a shell prompt within ${verifyWindowMillis / 1000} seconds. Nothing was started.")
         }
     }

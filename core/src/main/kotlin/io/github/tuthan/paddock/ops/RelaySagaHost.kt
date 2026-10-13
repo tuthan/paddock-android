@@ -75,11 +75,7 @@ class RelaySagaHost(private val relay: RelayClient, private val session: SshSess
             if (e.code.endsWith("not_found")) return PaneFacts(exists = false) else throw e
         }
         val info = relay.call("pane.process_info", buildJsonObject { put("pane_id", paneId) }, timeout = 10.seconds).result["process_info"] as? JsonObject
-        val processes = (info?.get("foreground_processes") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-        val names = processes.map { (it["name"] as? JsonPrimitive)?.contentOrNull.orEmpty() }
-        // The shell alone in the foreground is a prompt; a running job, or nothing readable, is not.
-        val atPrompt = names.size == 1 && names.single() in SHELLS
-        return PaneFacts(true, pane.terminalId, pane.tabId, pane.workspaceId, pane.revision, pane.cwd, hasAgent = pane.agent != null || pane.agentStatus != AgentStatus.Unknown, atShellPrompt = atPrompt)
+        return paneFacts(pane, info)
     }
 
     /**
@@ -111,6 +107,21 @@ class RelaySagaHost(private val relay: RelayClient, private val session: SshSess
     }
 
     companion object {
+        /**
+         * What the saga needs from `pane.get` and `pane.process_info`. The shell alone in the foreground is a prompt; a running job is [PaneFacts.foregroundBusy];
+         * nothing readable is neither, so a shell that is still starting is waited for. A login shell's name is its argv[0] with a leading `-` (`-zsh`, as macOS
+         * starts one) and may carry a path, so both are dropped before it is compared. `revision` is not used: herdr 0.9.3 on macOS answers 0 for a pane with output.
+         */
+        fun paneFacts(pane: io.github.tuthan.paddock.herdr.Pane, info: JsonObject?): PaneFacts {
+            val processes = (info?.get("foreground_processes") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            val names = processes.map { shellName((it["name"] as? JsonPrimitive)?.contentOrNull.orEmpty()) }
+            val atPrompt = names.size == 1 && names.single() in SHELLS
+            return PaneFacts(true, pane.terminalId, pane.tabId, pane.workspaceId, pane.cwd, hasAgent = pane.agent != null || pane.agentStatus != AgentStatus.Unknown,
+                atShellPrompt = atPrompt, foregroundBusy = names.isNotEmpty() && !atPrompt)
+        }
+
+        private fun shellName(name: String) = name.substringAfterLast('/').removePrefix("-")
+
         val EXECUTABLE = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
         val SHELLS = setOf("bash", "zsh", "fish", "sh", "dash", "ksh", "ash", "nu", "pwsh", "tcsh", "csh", "xonsh", "elvish")
         private val LOGIN_SHELLS = setOf("bash", "zsh", "fish", "sh", "dash", "ksh")
