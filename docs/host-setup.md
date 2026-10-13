@@ -41,32 +41,6 @@ Without this, Paddock only knows what is happening while it is open. With it, a 
 
 The text that Paddock runs is under **Details and manual setup** on the same screen, so you can read it first or paste it into a shell yourself.
 
-To undo: delete the `paddock@phone` line from `~/.ssh/authorized_keys`.
-
-## 2. The two helpers the app installs (needed for every connection and every control session)
-
-The app asks before it installs each of these, and shows the hash. Both are single Python files with no dependencies; they are copied to `~/.local/share/paddock/` with owner-only permissions. Paddock refuses to run a file whose hash is not the one it was built with, so a file edited on the machine is never used (the app says so and offers to reinstall).
-
-| File | What it does | SHA-256 (release 0.0.1 and any build whose `host/SOURCE.json` shows the same) |
-| --- | --- | --- |
-| `paddock-relay.py` | Opens the connection to herdr's local socket and passes herdr's own JSON through. It adds nothing herdr could not already answer. | `8effb4b5aa733fccf72b5ca31545bc24f05046d000d463d6939b3486b3339695` |
-| `paddock-control.py` | Runs exactly one `herdr terminal session control` command for the Terminal tab and forwards only the four terminal message types; it releases control when the phone stops answering. | `d95e0a155a4e7a9addcc0018c3c267448a45e0611bfb24cad5b88df43a23ceff` |
-
-On first connect the app shows the relay's install question: **Install the relay** copies the file; **Not now** closes the question and installs nothing, and Home offers it again as a recovery action. The Terminal tab asks for the control helper the first time you ask for control.
-
-To verify by hand, on the machine: `sha256sum ~/.local/share/paddock/paddock-relay.py ~/.local/share/paddock/paddock-control.py` must print the two hashes above. To undo: `rm -r ~/.local/share/paddock`.
-
-## 3. Alerts on a locked phone (optional)
-
-Without this, Paddock only knows what is happening while it is open. With it, a small program on the machine posts a generic message ("an agent needs you") to a push path you choose; nothing about the agent is in the message. Read `alerts.md` for what it promises and what it does not (measured best effort, never always-on).
-
-1. On the phone: **Settings > Machines > the machine > Locked-phone alerts > Set up or check…** (the machine must be the one Paddock is watching). It shows the alert relay's hash, `9fd18cadd27861cafa8a83a55acb8d975c2f367215178cedc3c8d1a603612285`, and installs only that file after you confirm.
-2. Run the commands the screen shows, on the machine. They write `~/.config/systemd/user/paddock-alert-relay.service` (hash `227c624bc91e3a5c466936694ac58b1ccc4c804adb0a01f7b37e813fb74bc7ba`) and, only if you have none, `~/.config/paddock/alert-relay.toml` (mode 600).
-3. Edit that file: the `url` of your ntfy server and a long random `topic`. The topic name is the only secret in this path; use a server you run if you can. Install the ntfy app on the phone and subscribe to the same topic.
-4. Check it: `python3 ~/.local/share/paddock/paddock-alert-relay.py --check`. Exit 0 means the configuration parses and herdr answers; 2 means the configuration is wrong; 3 means herdr is not reachable.
-5. Start it: `systemctl --user daemon-reload && systemctl --user enable --now paddock-alert-relay.service`, and `loginctl enable-linger "$USER"` so it runs without a login session and after a reboot.
-6. On the phone, turn **Alerts** on (Android 13 and later asks for the notification permission here, in context). To test, make an agent block (or finish) and watch the phone.
-
 To undo: **Turn off alerts…** on the same screen (stops and disables the unit and removes the address file; the configuration stays, so turning them on again keeps your topic), or by hand: `systemctl --user disable --now paddock-alert-relay.service`, delete the unit file, `~/.config/paddock/alert-relay.toml` and `push-endpoint.json`, and turn Alerts off in Settings.
 
 ## 4. Answering permission requests from the phone (optional: Claude Code, Codex, opencode)
@@ -103,6 +77,18 @@ nmcli connection modify "<connection name>" 802-11-wireless.wake-on-wlan magic  
 ```
 
 Waking from away (over a VPN) needs a relay on the machine's network that re-broadcasts the packet; save its IPv4 address in Settings. `docs/wake.md` says what is read, what is sent, and what a failed wake looks like.
+
+## 6. Files between the phone and the machine (optional)
+
+Nothing to set up. The first time a file is attached to a prompt or shared to Paddock, the app runs its own small script over the SSH connection (`docs/files.md` lists the scripts and what each refuses); no port is opened and no program is left running. Where a file lands:
+
+- **A file attached to a prompt:** `<the agent's folder>/.paddock/inbox/`. Paddock creates `.paddock` with a `.gitignore` holding `*`, so `git status` stays clean. Files are mode 0600 in 0700 folders.
+- **A file shared to the drop folder:** `~/Paddock` by default, per machine (change it on the machine's page; the page asks before it saves).
+- **A file an agent made for you:** Paddock lists the regular files in `.paddock/outbox/` of the agent's folder, and fetches a path the agent printed if it is a regular file under that folder. It only reads; nothing there is deleted or changed.
+
+At most 25 MB goes to the machine and 50 MB comes back. A folder that other accounts can write in is refused, and so is a file named like an agent's instruction file (`CLAUDE.md`, `AGENTS.md` and the like).
+
+To undo: delete the `.paddock` folder in the agent's folder, and `~/Paddock`.
 
 ## Checking the whole thing
 
