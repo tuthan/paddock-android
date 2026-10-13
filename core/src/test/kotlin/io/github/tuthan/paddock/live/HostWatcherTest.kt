@@ -108,8 +108,12 @@ class HostWatcherTest {
             assertNotSame(before, w.current, changed.toString())
             assertEquals(changed, w.current!!.profile)
         }
+        // A follow that is cancelled before its coroutine got a thread never runs, so on a machine with few cores the middle controllers' follows may never
+        // start: the first (awaited above) and the current one are certain to, and every follow that did start for a replaced controller must be cancelled.
+        until("the current controller's follow") { w.current!! in followed }
         until("the first controller's follow to be cancelled") { first in cancelledFollows }
-        until("the last follow") { followed.size == 5 }
+        until("every replaced controller's follow to be cancelled") { followed.filter { it !== w.current }.all { it in cancelledFollows } }
+        assertTrue(w.current!! !in cancelledFollows, "the current controller's follow keeps running")
         assertTrue(leases.first().second.released.get(), "the replaced controller let go of its connection")
         // The same machine under a new name or address is not "another machine": the watched tap's facts are kept for it.
         assertEquals(1, events.count { it.startsWith("watched:") })
