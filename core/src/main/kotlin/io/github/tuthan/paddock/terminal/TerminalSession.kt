@@ -65,6 +65,8 @@ sealed interface TerminalNotice {
     /** Control needs the pinned helper on the host; the user has not agreed to install it yet. */
     data class HelperNeeded(val destination: String, val sha256: String, val replacing: Boolean) : TerminalNotice
     data object HelperUnavailable : TerminalNotice
+    /** The demo machine never gives control of a terminal (`DemoCopy.CONTROL`); the terminal stays read-only. */
+    data object NotInDemo : TerminalNotice
 }
 
 data class TerminalView(
@@ -148,6 +150,8 @@ class TerminalSession(
     private val engine: TerminalEngine = VtEngine(),
     private val options: TerminalOptions = TerminalOptions(),
     private val python: String = "python3",
+    /** What the screen says when there is no helper to ask for control with: [TerminalNotice.HelperUnavailable], or [TerminalNotice.NotInDemo] on the demo machine. */
+    private val unavailable: TerminalNotice = TerminalNotice.HelperUnavailable,
 ) {
     private val _view = MutableStateFlow(TerminalView())
     val view: StateFlow<TerminalView> = _view.asStateFlow()
@@ -341,7 +345,7 @@ class TerminalSession(
     private suspend fun requestControl(takeover: Boolean) {
         if (kind == Kind.Control || paused || _view.value.mode is TerminalMode.Ended) return
         val h = helper
-        if (h == null) { notice(TerminalNotice.HelperUnavailable); return }
+        if (h == null) { notice(unavailable); return }
         if (h.verifiedPath() == null) {
             notice(TerminalNotice.HelperNeeded(h.destination(), h.expectedSha256, h.isReplacing()))
             return
@@ -351,7 +355,7 @@ class TerminalSession(
     }
 
     private suspend fun installThenControl() {
-        val h = helper ?: return notice(TerminalNotice.HelperUnavailable)
+        val h = helper ?: return notice(unavailable)
         h.install()
         requestControl(takeover = false)
     }
@@ -413,7 +417,7 @@ class TerminalSession(
             Kind.Observe -> cli.terminalObserve(pane, g, r)
             Kind.Control -> {
                 val path = helper?.verifiedPath()
-                if (path == null) { backToObserving(TerminalNotice.HelperUnavailable); return }
+                if (path == null) { backToObserving(unavailable); return }
                 cli.terminalControl(python, path, options.leaseSeconds, pane, g, r, takeover)
             }
         }

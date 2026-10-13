@@ -49,13 +49,14 @@ internal fun readPairingLink(ctx: Context): PairingResult {
 }
 
 @Composable
-internal fun WelcomeRoute(onEnterAddress: () -> Unit, onFind: () -> Unit, onScan: () -> Unit, onPairing: (PairingLink) -> Unit) {
+internal fun WelcomeRoute(onEnterAddress: () -> Unit, onFind: () -> Unit, onScan: () -> Unit, onPairing: (PairingLink) -> Unit, onDemo: () -> Unit) {
     val ctx = LocalContext.current
     var notice by remember { mutableStateOf<String?>(null) }
     Welcome(
         onEnterAddress = onEnterAddress,
         onFind = onFind,
         onScan = onScan,
+        onDemo = onDemo,
         onPasteLink = {
             when (val r = readPairingLink(ctx)) {
                 is PairingResult.Valid -> { notice = null; onPairing(r.link) }

@@ -1,0 +1,40 @@
+# GitHub Pages serves this folder (Phase 16, slice 4, decision P12). Only the privacy policy is meant to be published, at /privacy.
+# Pages' default plugins (jekyll-optional-front-matter) render every .md file here as a page, so every other document is excluded by name:
+# a new file in docs/ is published unless it is added to this list. Choose a theme in Settings > Pages instead of the one below if you prefer; a theme is
+# what gives the page a mobile viewport, which matters because About opens it on a phone.
+title: Paddock
+theme: jekyll-theme-minimal
+exclude:
+  - accessibility.md
+  - agent-marks.md
+  - alerts.md
+  - app-lock.md
+  - app-structure.md
+  - billing.md
+  - build-decision-record.md
+  - buttons.md
+  - contrast.md
+  - demo.md
+  - dependency-reviews.md
+  - enrollment.md
+  - events-under-load.md
+  - files.md
+  - fonts.md
+  - guarded-answers.md
+  - harness.md
+  - host-plugin.md
+  - host-setup.md
+  - machines.md
+  - onboarding.md
+  - operations.md
+  - output.md
+  - pairing.md
+  - privacy-checklist.md
+  - release.md
+  - spaces.md
+  - ssh-library-decision.md
+  - talkback-script.md
+  - terminal-control.md
+  - terminal-engine-decision.md
+  - wake.md
+  - widgets.md

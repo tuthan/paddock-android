@@ -1,0 +1,22 @@
+Paddock is a phone companion for herdr, the terminal workspace manager for coding agents. It shows which of your agents is working, blocked or done, lets you read what they printed, and lets you answer when one needs you, without opening a laptop.
+
+<b>Free</b>
+• Shows every agent on the machine you connect to, with its state and how long it has been in it
+• Reads agent output on the phone, and opens the live terminal when you need to type
+• Sends a prompt from a composer, with a record that tells you if an earlier send may already have arrived
+• Finds a machine on your Wi-Fi, or sets up the SSH key from a code the machine shows (the camera is used only when you scan a code or take a photo to attach, and nothing is recorded), and can wake a sleeping machine over your network
+• Attaches a photo, picture or PDF to a prompt, takes a file another app shares to Paddock, and gets a file an agent made, all over the same SSH connection
+• Raises a notification while the app is open when an agent becomes blocked or done; a small relay script on your machine can reach a locked phone through ntfy or UnifiedPush
+
+<b>Pro</b>
+Four things are Pro, a one-time purchase inside the app; everything else is free.
+• Answers a Claude Code permission request with Yes or No through a guarded hook, only when you have installed it. Without Pro, type the answer in the Terminal tab or Manual input; every alert still arrives
+• Starts agents, with an outcome you can see. Without Pro, start them in herdr on the host; the app still shows them
+• Stops or deletes sessions, with an outcome you can see. Without Pro, use herdr on the host
+• Home-screen widgets for the herd. Without Pro, the app itself shows the herd
+
+<b>How it connects</b>
+Paddock controls your machine over SSH, with a key made on the phone that never leaves it. Finding or pairing a machine on your Wi-Fi, and waking a sleeping one, use your local network, only when you ask. Alerts reach a locked phone through a relay on your machine and ntfy or UnifiedPush, which you choose. There is no Paddock server, no account, and no analytics or crash reporting of Paddock's own. The app also contains Google's billing library for the Pro purchase. Files you attach, share or get travel over that SSH connection and nowhere else, up to 25 MB to the machine and 50 MB to the phone; a photo loses its location and camera details first, and a file from the machine stays in the app's cache for a day unless you save it. Agent output is shown and not kept.
+
+<b>You need</b>
+herdr 0.9.1 on a machine you can reach over SSH. No machine yet? Tap Try a demo on the first screen to look around with a demo machine. Paddock is an independent project and is not affiliated with herdr.

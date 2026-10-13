@@ -20,6 +20,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.tuthan.paddock.billing.ProCapabilities
+import io.github.tuthan.paddock.demo.Demo
+import io.github.tuthan.paddock.demo.DemoCopy
 import io.github.tuthan.paddock.hostprofile.Boot
 import io.github.tuthan.paddock.ledger.Activity
 import io.github.tuthan.paddock.nav.NavState
@@ -50,6 +52,7 @@ import io.github.tuthan.paddock.routes.decisionSetUp
 import io.github.tuthan.paddock.ui.components.LocalAgentGlyphs
 import io.github.tuthan.paddock.ui.components.NavItem
 import io.github.tuthan.paddock.ui.components.NoticeBar
+import io.github.tuthan.paddock.ui.components.Note
 import io.github.tuthan.paddock.ui.components.PaddockNavBar
 import io.github.tuthan.paddock.ui.screens.AgentTab
 import io.github.tuthan.paddock.ui.screens.GateNoticeBar
@@ -118,6 +121,10 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
     // Why a tap on a Pro control did nothing (the gate never opens over a busy screen); the graph clears it after a few seconds.
     val gateNotice by graph.proService.gateNotice.collectAsState()
     gateNotice?.let { GateNoticeBar(it, onDismiss = graph.proService::dismissGateNotice, modifier = Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 8.dp)) }
+    // The demo machine says what it is on the screens that show its herd, so nobody takes it for a real one (docs/demo.md).
+    if (watchedId != null && Demo.isDemo(watchedId) && (effective == Route.Home || effective == Route.Spaces || effective == Route.Activity)) {
+        Note(DemoCopy.BANNER, icon = PaddockIcons.Machine, modifier = Modifier.padding(horizontal = PaddockTokens.spacing.gutter, vertical = 6.dp))
+    }
     Box(Modifier.weight(1f).fillMaxWidth()) {
         when (boot) {
             Boot.Loading -> Text("Paddock", style = PaddockTokens.type.screenTitle, color = PaddockTokens.colors.title, modifier = Modifier.padding(PaddockTokens.spacing.gutter))
@@ -129,6 +136,7 @@ private fun PaddockRootContent(graph: AppGraph, modifier: Modifier) {
                 ) else WelcomeRoute(
                     onEnterAddress = { add.welcomeChoice = true }, onFind = { add.welcomeFinder = true }, onScan = { add.welcomeScan = true },
                     onPairing = { add.pairing = it; add.welcomeChoice = true },
+                    onDemo = graph::startDemo,
                 )
                 Route.Home, Route.Spaces, Route.Activity -> Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f)) {

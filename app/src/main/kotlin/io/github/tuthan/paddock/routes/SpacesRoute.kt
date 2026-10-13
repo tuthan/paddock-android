@@ -60,6 +60,7 @@ internal fun SpacesRoute(machineBook: MachineBook, hostUi: HostUiModel, proServi
     }
     val cards = mine.filter { it.showsCard(now) }.map { SagaCard.of(it, name) }
     val start = when {
+        host != null && io.github.tuthan.paddock.demo.Demo.isDemo(host.profile) -> StartAvailability.Unavailable(io.github.tuthan.paddock.demo.DemoCopy.START_AGENT)
         saga == null || host == null -> StartAvailability.Unavailable("Starting an agent needs this phone to be watching a live session on $name.")
         else -> StartAvailability.Available(
             installed?.snapshot?.workspaces.orEmpty().map { WorkspaceChoice(it.workspaceId, it.label.ifBlank { "workspace ${it.number}" }) },

@@ -1,6 +1,6 @@
 # Release cut
 
-How the Paddock release artefacts are built, proven reproducible, signed and checked, and what has and has not been done: the `foss` APK (GitHub, F-Droid, IzzyOnDroid) and, for Google Play, the `play` APK and app bundle. Phase 10, AC-10.4 to AC-10.6, extended per flavor in Phase 13. Nothing here publishes anything: the last step (a GitHub release) is a person's decision and is not scripted.
+How the Paddock release artefacts are built, proven reproducible, signed and checked, and what has and has not been done: the `foss` APK (GitHub, F-Droid, IzzyOnDroid) and, for Google Play, the `play` APK and app bundle. Phase 10, AC-10.4 to AC-10.6, extended per flavor in Phase 13. Nothing here publishes anything: the last steps (a GitHub release, a Play upload) are a person's decision and are not scripted. The Google Play route is Phase 16 (vault `phases/16-play-publication.md`); its pipeline half is on this page, from "Version table" on.
 
 ## The steps
 
@@ -14,9 +14,14 @@ tools/check.sh --offline
 #    Each run empties build/release/, so move one flavor's output out before building the other.
 tools/release-build.sh --offline          # build/release/{paddock-<v>[-play]-unsigned.apk, REPRODUCIBLE.txt, TOOLCHAIN.txt, build-{1,2}.log}
 
-# 3. Sign with a key that lives outside the repository. The password is read from a mode-600 file, never an argument or variable.
-PADDOCK_KEYSTORE=/path/outside/repo/release.p12 PADDOCK_KEY_ALIAS=paddock PADDOCK_KS_PASS_FILE=/path/to/pass \
-  tools/release-sign.sh build/release/paddock-<v>-unsigned.apk     # paddock-<v>.apk, SIGNATURE.txt, SHA256SUMS (play: paddock-<v>-play-unsigned.apk gives paddock-<v>-play.apk; APKs only, the .aab is not signed here)
+# 3. Sign with keys that live outside the repository (Key policy below). An APK takes the RELEASE key; an app bundle takes the separate UPLOAD key. Each password is read
+#    from its own mode-600 file, never an argument or variable; the script takes the unsigned file and nothing else.
+PADDOCK_KEYSTORE=/path/outside/repo/release.p12 PADDOCK_KEY_ALIAS=paddock PADDOCK_KS_PASS_FILE=/path/to/release-pass \
+  tools/release-sign.sh build/release/paddock-<v>-unsigned.apk     # paddock-<v>.apk, SIGNATURE.txt, SHA256SUMS (play: paddock-<v>-play-unsigned.apk gives paddock-<v>-play.apk)
+PADDOCK_UPLOAD_KEYSTORE=/path/outside/repo/upload.p12 PADDOCK_UPLOAD_KEY_ALIAS=upload PADDOCK_KS_PASS_FILE=/path/to/upload-pass \
+  tools/release-sign.sh build/release/paddock-<v>-play.aab         # play only: paddock-<v>-play-signed.aab, SIGNATURE-bundle.txt; SHA256SUMS keeps the APK's lines and gains the bundle's
+#    release-build.sh --sign signs the APK only. It names the unsigned bundle paddock-<v>-play.aab, so the signed one is ...-play-signed.aab; a file named ...-unsigned.aab would
+#    give paddock-<v>-play.aab, as the APK does (release-build.sh does not name it that way yet).
 
 # 4. Static privacy and manifest inspection of the APK that will be published.
 tools/check-release-apk.py build/release/paddock-<v>.apk build/release/PRIVACY-MANIFEST.txt                 # foss, the strict default
@@ -24,9 +29,11 @@ tools/check-release-apk.py build/release/paddock-<v>-play.apk build/release/PRIV
 
 # 5. Release smoke and the runtime half of the privacy checklist, on each device (an emulator or a phone with adb). Run against the foss APK; the play APK's sockets are measured separately (docs/billing.md).
 tools/run-release-smoke.py <adb-serial> build/release/paddock-<v>.apk <out-dir>
+# 5b. play only: the Play build's sockets, on a phone with Google Play and the build Play installed. It installs and drives nothing; a person does the purchase sequence while it samples.
+tools/run-release-smoke.py <adb-serial> --sockets-only --minutes 6 <out-dir>    # <out-dir>/play-sockets.txt: every remote address beyond loopback, with a reverse lookup
 ```
 
-`release-sign.sh` refuses a keystore inside the repository, a password file that is not mode 600, and an unaligned input; signs with APK Signature Scheme v2 and v3 only (minSdk 26 makes v1 unnecessary; v4 is for incremental installs and would leave an extra, unpublished file); runs `apksigner verify --print-certs --min-sdk-version 26`; and proves signing changed nothing but `META-INF` by comparing every entry with the unsigned APK.
+`release-sign.sh` refuses a keystore inside the repository (a symlink into it too), a password file that is not mode 600, any argument beyond the one file (a key or a password is never an argument), a file that is neither `.apk` nor `.aab`, and, for an APK, an unaligned input. It signs an APK with APK Signature Scheme v2 and v3 only (minSdk 26 makes v1 unnecessary; v4 is for incremental installs and would leave an extra, unpublished file), runs `apksigner verify --print-certs --min-sdk-version 26`, and proves signing changed nothing but `META-INF` by comparing every entry with the unsigned APK. It signs a bundle with `jarsigner` (PKCS12, `SHA256withRSA`, SHA-256, password by `-storepass:file`, no timestamp because nothing here contacts a server), runs `jarsigner -verify -verbose -certs`, accepts only the line `jar verified.` (jarsigner exits 0 for an unsigned jar), appends the signer certificate's fingerprints (what Play's upload-key page asks for), and proves, from the zip's own entries, that every entry outside the top-level `META-INF/` equals the unsigned bundle's in name and bytes: `base/root/META-INF/...` is content and is compared. `tools/test-release-scripts.sh` runs all of this with throwaway keys, including the cases that must fail (a changed entry, an unsigned result, each refusal) and a check that no password reaches a tool's argument list.
 
 ## What "reproducible" means here
 
@@ -75,9 +82,9 @@ R8 (`isMinifyEnabled`) and resource shrinking are on for the release type. They 
 
 `tools/release-build.sh` writes the same tuple to `build/release/TOOLCHAIN.txt`.
 
-## Target SDK policy, consulted 2026-10-03
+## Target SDK and Billing Library policy, re-checked 2026-10-12
 
-Google Play requires new apps and updates to target an API level within one year of the latest release: API 36 from 2026-08-31 (with an extension to 2026-11-01 for developers who ask). Paddock targets **37**, so it meets the requirement with a level to spare. Android 17 behaviour at target 37 (edge-to-edge enforced, `ACCESS_LOCAL_NETWORK` for LAN sockets) is handled and listed in `build-decision-record.md`. This only matters if decision M2 chooses Play; for a GitHub-only release no store policy applies. Re-check the policy page on the day a release is cut: the date above is when it was last read, not a standing fact.
+First read 2026-10-03, re-read 2026-10-12. Google Play requires new apps and updates to target API 36 from 2026-08-31, with an extension to 2026-11-01 for developers who ask; an existing app needs API 35 to stay visible to new users. Paddock targets **37**, so it meets the requirement with a level to spare. Play Billing Library 8 or later is required from 2026-08-31; the catalog has **9.1.0** (`docs/billing.md`). Android 17 behaviour at target 37 (edge-to-edge enforced, `ACCESS_LOCAL_NETWORK` for LAN sockets) is handled and listed in `build-decision-record.md`. For a GitHub-only release no store policy applies; for the Play route (Phase 16) both do. Re-check the policy pages on the day a bundle is uploaded: the date above is when they were last read, not a standing fact.
 
 ## What the release APK is checked for
 
@@ -100,19 +107,70 @@ Google Play requires new apps and updates to target an API level within one year
 - the whole run's logcat holds none of the seeded agent title, none of the seeded agent output, no private-key text and no password;
 - what the phone granted is within the manifest's four.
 
-The socket check is not expected to pass unchanged on the `play` APK: billing reaches the Play Store app over IPC, but the library's logging backend can open sockets from the app's uid. The `play` measurement is open and is written up in `docs/billing.md`; until it is done, "nothing leaves but SSH" is claimed for `foss` only.
+The socket check is not expected to pass unchanged on the `play` APK: billing reaches the Play Store app over IPC, but the library's logging backend can open sockets from the app's uid. The `play` measurement is open and is written up in `docs/billing.md`; until it is done, "nothing leaves but SSH" is claimed for `foss` only. It is taken with `run-release-smoke.py --sockets-only` on the Play-installed build (step 5b, Play section below). That sampler sees a socket only while it is open, so a connection that opens and closes between two samples is missing: an empty list is what was seen, not a proof of absence.
 
 ## Key policy
 
-The release key is generated by the person who publishes, on a machine they control, outside this repository and outside any directory the repository's tools write to; it is never in an environment variable or on a command line. Keep an offline copy and its password separately: **a lost key means no update can ever be installed over an existing install.** The key is RSA with 2048 bits or more, because Play requires that of an uploaded app signing key and the same key can then serve every route. If Play App Signing is used (decision M2), upload the existing key as the app signing key or enrol a new upload key, as the Play documentation of the day says. Play enrols a new app in a Google-generated key by default, and the switch to an uploaded key is possible only before the first rollout to open testing or production, so make it on the closed track (vault `phases/13`, read 2026-10-04).
+Two keys, each generated by the person who publishes, on a machine they control, as RSA with 2048 bits or more (Play's minimum for both; read 2026-10-12). Neither is ever in this repository, in an environment variable or on a command line. Create each with a validity Play's page accepts (read it the day the key is made).
 
-The signed APK in the rehearsal was made with a **throwaway key whose certificate says so** (`CN=Paddock REHEARSAL KEY (not a release key)`). It exists to prove the signing scripts, and its APK must never be published.
+- **The release key** signs every APK published outside Play (the `foss` APK on GitHub) and is Play's **app signing key**: it is exported to Google once, encrypted with PEPK, when the app is set up in the Console, so Google holds a copy and re-signs every APK it delivers with it. That is why a GitHub install and a Play install of the same tag are the same app to Android and update over each other. **Losing it is not recoverable for the GitHub route**: no update can be installed over an existing install, and every phone needs an uninstall first, which removes the phone's SSH key and host pins.
+- **The upload key** is a separate key, also RSA 2048 or more, and signs every app bundle before it is uploaded; Play checks the bundle against the upload certificate registered for the app, then signs the APKs it delivers with the app signing key. **Losing it is recoverable**: Play support resets the upload key and nothing installed changes.
+- The release key never signs a bundle and the upload key never signs an APK: `release-sign.sh` takes the key from the file's type, and `PADDOCK_UPLOAD_KEYSTORE` is the only way to sign a bundle.
+- Both keystores (PKCS12) live outside the repository and outside any directory its tools write to, each with an **offline copy** and its **own password held separately from it**. A script reads a password from a mode-600 file, never from an argument or a variable; `release-sign.sh` refuses a keystore under the repository.
+- The choice of app signing key is made before the first upload: Play enrols a new app in a Google-generated key by default, "use a different key" (then the PEPK export) can be changed until a release is in open testing or production, and the plan makes it on the Console's Play app signing page, before the internal upload (vault `phases/16`, slices 5 and 8).
+- This page records the certificates' SHA-256 fingerprints once the keys exist (AC-16.12), never a key or a password:
+
+| Key | Certificate SHA-256 |
+| --- | --- |
+| Release (Play's app signing key) | not generated yet |
+| Upload | not generated yet |
+
+The only keys that exist today are **throwaway** ones. `tools/test-release-scripts.sh` makes two in a temporary directory outside the repository (`CN=Paddock REHEARSAL KEY (not a release key)` and `CN=Paddock REHEARSAL UPLOAD KEY (not an upload key)`), signs a throwaway APK and bundle with them, and deletes everything on exit; it is the only place a rehearsal key is used. The signed APK of the 2026-10-03 rehearsal used a throwaway key whose certificate says so, and it must never be published.
+
+## Version table
+
+Applied at release time, not yet in `app/build.gradle.kts` (which says `0.0.1`, code 1): the bump, its commit and the tag are release actions (Phase 16, slices 8 and 9).
+
+| Cut | `versionName` | `versionCode` | Tag | Goes to |
+| --- | --- | --- | --- | --- |
+| Internal | `0.1.0-rc1` | 2 | `v0.1.0-rc1` | the `play` bundle, signed with the upload key, to Play's internal testing track |
+| Closed testing and production | `0.1.0` | 3 | `v0.1.0` | the `play` bundle to closed testing and production; the `foss` APK, signed with the release key, to GitHub |
+
+- `release-build.sh --publish` accepts `v0.1.0-rc1`: the tag equals `v<versionName>`.
+- One more code per re-upload: Play takes a `versionCode` once, so a replaced or rejected upload spends its number.
+- The `foss` GitHub APK carries the production code, the same number as the Play build of the same tag, so either route updates over the other.
+- F-Droid, if Phase 13 slice 7 is taken, lists only non-rc tags.
+
+## Before any push: hostnames
+
+Two old hostnames were scrubbed from this repository's history (the two names are listed in the vault's Phase 16 note; they are never written here, in a listing, a screenshot or a commit message). Before **any** push, search every local ref, and every worktree, for both; only the two backup refs may match.
+
+```sh
+OLD1=...; OLD2=...        # the two names from the vault's Phase 16 note; do not save them in this repository
+git for-each-ref --format='%(refname)' | grep -v -e '^refs/backup/pre-rewrite$' -e '^refs/backup/pre-scrub-2026-10-12$' \
+  | while read -r ref; do git grep -l -i -e "$OLD1" -e "$OLD2" "$ref" --; done                       # no output: every ref is clean (the exit status means nothing here)
+git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r wt; do git -C "$wt" grep -l -i --untracked -e "$OLD1" -e "$OLD2"; done   # and the working trees
+```
+
+- `refs/backup/pre-rewrite` and `refs/backup/pre-scrub-2026-10-12` stay **local, never pushed**: no `git push --mirror`, no refspec naming `refs/backup/`. The second holds the old names by design.
+- A screenshot or a piece of listing text is taken from the demo host only, never from a real machine (Phase 16 rule). `PADDOCK_OLD_NAMES=$OLD1,$OLD2 tools/check-listing.py` checks the listing text, the image file names and the images' metadata.
+
+## Google Play (Phase 16)
+
+The Play route is one listing: the `play` flavor is the free install and Pro is an in-app purchase inside it; the `foss` APK on GitHub is the same application id and the same release key, so a phone can move between the two. The vault note `herdr-android/phases/16-play-publication.md` holds the slices and the acceptance criteria; this page holds what the pipeline does.
+
+- **The two cuts.** `0.1.0-rc1` / code 2 goes to internal testing first, so the signing, the app signing key and the purchase path are proven before the production cut; `0.1.0` / code 3 follows once the listing, the policy page and the socket measurement exist. See the version table. Every upload spends a code for ever.
+- **Signing.** A bundle is signed with the upload key (step 3). Before the first upload the app signing key is chosen in the Console (Key policy), and the upload certificate's fingerprint, printed at the end of `SIGNATURE-bundle.txt`, is registered there. All Console actions are the user's; no key material is ever passed to a tool or written to this repository.
+- **Policy dates.** Target API and Billing Library: see "Target SDK and Billing Library policy, re-checked 2026-10-12" above; both are met (37, 9.1.0).
+- **The delivered APK check (AC-16.1).** Play builds the APK a phone gets from the uploaded bundle and signs it with the app signing key. On a phone with the Play-installed build: `adb shell pm path io.github.tuthan.paddock`, `adb pull` of the `base.apk` line, then `apksigner verify --print-certs base.apk`, which must show the **release** certificate (AC-13.2), and `tools/check-release-apk.py base.apk report.txt --flavor play`, which must pass every check. The script's header says why no flag is needed; the first real run (Phase 16, slice 8) confirms it.
+- **The sockets (AC-16.3).** Step 5b, on the same build. The list goes into `docs/privacy-checklist.md`, the privacy policy and the Data safety answers, or is empty and all three say so.
+- **The listing text.** There are two text folders on purpose. `fastlane/metadata/android/en-US/` is F-Droid's source: F-Droid reads it from the tagged commit, so editing it for Play would change the F-Droid listing. `play-listing/en-US/` is the Google Play text, derived from it: it drops the sentence about the free build and the names of the other channels (decision P2), and adds a demo sentence to the "You need" paragraph; the twelve-month window and compatibility text (M7) are the user's and are not in it yet. `tools/check-listing.py` checks the lengths of both, that the Play description is its own, the image sizes and, with `PADDOCK_OLD_NAMES`, the old names. The images are in `play-listing/en-US/images/` (the icon stays under `fastlane/`, where both stores read it). `featureGraphic.png` is drawn by `tools/make-feature-graphic.py` from the launcher icon, the bundled IBM Plex Sans and the theme's colours (Pillow, for that script only). `phoneScreenshots/` holds four screens of the demo machine (`docs/demo.md`), taken from the `play` debug build on an API 37 emulator with its display set to 1080x2160 (`wm size`, because Play takes a long side of at most twice the short one, and the emulator's own 1080x2400 is over), the status bar fixed by the system's demo mode (10:00, full battery), Protect sensitive screens off in the app (it blocks the capture; this is the demo, so nothing sensitive is on screen), and the images saved as 24-bit RGB with no metadata. They are made again when a screen changes, in the same way; `tools/check-listing.py --strict` is the check. The Play text names the demo, which now exists, so it may be entered in the Console once the user has read it.
 
 ## Not done
 
-- **A real signing key** and a signed 1.0 `foss` APK (and, if Play is chosen, a `play` APK and bundle on the same key). Needs the publisher.
-- **The version bump.** The build says `0.0.1`; setting `versionName`/`versionCode` for 1.0, the commit and the tag are release actions.
+- **The two real keys** (release and upload, Key policy) and a signed `foss` APK and `play` bundle. Needs the publisher. Their fingerprints go into the Key policy table when they exist.
+- **The version bump.** The build says `0.0.1` / code 1; the cuts in the version table (`0.1.0-rc1` / 2, then `0.1.0` / 3), their commits and tags are release actions.
 - **A GitHub release** (the `foss` APK, `SHA256SUMS`, toolchain tuple, this page's policy line, links to every phase's evidence report). Not published; nothing here sends anything anywhere. The licence is in place: `LICENSE` (Apache-2.0, decision M1, 2026-10-04) is at the repository root and named in the README and About.
-- **Play items** (bundle upload and the signing of the bundle for upload, which `release-sign.sh` does not do; Play App Signing, Data safety form, privacy policy URL, support email): only if M2 chooses Play; `phases/13` holds the detail.
-- **A smoke on a physical phone.** The three runs (2026-10-03, before the flavors) are an API 26 emulator, an API 36 emulator and an API 37 emulator. The release criterion names a physical phone; that run remains, for the `foss` APK, and the `play` APK's socket measurement needs a phone with Google Play (`docs/billing.md`).
+- **Play items** (the Console app, Play App Signing with the PEPK export, the bundle upload, the Data safety form, the privacy policy URL, the support email, products, the feature graphic and screenshots from the demo host): Phase 16 (vault `phases/16-play-publication.md`). Nothing has been entered in the Console. Signing a bundle is done (`release-sign.sh`, tested with throwaway keys).
+- **A smoke on a physical phone.** The three runs (2026-10-03, before the flavors) are an API 26 emulator, an API 36 emulator and an API 37 emulator. The release criterion names a physical phone; that run remains, for the `foss` APK, and the `play` build's socket measurement needs a phone with Google Play (`run-release-smoke.py --sockets-only`, `docs/billing.md`).
 - **Reproducibility on a second machine.** Only one machine and toolchain were used, for both flavors.

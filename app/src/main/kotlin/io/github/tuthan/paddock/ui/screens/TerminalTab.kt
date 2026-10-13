@@ -50,6 +50,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.tuthan.paddock.demo.DemoCopy
 import io.github.tuthan.paddock.terminal.EndReason
 import io.github.tuthan.paddock.terminal.Mods
 import io.github.tuthan.paddock.terminal.TerminalMode
@@ -300,6 +301,7 @@ private fun NoticeBanner(notice: TerminalNotice?, actions: TerminalActions) {
         is TerminalNotice.ControlRefused -> Banner("herdr did not give control: ${notice.herdrSays}", actionLabel = "Dismiss", onAction = actions.onDismissNotice)
         is TerminalNotice.ControlEnded -> Banner("Control ended: ${notice.herdrSays}. The terminal is read-only again.", actionLabel = "Dismiss", onAction = actions.onDismissNotice)
         TerminalNotice.HelperUnavailable -> Banner("This version of Paddock has no control helper to install, so the terminal stays read-only.", actionLabel = "Dismiss", onAction = actions.onDismissNotice)
+        TerminalNotice.NotInDemo -> Banner(DemoCopy.CONTROL, actionLabel = "Dismiss", onAction = actions.onDismissNotice)
     }
 }
 

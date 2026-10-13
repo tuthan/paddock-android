@@ -50,12 +50,14 @@ import io.github.tuthan.paddock.routes.proCard
 import io.github.tuthan.paddock.ui.components.SecureWindow
 import io.github.tuthan.paddock.ui.screens.ABOUT_THEME
 import io.github.tuthan.paddock.ui.screens.LocalAccess
+import io.github.tuthan.paddock.ui.screens.PRIVACY_POLICY_URL
 import io.github.tuthan.paddock.ui.screens.ProCardState
 import io.github.tuthan.paddock.ui.screens.RECONNECT_EXPANDED
 import io.github.tuthan.paddock.ui.screens.RECONNECT_MONITORING
 import io.github.tuthan.paddock.ui.screens.RECONNECT_POLICY
 import io.github.tuthan.paddock.ui.screens.Settings
 import io.github.tuthan.paddock.ui.screens.SettingsState
+import io.github.tuthan.paddock.ui.screens.aboutTelemetryClaim
 import io.github.tuthan.paddock.ui.theme.PaddockTheme
 import java.io.File
 import org.junit.After
@@ -70,7 +72,7 @@ import org.junit.Test
 class SettingsTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
-    private class Calls { var protect: Boolean? = null; var system = 0; var back = 0; var machines = 0; var overview = 0 }
+    private class Calls { var protect: Boolean? = null; var system = 0; var back = 0; var machines = 0; var overview = 0; var privacy = 0 }
 
     private fun show(
         protect: Boolean = true, local: LocalAccess = LocalAccess.NotRequired, fontScale: Float? = null, dark: Boolean = true, calls: Calls = Calls(),
@@ -82,7 +84,7 @@ class SettingsTest {
                 PaddockTheme(darkTheme = dark) {
                     Settings(
                         SettingsState(protect, local, "0.1.0", machineCount = machineCount, watchedMachine = "Laptop", herdrVersion = "0.9.1", pro = pro),
-                        { calls.protect = it }, { calls.system++ }, { calls.back++ }, onMachines = { calls.machines++ }, onProOverview = { calls.overview++ },
+                        { calls.protect = it }, { calls.system++ }, { calls.back++ }, onMachines = { calls.machines++ }, onProOverview = { calls.overview++ }, onOpenPrivacyPolicy = { calls.privacy++ },
                     )
                 }
             }
@@ -185,6 +187,27 @@ class SettingsTest {
         rule.onNodeWithText("SIL OPEN FONT LICENSE Version 1.1", substring = true).assertExists()
         rule.onNodeWithText("Close").performClick()
         rule.onNodeWithText("Font licences").assertDoesNotExist()
+    }
+
+    @Test fun aboutLinksThePrivacyPolicyAsAButtonOfAtLeastFortyEightDpAndAsksTheCallerToOpenIt() {
+        val calls = show()
+        val row = rule.onNode(hasContentDescription("Privacy policy", substring = true))
+        row.performScrollTo().assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+        val config = row.fetchSemanticsNode().config
+        assertEquals(androidx.compose.ui.semantics.Role.Button, config.getOrNull(SemanticsProperties.Role))
+        assertEquals("Open the privacy policy in your browser", config.getOrNull(androidx.compose.ui.semantics.SemanticsActions.OnClick)?.label)
+        assertEquals("Privacy policy, opens in your browser", config.getOrNull(SemanticsProperties.ContentDescription)?.joinToString(""))
+        assertEquals("the row opens nothing by itself", 0, calls.privacy)
+        row.performClick()
+        assertEquals(1, calls.privacy)
+        // It is About's row: below the section's kicker, with the version and the fonts, and the policy is one https address.
+        assertTrue("under About", row.getUnclippedBoundsInRoot().top >= rule.onNodeWithText("ABOUT").getUnclippedBoundsInRoot().bottom)
+        assertTrue(PRIVACY_POLICY_URL.startsWith("https://"))
+    }
+
+    @Test fun thePrivacyPolicyRowHoldsAtTwoHundredPercentFont() {
+        show(fontScale = 2f)
+        rule.onNode(hasContentDescription("Privacy policy", substring = true)).performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
     }
 
     private fun showAlerts(alerts: io.github.tuthan.paddock.ui.screens.AlertsState, fontScale: Float? = null, onAlerts: (Boolean) -> Unit = {}, onHide: (Boolean) -> Unit = {}, onRecovery: (io.github.tuthan.paddock.alerts.AccessRecovery.Action) -> Unit = {}) {
@@ -346,7 +369,10 @@ class SettingsTest {
         assertEquals(0, rule.onAllNodes(hasContentDescription("Theme", substring = true)).fetchSemanticsNodes().size)
         val version = rule.onNode(hasContentDescription("Version, 0.1.0"))
         version.performScrollTo().assertIsDisplayed()
-        rule.onNodeWithText("herdr protocol 22 · host on 0.9.1 · $ABOUT_THEME · no analytics, no crash uploads", useUnmergedTree = true).assertIsDisplayed()
+        // The telemetry claim is the flavor's (Phase 16, slice 4): the play build claims only Paddock's own code until its billing library is measured.
+        val claim = if (Distribution.SELLS_PRO) "no analytics or crash uploads of Paddock's own" else "no analytics, no crash uploads"
+        assertEquals(claim, aboutTelemetryClaim(Distribution.SELLS_PRO))
+        rule.onNodeWithText("herdr protocol 22 · host on 0.9.1 · $ABOUT_THEME · $claim", useUnmergedTree = true).assertIsDisplayed()
         assertTrue("under About", version.getUnclippedBoundsInRoot().top >= rule.onNodeWithText("ABOUT").getUnclippedBoundsInRoot().bottom)
     }
 

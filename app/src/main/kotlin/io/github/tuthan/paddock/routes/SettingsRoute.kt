@@ -10,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import io.github.tuthan.paddock.demo.Demo
 import io.github.tuthan.paddock.applock.AppLock
 import io.github.tuthan.paddock.applock.AppLockCopy
 import io.github.tuthan.paddock.applock.AuthResult
@@ -25,6 +26,7 @@ import io.github.tuthan.paddock.settings.SettingsController
 import io.github.tuthan.paddock.ssh.LocalNetworkGate
 import io.github.tuthan.paddock.ui.screens.AlertsState
 import io.github.tuthan.paddock.ui.screens.LocalAccess
+import io.github.tuthan.paddock.ui.screens.PRIVACY_POLICY_URL
 import io.github.tuthan.paddock.ui.screens.ProCardState
 import io.github.tuthan.paddock.ui.screens.Settings
 import io.github.tuthan.paddock.ui.screens.SettingsState
@@ -92,7 +94,7 @@ internal fun SettingsRoute(
     }
     Settings(
         SettingsState(
-            settings.protectSensitiveScreens, access, version, machineCount = machines.size, watchedMachine = profile?.name, herdrVersion = view.herdrVersion, keepPromptText = settings.keepPromptText, snippetCount = snippets.size, journalUnreadable = journalUnreadable,
+            settings.protectSensitiveScreens, access, version, machineCount = machines.size, watchedMachine = profile?.name, herdrVersion = if (profile?.let(Demo::isDemo) == true) null else view.herdrVersion, demoMachine = profile?.let(Demo::isDemo) == true, keepPromptText = settings.keepPromptText, snippetCount = snippets.size, journalUnreadable = journalUnreadable,
             alerts = AlertsState(settings.localAlerts, settings.hidePromptOnLockScreen, recovery), agentGlyphs = settings.agentGlyphs,
             pro = proCard(pro, clock.nowMillis()),
             appLock = settings.appLock, appLockAfterSeconds = settings.appLockAfterSeconds, deviceLock = deviceLock,
@@ -108,6 +110,7 @@ internal fun SettingsRoute(
         },
         onAppLockAfter = { prefs.setAppLockAfter(it) },
         onOpenSecuritySettings = { runCatching { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) } },
+        onOpenPrivacyPolicy = { openPrivacyPolicy(ctx) },
         onRestorePurchase = { proService.restore() },
         onBuyTip = { proService.buyTip(it) },
         // The sheet is the one purchase surface: the row only asks for it (idle opens it, busy says why not now).
@@ -133,4 +136,13 @@ internal fun SettingsRoute(
             else recovery?.let { r -> notificationReader.settingsIntent(r, notificationAccess)?.let { ctx.startActivity(it) } }
         },
     )
+}
+
+/** About's Privacy policy row: the page in the phone's browser. A phone with no app that opens a web page is told where the page is, never left with a silent tap. */
+private fun openPrivacyPolicy(ctx: android.content.Context) {
+    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_POLICY_URL)).addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+    try { ctx.startActivity(intent) }
+    catch (_: android.content.ActivityNotFoundException) {
+        android.widget.Toast.makeText(ctx, "No app on this phone opens a web page. The policy is at $PRIVACY_POLICY_URL", android.widget.Toast.LENGTH_LONG).show()
+    }
 }

@@ -12,8 +12,9 @@ A phone with no saved machine opens on Welcome. It says what Paddock is, what mu
 | Find on this network | Ghost | the finder, below |
 | Paste a pairing link | Ghost | reads the clipboard once, then Add machine filled from the link |
 | Scan the code on the desktop | Ghost | the scanner, below |
+| Try a demo | Ghost | Home, with a demo machine that exists only in memory and opens no connection (`docs/demo.md`) |
 
-Back from Add machine returns to Welcome while there is still no machine. Once there is one, **Add another machine** on the Machines screen (Home's machine chip, or Settings > Machines) opens the form directly (`docs/machines.md`).
+Try a demo is the one way in that does not end on Add machine: it needs no machine, saves nothing and asks for no permission, so a person can see Home, Output, the composer and Spaces first. Back from Add machine returns to Welcome while there is still no machine. Once there is one, **Add another machine** on the Machines screen (Home's machine chip, or Settings > Machines) opens the form directly (`docs/machines.md`).
 
 ## Connect stays on the form
 

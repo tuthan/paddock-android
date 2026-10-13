@@ -220,6 +220,7 @@ private fun ComposeConnected(
     }
     LaunchedEffect(running) { if (terminalId !in running) uploads.ended(terminalId) }
     val attachUi = when {
+        io.github.tuthan.paddock.demo.Demo.isDemo(host.profile) -> AttachUi.Off(io.github.tuthan.paddock.demo.DemoCopy.FILES)
         host.transfers == null -> AttachUi.Hidden
         folder == null -> AttachUi.Off(ATTACH_NOTE_OFF_NO_FOLDER)
         else -> AttachUi.On

@@ -71,6 +71,19 @@ class WelcomeAndConnectTest {
         assertEquals(listOf("enter", "find", "paste", "scan"), calls)
     }
 
+    @Test fun theDemoIsNotOfferedUnlessItIsWired() {
+        content(null) { Welcome(onEnterAddress = {}) }
+        rule.onAllNodesWithText("Try a demo").assertCountEquals0()
+    }
+
+    @Test fun theDemoCallsItsHandlerAndIsSpokenAsWhatItIs() {
+        val calls = mutableListOf<String>()
+        content(null) { Welcome(onEnterAddress = {}, onDemo = { calls += "demo" }) }
+        // The spoken name carries the label and what the demo is.
+        rule.onNode(hasContentDescription("Try a demo. Look around with a demo machine")).performScrollTo().performClick()
+        assertEquals(listOf("demo"), calls)
+    }
+
     @Test fun aRefusedPastedLinkIsExplainedAboveTheWays() {
         content(null) { Welcome(onEnterAddress = {}, onPasteLink = {}, notice = "That is not a Paddock pairing link.") }
         rule.onNodeWithText("That is not a Paddock pairing link.").assertIsDisplayed()

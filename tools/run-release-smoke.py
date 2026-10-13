@@ -2,6 +2,8 @@
 """Release smoke on one emulator or phone (AC-10.6) and the runtime half of the privacy checklist (AC-10.4), against the SIGNED RELEASE APK.
 
   tools/run-release-smoke.py <adb-serial> <signed-apk> [out-dir]
+  tools/run-release-smoke.py <adb-serial> --sockets-only [--minutes N] [out-dir]
+  tools/run-release-smoke.py --self-test
 
 The release APK is not debuggable, so nothing here uses run-as or instrumentation: the app is driven through adb and uiautomator dumps,
 as paddock-harness/check-permission-flow.py does, and judged from what a user sees, from the host, and from the phone's own logs and sockets.
@@ -18,12 +20,142 @@ Privacy (runtime, on the same session):
   the app is not debuggable; every socket the app's uid opened during the run goes to the sshd and to nothing else (sampled from
   /proc/net/{tcp,tcp6,udp,udp6} every 0.4 s); the window carries FLAG_SECURE on Output and not on Home; and the logcat of the whole run
   holds none of the markers seeded in the agent's output and title, no private-key text, and no password.
-"""
-import os, re, signal, subprocess, sys, threading, time, json, xml.etree.ElementTree as ET
 
-SERIAL = sys.argv[1]; APK = os.path.abspath(sys.argv[2])
+--sockets-only (default 6 minutes; Phase 16, AC-16.3, the `play` build's network): installs nothing, drives nothing, starts no sshd or herdr. A person
+does the purchase sequence on the build Google Play installed (cold start, two idle minutes on Home with no machine, Settings, Restore purchase, a
+licence-tester tip and its thank-you, a second Restore, two idle minutes) while this samples the app uid's sockets with the same sampler as the smoke,
+then prints and writes <out-dir>/play-sockets.txt: every remote address beyond loopback with a reverse lookup ("no PTR" when there is none). It marks
+the list NOT A MEASUREMENT when the installer is not com.android.vending, when no /proc/net row could be read, when the app was never seen running and
+when the run was cut short. The sampler sees a socket only while it is open (every 0.4 s plus an adb round trip per file), so a connection that opens and closes between
+two rounds is missing from the list: an empty list is what was seen, not a proof of absence. Exit 0 with a complete run, 1 when the list is marked NOT A
+MEASUREMENT, 2 when the device or the package is not there.
+--self-test feeds the parser, the report and the argument handling canned text; no device, no network.
+"""
+import ipaddress, os, re, signal, socket, subprocess, sys, tempfile, threading, time, json, xml.etree.ElementTree as ET
+
+# ---------------------------------------------------------------- the pure part: arguments, /proc/net rows, the socket report (all of it under --self-test)
+USAGE = "usage: run-release-smoke.py <adb-serial> <signed-apk> [out-dir]  |  <adb-serial> --sockets-only [--minutes N] [out-dir]  |  --self-test"
+def parse_args(argv):
+    """(serial, apk, out_dir, sockets_only, minutes) from the arguments after the program name. The smoke keeps its positional form; --sockets-only takes no APK."""
+    a = list(argv); sockets_only = "--sockets-only" in a; minutes = 6.0
+    if sockets_only: a.remove("--sockets-only")
+    if "--minutes" in a:
+        i = a.index("--minutes")
+        if not sockets_only: raise SystemExit("--minutes belongs to --sockets-only\n" + USAGE)
+        try: minutes = float(a[i + 1])
+        except (IndexError, ValueError): raise SystemExit("--minutes needs a number\n" + USAGE)
+        if not minutes > 0: raise SystemExit("--minutes must be above zero\n" + USAGE)
+        del a[i:i + 2]
+    if any(x.startswith("--") for x in a): raise SystemExit("unknown option " + next(x for x in a if x.startswith("--")) + "\n" + USAGE)
+    if sockets_only:
+        if not 1 <= len(a) <= 2: raise SystemExit(USAGE)
+        return a[0], None, (a[1] if len(a) > 1 else None), True, minutes
+    if not 2 <= len(a) <= 3: raise SystemExit(USAGE)
+    return a[0], a[1], (a[2] if len(a) > 2 else None), False, minutes
+
+def hexaddr(h, v6):
+    ip, port = h.split(":")
+    if not v6: b = bytes.fromhex(ip)[::-1]; return ".".join(map(str, b)) + ":" + str(int(port, 16))
+    raw = bytes.fromhex(ip); words = [raw[i:i + 4][::-1] for i in range(0, 16, 4)]; b = b"".join(words)
+    return str(ipaddress.IPv6Address(b)) + ":" + str(int(port, 16))
+
+def parse_proc_net(text, proto, uid):
+    """The remote endpoints ("ip:port") of the connected sockets that `uid` owns in one /proc/net/<proto> dump, and the number of rows read in all (any
+    uid; zero means the file was not readable, which is not the same as an app with no sockets). Listening and unconnected rows (remote port 0) are skipped."""
+    found, rows = [], 0
+    for line in text.splitlines()[1:]:
+        f = line.split()
+        if len(f) < 8: continue
+        rows += 1
+        if f[7] != str(uid): continue
+        remote = hexaddr(f[2], proto.endswith("6"))
+        if remote.endswith(":0") or remote.startswith("0.0.0.0:") or remote.startswith(":::0"): continue
+        found.append(remote)
+    return found, rows
+
+def remote_ip(remote):
+    """The address of "ip:port" as an ipaddress object, an IPv4-mapped IPv6 address unwrapped to the IPv4 one."""
+    ip = ipaddress.ip_address(remote.rsplit(":", 1)[0])
+    return ip.ipv4_mapped if ip.version == 6 and ip.ipv4_mapped else ip
+
+def render_socket_report(seen, meta, lookup):
+    """(text, problems): the play-sockets.txt text for {(proto, "ip:port"): rounds seen} and the run's facts; `lookup(ip)` is the reverse lookup and raises
+    when there is no PTR. `problems` lists why the run measured nothing; each is also in the text, in capitals, first."""
+    problems = []
+    if meta["installer"] != "com.android.vending": problems.append(f"the installer is {meta['installer']}, not com.android.vending, so the list does not describe the Play build")
+    if meta["rows"] == 0: problems.append("no /proc/net row of any uid could be read, so the list says nothing")
+    if meta["running"] == 0: problems.append("the app was never seen running, so the list says nothing")
+    if meta["early"]: problems.append(f"the run stopped after {meta['seconds']:.0f} s of the {meta['asked']:.0f} s asked, so the sequence is incomplete")
+    remote = {k: n for k, n in seen.items() if not remote_ip(k[1]).is_loopback}
+    names = {}
+    for ip in sorted({str(remote_ip(r)) for _, r in remote}):
+        try: names[ip] = lookup(ip) or "no PTR"
+        except Exception: names[ip] = "no PTR"
+    out = [f"NOT A MEASUREMENT: {x}" for x in problems]
+    out += [f"Sockets of {meta['pkg']} (uid {meta['uid']}) on {meta['serial']}; installer {meta['installer']}",
+            f"sampled from /proc/net/{{tcp,tcp6,udp,udp6}} from {meta['start']}: {meta['seconds']:.0f} s of {meta['asked']:.0f} s asked, {meta['samples']} rounds, {meta['rows']} rows read, app seen running in {meta['running']} of {meta['checks']} checks",
+            "A socket is seen only while it is open: a connection that opens and closes between two rounds is not here. An empty list is what was seen, not a proof of absence.",
+            f"remote addresses beyond loopback: {len(remote)}"]
+    for (proto, r), n in sorted(remote.items()): out.append(f"  {proto:<4} {r}  seen in {n} rounds  PTR {names[str(remote_ip(r))]}")
+    out.append("result: none beyond loopback (the SSH host, if a machine was added, would be listed above)" if not remote else
+               "result: every address above goes into the privacy checklist, the policy and the Data safety answers by name (docs/billing.md)")
+    return "\n".join(out) + "\n", problems
+
+def self_test():
+    bad = []
+    def t(name, ok, detail=""):
+        print(("PASS " if ok else "FAIL ") + name + (f" - {detail}" if detail and not ok else "")); ok or bad.append(name)
+    def refused(argv):
+        try: parse_args(argv); return False
+        except SystemExit as e: return bool(e.code)
+    t("a v4 address is read little-endian", hexaddr("0202000A:08D9", False) == "10.0.2.2:2265", hexaddr("0202000A:08D9", False))
+    t("a v6 loopback is ::1", hexaddr("00000000000000000000000001000000:1F90", True) == "::1:8080", hexaddr("00000000000000000000000001000000:1F90", True))
+    t("a v4-mapped v6 address is the v4 address", str(remote_ip(hexaddr("0000000000000000FFFF00000202000A:08D9", True))) == "10.0.2.2")
+    HDR = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+    row = lambda sl, loc, rem, uid: f"   {sl}: {loc} {rem} 01 00000000:00000000 00:00000000 00000000 {uid:>5}        0 {1000 + sl} 1 0000000000000000 20 4 30 10 -1\n"
+    tcp = HDR + row(0, "0100007F:0035", "00000000:0000", 10179) + row(1, "0F02000A:C350", "0202000A:08D9", 10179) + row(2, "0F02000A:C351", "08080808:01BB", 10180) + row(3, "0F02000A:C352", "8EFA0F2B:01BB", 10179) + "short line\n"
+    found, rows = parse_proc_net(tcp, "tcp", 10179)
+    t("tcp: the app's connected sockets only, the listener and another uid's left out", found == ["10.0.2.2:2265", "43.15.250.142:443"], str(found))
+    t("tcp: every well-formed row is counted, whatever its uid", rows == 4, str(rows))
+    found, rows = parse_proc_net(HDR + row(0, "0000000000000000FFFF00000F02000A:C350", "0000000000000000FFFF00000202000A:08D9", 10179) + row(1, "00000000000000000000000001000000:C351", "00000000000000000000000001000000:1F90", 10179), "tcp6", 10179)
+    t("tcp6: a mapped address and a loopback are both returned (loopback is filtered later)", len(found) == 2 and str(remote_ip(found[0])) == "10.0.2.2" and remote_ip(found[1]).is_loopback, str(found))
+    found, rows = parse_proc_net(HDR + row(0, "0F02000A:0044", "00000000:0000", 10179) + row(1, "0F02000A:C353", "01010101:0035", 10179), "udp", 10179)
+    t("udp: an unconnected socket is skipped, a connected one is returned", found == ["1.1.1.1:53"], str(found))
+    t("a dump with a header and no rows reads zero rows", parse_proc_net(HDR, "tcp", 10179) == ([], 0))
+    t("an empty dump (adb returned nothing) reads zero rows", parse_proc_net("", "tcp6", 10179) == ([], 0))
+    meta = dict(pkg="io.github.tuthan.paddock", uid=10179, serial="TESTSERIAL", installer="com.android.vending", start="2026-10-12 21:00:00", seconds=360, asked=360, samples=480, rows=5230, running=36, checks=36, early=False)
+    def lookup(ip):
+        if ip == "142.250.4.95": return "sin04s.1e100.net"
+        raise socket.herror(1, "Unknown host")
+    seen = {("tcp", "127.0.0.1:5037"): 9, ("tcp6", "::1:8080"): 2, ("tcp6", "::ffff:142.250.4.95:443"): 31, ("udp", "10.0.2.3:53"): 4}
+    text, problems = render_socket_report(seen, meta, lookup)
+    t("report: loopback is not listed, the other two are, counted", "remote addresses beyond loopback: 2" in text and "127.0.0.1" not in text and "::1:" not in text, text)
+    t("report: a name is shown and a failed lookup says no PTR", "PTR sin04s.1e100.net" in text and "10.0.2.3:53  seen in 4 rounds  PTR no PTR" in text, text)
+    t("report: a complete Play run has no problem and says where the addresses go", problems == [] and "NOT A MEASUREMENT" not in text and "privacy checklist" in text)
+    text, problems = render_socket_report({("tcp", "127.0.0.1:5037"): 9}, meta, lookup)
+    t("report: an empty list says so and does not claim proof", "remote addresses beyond loopback: 0" in text and "result: none beyond loopback" in text and "not a proof of absence" in text and problems == [])
+    text, problems = render_socket_report({}, dict(meta, rows=0, running=0, early=True, seconds=95, installer="null"), lookup)
+    t("report: a sideloaded installer, nothing readable, app never running and an early stop are each a problem, said first", len(problems) == 4 and text.startswith("NOT A MEASUREMENT: the installer is null") and "after 95 s of the 360 s asked" in text, text)
+    with tempfile.TemporaryDirectory() as d:
+        write_text(os.path.join(d, "sub"), "play-sockets.txt", "x\n")
+        t("write_text makes the out-dir and writes play-sockets.txt", open(os.path.join(d, "sub", "play-sockets.txt")).read() == "x\n")
+    t("args: the smoke's own form is unchanged", parse_args(["emulator-5554", "a.apk"]) == ("emulator-5554", "a.apk", None, False, 6.0) and parse_args(["s", "a.apk", "out"]) == ("s", "a.apk", "out", False, 6.0))
+    t("args: --sockets-only has no APK and defaults to 6 minutes", parse_args(["s", "--sockets-only"]) == ("s", None, None, True, 6.0))
+    t("args: --minutes and an out-dir, in either order", parse_args(["s", "--sockets-only", "--minutes", "2.5", "out"]) == ("s", None, "out", True, 2.5) and parse_args(["--minutes", "1", "s", "out", "--sockets-only"]) == ("s", None, "out", True, 1.0))
+    t("args: refused: none, --minutes alone, a bad number, zero, an unknown option, a third positional with --sockets-only",
+      all(refused(a) for a in ([], ["s"], ["s", "a.apk", "--minutes", "3"], ["s", "--sockets-only", "--minutes", "x"], ["s", "--sockets-only", "--minutes", "0"], ["s", "--sockets-only", "--minutes"], ["s", "a.apk", "--wat"], ["s", "--sockets-only", "a", "b"])))
+    print(f"\n{'all passed' if not bad else str(len(bad)) + ' FAILED'}"); return 1 if bad else 0
+
+def write_text(out_dir, name, text):
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, name), "w") as f: f.write(text)
+
+if sys.argv[1:] == ["--self-test"]: sys.exit(self_test())
+
+SERIAL, APK, OUT_ARG, SOCKETS_ONLY, MINUTES = parse_args(sys.argv[1:])
+if APK: APK = os.path.abspath(APK)
 HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE)
-OUT = os.path.abspath(sys.argv[3]) if len(sys.argv) > 3 else os.path.join(ROOT, "build", "release-smoke-" + time.strftime("%Y%m%d-%H%M%S") + "-" + SERIAL.replace("emulator-", ""))
+OUT = os.path.abspath(OUT_ARG) if OUT_ARG else os.path.join(ROOT, "build", ("play-sockets-" if SOCKETS_ONLY else "release-smoke-") + time.strftime("%Y%m%d-%H%M%S") + "-" + SERIAL.replace("emulator-", ""))
 os.makedirs(OUT, exist_ok=True)
 ADB = [os.path.expanduser("~/Android/Sdk/platform-tools/adb"), "-s", SERIAL]
 PKG = "io.github.tuthan.paddock"
@@ -78,9 +210,10 @@ def setup_host():
 
 # The sshd's directory is cleared before the sshd starts: clearing it afterwards would delete the host key and the pid file of the running daemon
 # (the fingerprint read here would then not be the one the phone sees, and `stop` could not find the process).
-subprocess.run(["rm", "-rf", SSHD_ENV["TEST_SSHD_RUN"]])
-subprocess.run([os.path.join(HERE, "test-sshd.sh"), "start"], env=SSHD_ENV, check=True, capture_output=True)
-FP = subprocess.run([os.path.join(HERE, "test-sshd.sh"), "fingerprint"], env=SSHD_ENV, capture_output=True, text=True).stdout.split()[1]
+if not SOCKETS_ONLY:
+    subprocess.run(["rm", "-rf", SSHD_ENV["TEST_SSHD_RUN"]])
+    subprocess.run([os.path.join(HERE, "test-sshd.sh"), "start"], env=SSHD_ENV, check=True, capture_output=True)
+    FP = subprocess.run([os.path.join(HERE, "test-sshd.sh"), "fingerprint"], env=SSHD_ENV, capture_output=True, text=True).stdout.split()[1]
 
 def teardown():
     subprocess.run([HERDR_BIN, "session", "stop", SESSION, "--json"], env=HENV, capture_output=True)
@@ -136,24 +269,47 @@ def scroll_down(): adb("shell", "input", "swipe", "540", "1500", "540", "700", "
 # ---------------------------------------------------------------- sockets of the app's uid
 APP_UID = None
 sockets = {}   # (proto, remote) -> count
+samples = 0; rows_read = 0   # rounds taken, and /proc/net rows read (any uid): zero rows means the files were not readable
 stop_sampling = threading.Event()
-def hexaddr(h, v6):
-    ip, port = h.split(":")
-    if not v6: b = bytes.fromhex(ip)[::-1]; return ".".join(map(str, b)) + ":" + str(int(port, 16))
-    raw = bytes.fromhex(ip); words = [raw[i:i + 4][::-1] for i in range(0, 16, 4)]; b = b"".join(words)
-    import ipaddress; return str(ipaddress.IPv6Address(b)) + ":" + str(int(port, 16))
 def sample_sockets():
+    global samples, rows_read
     while not stop_sampling.is_set():
         for proto, path in (("tcp", "tcp"), ("tcp6", "tcp6"), ("udp", "udp"), ("udp6", "udp6")):
             try: text = adb("shell", "cat", f"/proc/net/{path}", check_=False)
             except Exception: continue
-            for line in text.splitlines()[1:]:
-                f = line.split()
-                if len(f) < 8 or f[7] != str(APP_UID): continue
-                remote = hexaddr(f[2], proto.endswith("6"))
-                if remote.endswith(":0") or remote.startswith("0.0.0.0:") or remote.startswith(":::0"): continue
-                sockets[(proto, remote)] = sockets.get((proto, remote), 0) + 1
+            found, rows = parse_proc_net(text, proto, APP_UID); rows_read += rows
+            for remote in found: sockets[(proto, remote)] = sockets.get((proto, remote), 0) + 1
+        samples += 1
         time.sleep(0.4)
+
+def sockets_only():
+    """--sockets-only: no install, no drive; sample the app uid's sockets for MINUTES while a person uses the build Google Play installed."""
+    global APP_UID
+    try: line = [l for l in adb("shell", "pm", "list", "packages", "-i", "-U", PKG).splitlines() if f"package:{PKG} " in l]
+    except (subprocess.CalledProcessError, OSError) as e: print(f"cannot reach {SERIAL} with adb: {e}", file=sys.stderr); return 2
+    if not line: print(f"{PKG} is not installed on {SERIAL}: install it from Google Play first (nothing is installed here)", file=sys.stderr); return 2
+    APP_UID = int(re.search(r"uid:(\d+)", line[0]).group(1))
+    installer = (re.search(r"installer=(\S+)", line[0]) or [None, "unknown"])[1]
+    print(f"{PKG} uid {APP_UID} on {SERIAL}, installed by {installer}" + ("" if installer == "com.android.vending" else "  <- NOT Google Play: this will not describe the Play build"))
+    print(f"Sampling for {MINUTES:g} minutes. Now, on the phone: cold start the app; two minutes idle on Home with no machine; Settings; Restore purchase;\n"
+          "a licence-tester tip purchase and its thank-you; a second Restore; two minutes idle. Ctrl-C ends the run early (the file then says so).", flush=True)
+    start = time.time(); started = time.strftime("%Y-%m-%d %H:%M:%S"); asked = MINUTES * 60; checks = running = 0; early = False
+    last_check = last_print = -1e9
+    threading.Thread(target=sample_sockets, daemon=True).start()
+    try:
+        while (elapsed := time.time() - start) < asked:
+            if elapsed - last_check >= 10:   # is the app running at all? an empty list from an app that was never started measures nothing
+                last_check = elapsed; checks += 1; running += bool(adb("shell", "pidof", PKG, check_=False).strip())
+            if elapsed - last_print >= 30: last_print = elapsed; print(f"  {elapsed:.0f} s, {len(sockets)} socket(s) seen so far", flush=True)
+            time.sleep(1)
+    except KeyboardInterrupt: early = True
+    stop_sampling.set(); time.sleep(0.6)
+    meta = dict(pkg=PKG, uid=APP_UID, serial=SERIAL, installer=installer, start=started, seconds=time.time() - start, asked=asked, samples=samples, rows=rows_read, running=running, checks=checks, early=early)
+    def lookup(ip): return socket.gethostbyaddr(ip)[0]
+    text, problems = render_socket_report(dict(sockets), meta, lookup)
+    print("\n" + text, end="")
+    write_text(OUT, "play-sockets.txt", text); print(f"written to {os.path.join(OUT, 'play-sockets.txt')}")
+    return 1 if problems else 0
 
 # ---------------------------------------------------------------- run
 def main():
@@ -296,6 +452,7 @@ def window_secure():
     m = re.search(r"mCurrentFocus=.*", text)
     return None
 
+if SOCKETS_ONLY: sys.exit(sockets_only())
 try:
     main()
 finally:

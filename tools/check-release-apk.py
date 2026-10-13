@@ -21,6 +21,13 @@ Checks, each printed as PASS or FAIL with what was found; the exit status is 1 i
   - every host script in assets/ has the SHA-256 that host/SOURCE.json pins, and its .sha256 sibling says the same;
   - every URL string in the dex and assets is listed, and none is on a host outside the allow-list (XML namespaces and licence links).
 Not checked here (they need a running app): the sockets the app opens, FLAG_SECURE on the window, and the log; tools/run-release-smoke.py does those.
+
+--delivered (a use, not a flag: Phase 16, AC-16.1): the script is also run on the APK Google Play installs on a phone, pulled with
+`adb shell pm path io.github.tuthan.paddock` and `adb pull` of the base.apk line, with --flavor play. Play builds that APK from the uploaded bundle and signs
+it with the app signing key, so `apksigner verify --print-certs` on it (run by hand; this script does not read signatures) must show the release key's
+certificate (AC-13.2), not the upload key's, and the content must still pass every check above. Run it on base.apk only: install-time delivery also leaves
+split_config.*.apk files, which should hold only native libraries and per-density and per-language resources. Nothing here depends on who signed, so no flag
+was added; this is read, not run, because no delivered APK existed on 2026-10-12. The first real run (docs/release.md, Play) says whether a flag is needed.
 """
 import hashlib, json, os, re, subprocess, sys, zipfile
 

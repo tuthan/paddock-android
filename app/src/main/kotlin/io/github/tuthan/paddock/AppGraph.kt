@@ -14,6 +14,11 @@ import io.github.tuthan.paddock.billing.Entitlements
 import io.github.tuthan.paddock.billing.FileEntitlementStore
 import io.github.tuthan.paddock.billing.ProCapabilities
 import io.github.tuthan.paddock.billing.ProService
+import io.github.tuthan.paddock.demo.Demo
+import io.github.tuthan.paddock.demo.DemoCopy
+import io.github.tuthan.paddock.demo.DemoMode
+import io.github.tuthan.paddock.demo.DemoProfileStore
+import io.github.tuthan.paddock.demo.DemoSession
 import io.github.tuthan.paddock.discovery.FinderController
 import io.github.tuthan.paddock.discovery.MachineRelocator
 import io.github.tuthan.paddock.host.HostUiModel
@@ -32,6 +37,7 @@ import io.github.tuthan.paddock.hostprofile.FileHostProfileStore
 import io.github.tuthan.paddock.hostprofile.HostNameProbe
 import io.github.tuthan.paddock.hostprofile.HostOsProbe
 import io.github.tuthan.paddock.hostprofile.HostProfile
+import io.github.tuthan.paddock.hostprofile.HostProfileStore
 import io.github.tuthan.paddock.hostprofile.KeyKind
 import io.github.tuthan.paddock.hostprofile.MachineBook
 import io.github.tuthan.paddock.hostprofile.MachineRemoval
@@ -72,6 +78,7 @@ import io.github.tuthan.paddock.pairing.PairingClient
 import io.github.tuthan.paddock.pairing.PairingCoordinator
 import io.github.tuthan.paddock.pairing.pendingOrNull
 import io.github.tuthan.paddock.ports.Clock
+import io.github.tuthan.paddock.ports.SshSession
 import io.github.tuthan.paddock.probe.MachineProbe
 import io.github.tuthan.paddock.probe.ProbeTargets
 import io.github.tuthan.paddock.relay.PinnedHostScripts
@@ -101,6 +108,7 @@ import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -121,7 +129,9 @@ class AppGraph(private val app: Application) {
     val clock = Clock { System.currentTimeMillis() }
     private val files: File = app.filesDir
 
-    val profiles = FileHostProfileStore(File(files, "host-profiles.json"))
+    /** The demo machine (Phase 16): in memory, never saved; it starts from Welcome and ends with its removal, a real machine being added, or the process. */
+    val demo = DemoMode(clock)
+    val profiles: HostProfileStore = DemoProfileStore(FileHostProfileStore(File(files, "host-profiles.json")), demo)
     private val hostKeyStore = FileHostKeyStore(File(files, "host-keys.json"))
     val hostKeyPolicy = HostKeyPolicy(hostKeyStore) { System.currentTimeMillis() }
     val broker = HostKeyBroker()
@@ -231,6 +241,8 @@ class AppGraph(private val app: Application) {
 
     /** Takes what an `ACTION_SEND` carried (SEC-1 to SEC-3) in the graph's scope, so the read of the sender's URI never waits on a screen. Nothing connects and nothing is sent. */
     fun receiveShare(intent: android.content.Intent?) {
+        // Nothing is sent to the demo machine, so nothing is read from the sender either.
+        if (demo.active) { shareNotice.value = DemoCopy.FILES; return }
         scope.launch {
             when (val r = shareIntake.receive(intent)) {
                 is ShareOutcome.Received -> shares.offer(r.item)
@@ -271,6 +283,8 @@ class AppGraph(private val app: Application) {
                 MachineRemoval.Forget("its alert setup") { id -> alertSetups.remove(id) },
                 MachineRemoval.Forget("the host key") { id -> hostKeyStore.remove(id); broker.clearChanged(id); broker.expectPairing(id, null) },
                 MachineRemoval.Forget("what the phone saw there") { id -> ledger.forgetHost(HostProfileId(id)); withContext(Dispatchers.IO) { ledger.flush() } },
+                // Only the demo machine's: nothing it was asked reached a machine, so its rows hold no outcome that is unknown. A saved machine's rows stay, as ever.
+                MachineRemoval.Forget("what the phone sent there") { id -> if (Demo.isDemo(id)) journal.forgetHost(HostProfileId(id)) },
                 MachineRemoval.Forget("its widget copy") { id -> widgets.forget(id) },
                 // A request made for this machine's desktop is no longer about anything this phone has.
                 MachineRemoval.Forget("a pairing request") { id ->
@@ -327,12 +341,14 @@ class AppGraph(private val app: Application) {
     val hostWatcher: HostWatcher = HostWatcher(
         scope, isRemoving = { machineBook.isRemoving(it) },
         create = { profile ->
+            // The demo machine installs nothing and is given no helper script: its terminals stay read-only, and the alert relay and the answers are not offered (DemoCopy).
+            val isDemo = Demo.isDemo(profile)
             HostSessionController(
                 scope, profile, { owner.acquire(profile) }, ledger, clock, triggers.foreground, hostScripts.relay, hostScripts.relaySha256, sessionName = profile.session,
-                controlScript = hostScripts.control, controlSha256 = hostScripts.controlSha256, journal = journal, alertScript = hostScripts.alert, alertSha256 = hostScripts.alertSha256,
-                decideScript = hostScripts.decide, decideSha256 = hostScripts.decideSha256, hookScript = hostScripts.hook, hookSha256 = hostScripts.hookSha256,
-                opencodeScript = hostScripts.opencode, opencodeSha256 = hostScripts.opencodeSha256, sagaStore = sagaStore,
-                wakeCapture = { session -> WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) },
+                controlScript = hostScripts.control.takeUnless { isDemo }, controlSha256 = hostScripts.controlSha256, journal = journal, alertScript = hostScripts.alert.takeUnless { isDemo }, alertSha256 = hostScripts.alertSha256,
+                decideScript = hostScripts.decide.takeUnless { isDemo }, decideSha256 = hostScripts.decideSha256, hookScript = hostScripts.hook.takeUnless { isDemo }, hookSha256 = hostScripts.hookSha256,
+                opencodeScript = hostScripts.opencode.takeUnless { isDemo }, opencodeSha256 = hostScripts.opencodeSha256, sagaStore = sagaStore,
+                wakeCapture = if (isDemo) null else { session -> WakeCapture.capture(session, clock, profiles.get(profile.id)?.wake?.relay) },
                 osProbe = { session -> HostOsProbe.read(session) }, nameProbe = { session -> HostNameProbe.read(session) },
             )
         },
@@ -410,7 +426,7 @@ class AppGraph(private val app: Application) {
     private fun startChipProbe() {
         scope.launch {
             combine(triggers.interactive, appLock.locked, machineBook.machines, machineBook.profile, proService.view) { front, covered, all, watched, view ->
-                ProbeTargets.of(front, covered, proService.locked(ProCapabilities.HOSTS_MERGED, view), all, watched?.id)
+                ProbeTargets.of(front, covered, proService.locked(ProCapabilities.HOSTS_MERGED, view), all.filterNot(Demo::isDemo), watched?.id)
             }.distinctUntilChanged().collectLatest { targets -> if (targets.isNotEmpty()) probe.run(targets) }
         }
     }
@@ -423,10 +439,26 @@ class AppGraph(private val app: Application) {
         scope.launch { proService.view.map { proService.hasPro(it) }.distinctUntilChanged().collect { runCatching { PaddockWidgets.updateAll(app) } } }
     }
 
+    /**
+     * "Try a demo" (Phase 16): the demo machine becomes the saved machine and is watched. It is in memory ([demo]); the settings remember only which machine
+     * was watched, and a start without it finds no machine.
+     */
+    fun startDemo() { scope.launch { runCatching { machineBook.add(Demo.profile, chosen = true) } } }
+
+    /** What a demo that ended with its process left on disk (its herd on a widget, rows of what the ledger saw): the demo is never saved, so this is all of it. */
+    private suspend fun forgetDemoLeftovers() {
+        val id = Demo.PROFILE_ID
+        // The ledger writes on every forget, so it is asked only when the demo left something in it.
+        if (ledger.observations().any { it.host == id } || ledger.actions().any { it.host == id }) runCatching { ledger.forgetHost(HostProfileId(id)); withContext(Dispatchers.IO) { ledger.flush() } }
+        runCatching { widgets.forget(id) }
+        runCatching { journal.forgetHost(HostProfileId(id)) }
+    }
+
     /** Reads the settings and the saved machines, then follows the app's visibility: the one place the files are read and a machine first watched. */
     private fun startLoad() {
         scope.launch {
             prefs.load()
+            forgetDemoLeftovers()
             machineBook.load()
             runCatching { push.resume() }
             // The connection is claimed while the app is visible and released when it is not (the owner closes it after its grace).
@@ -510,7 +542,13 @@ class AppGraph(private val app: Application) {
         return replaced
     }
 
-    private suspend fun connect(profile: HostProfile) = run {
+    private suspend fun connect(profile: HostProfile): SshSession = run {
+        // The demo machine answers from memory: no connector, so no local-network prompt, no host-key prompt, no socket (docs/demo.md).
+        if (Demo.isDemo(profile)) {
+            val herd = demo.herd() ?: error("the demo is not running")
+            delay(DEMO_CONNECT_MILLIS)
+            return@run DemoSession(herd, hostScripts.relaySha256, clock)
+        }
         val target = profile.toTarget()
         try {
             // A connect that got through presented the pinned key (or was pinned just now): an older changed-key warning is stale.
@@ -527,7 +565,10 @@ class AppGraph(private val app: Application) {
      * changed is only a failure, so a look at a machine that is not watched can raise no first-trust prompt and record no changed-key warning over
      * Home. The user meets both, as always, when they watch that machine.
      */
-    private suspend fun connectForProbe(profile: HostProfile) = connector.connect(profile.toTarget(), authFor(profile)) { false }
+    private suspend fun connectForProbe(profile: HostProfile): SshSession {
+        check(!Demo.isDemo(profile)) { "the demo machine is never probed" }
+        return connector.connect(profile.toTarget(), authFor(profile)) { false }
+    }
 
     private suspend fun authFor(profile: HostProfile): SshAuth = when (profile.key) {
         KeyKind.Phone -> SshAuth.Phone(phoneKey.privateKey(), phoneKey.info().publicKey)
@@ -536,6 +577,9 @@ class AppGraph(private val app: Application) {
 }
 
 const val IMPORTED_KEY_ID = "imported"
+
+/** How long the demo machine says "Connecting" before it answers: long enough to be seen, short enough to be no wait. */
+private const val DEMO_CONNECT_MILLIS = 300L
 
 /**
  * Whether the watched machine's connection is held (Phase 15, X11): while the app is visible, and also while a picker or the camera is in front on

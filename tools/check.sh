@@ -2,9 +2,10 @@
 # The CI gate, runnable locally: .github/workflows/build.yml installs the JDK and the SDK packages, then runs exactly this.
 #   tools/check.sh [extra gradle args, e.g. --offline]
 # Stages: wrapper jar hash, SDK packages at the recorded revisions, protocol and fixture pins, bundled font hashes, self-tests of the fixture
-# and pin scripts, the host control helper self-test, the alert relay tests, the guarded-answers hook and writer tests, then :core:check and
+# and pin scripts, the host control helper self-test, the alert relay tests, the guarded-answers hook and writer tests, the release scripts' tests (signing
+# a throwaway APK and bundle with throwaway keys, the socket sampler, the listing check), then :core:check and
 # both flavors (foss: GitHub and F-Droid; play: the billing build): :app:test<Flavor>DebugUnitTest :app:lint<Flavor>Debug :app:assemble<Flavor>Debug,
-# :app:compile<Flavor>DebugAndroidTestKotlin. Needs no herdr, adb or emulator. PADDOCK_TEST_SOCKET is removed from the environment so the integration tests skip here as they do in CI.
+# :app:compile<Flavor>DebugAndroidTestKotlin. Needs no herdr, adb or emulator (the release scripts' test uses a fake adb). PADDOCK_TEST_SOCKET is removed from the environment so the integration tests skip here as they do in CI.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -47,6 +48,9 @@ python3 tools/test-alert-relay.py
 stage "Guarded answers: pinned host scripts and the hook and writer tests (fake herdr, about 90 seconds)"
 python3 tools/pin-host.py --check
 python3 tools/test-permission-hook.py
+
+stage "Release scripts: signing with throwaway keys, the socket sampler, the listing check (about 20 seconds)"
+tools/test-release-scripts.sh
 
 GRADLE_TASKS=(:core:check
   :app:testFossDebugUnitTest :app:lintFossDebug :app:assembleFossDebug :app:compileFossDebugAndroidTestKotlin

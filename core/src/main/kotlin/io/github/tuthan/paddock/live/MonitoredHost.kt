@@ -24,6 +24,7 @@ import io.github.tuthan.paddock.reconcile.Reconciler
 import io.github.tuthan.paddock.reconcile.SessionMonitor
 import io.github.tuthan.paddock.relay.RelayClient
 import io.github.tuthan.paddock.terminal.ControlHelperPort
+import io.github.tuthan.paddock.terminal.TerminalNotice
 import io.github.tuthan.paddock.terminal.TerminalOptions
 import io.github.tuthan.paddock.terminal.TerminalSession
 import io.github.tuthan.paddock.files.Direction
@@ -136,7 +137,9 @@ class MonitoredHost(
      * Files to and from this machine over the same session (Phase 15): a put to an agent's `.paddock/inbox/`, a drop, the reads and a get, each journaled
      * ahead. Null without a journal. It opens a channel only when the user sends or fetches something.
      */
-    val transfers: io.github.tuthan.paddock.files.FileTransfers? = journal?.let { io.github.tuthan.paddock.files.FileTransfers(session, it, clock) }
+    val transfers: io.github.tuthan.paddock.files.FileTransfers? =
+        // The demo machine has no files to send or fetch (DemoCopy.FILES): the screens that offer them say so in place.
+        journal?.takeUnless { io.github.tuthan.paddock.demo.Demo.isDemo(profile) }?.let { io.github.tuthan.paddock.files.FileTransfers(session, it, clock) }
 
     /** Runs those operations in this host's scope and keeps the newest outcome per terminal; null with [operations]. */
     val sends: SendController? = operations?.let { SendController(scope, it, transfers, TransferLimits.MAX_PUT_BYTES) { bytes -> TransferLimits.deadline(bytes, Direction.ToMachine) } }
@@ -309,7 +312,10 @@ class MonitoredHost(
      */
     fun terminalSession(terminalId: String): TerminalSession = synchronized(terminalLock) {
         terminal?.close()
-        TerminalSession(scope, session, cli, { paneOf(terminalId) }, controlHelper, clock, options = terminalOptions).also { terminal = it }
+        TerminalSession(
+            scope, session, cli, { paneOf(terminalId) }, controlHelper, clock, options = terminalOptions,
+            unavailable = if (io.github.tuthan.paddock.demo.Demo.isDemo(profile)) TerminalNotice.NotInDemo else TerminalNotice.HelperUnavailable,
+        ).also { terminal = it }
     }
 
     /** Closes the terminal session, if any, when its screen is done with it. */

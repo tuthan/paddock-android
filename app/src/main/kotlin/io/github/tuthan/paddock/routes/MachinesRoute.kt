@@ -8,6 +8,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import io.github.tuthan.paddock.demo.Demo
+import io.github.tuthan.paddock.demo.DemoCopy
 import io.github.tuthan.paddock.files.DropFolderCheck
 import io.github.tuthan.paddock.ui.screens.GetCopy
 import io.github.tuthan.paddock.hostprofile.HostProfile
@@ -153,6 +155,8 @@ internal fun MachineRoute(
     )
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    // The demo machine does none of what needs a real one: each says so, in place (DemoCopy), and nothing is saved or sent.
+    val inDemo = Demo.isDemo(machine)
     // Where files shared with no agent go (Phase 15, X10): judged by the machine itself, so only the machine this phone watches, while it is connected, can be asked.
     val transfers = (view.phase as? HostPhase.Monitoring)?.host?.transfers
     val askable = row.watched && transfers != null && view.freshness == Freshness.Live
@@ -177,12 +181,14 @@ internal fun MachineRoute(
                 next = MachineRoster.after(machines, machine.id, settings.chosenProfileId)?.name, busy = removingId != null,
                 otherNames = machines.filter { it.id != machine.id }.map { it.name }, chosenOs = machine.os, detectedOs = machine.detectedOs,
                 guardedLocked = proService.locked(ProCapabilities.GUARDED_ANSWERS, pro),
-                profile = machine, otherProfiles = machines.filter { it.id != machine.id },
-                drop = DropFolderUi(machine.dropFolderValue, isDefault = machine.dropFolder == null, askable = askable, files = dropFiles, editing = editingDrop && askable, asking = asking, told = told),
+                // The demo machine has no address to change: the page draws no Change address…, and no search of the network.
+                profile = machine.takeUnless { inDemo }, otherProfiles = machines.filter { it.id != machine.id },
+                inDemo = inDemo,
+                drop = DropFolderUi(machine.dropFolderValue, isDefault = machine.dropFolder == null, askable = askable, files = dropFiles, editing = editingDrop, asking = asking, told = told),
             ),
             dropActions = DropFolderActions(
                 onReRead = readDrop,
-                onEdit = { told = null; editingDrop = true },
+                onEdit = { if (inDemo) onNotice(DemoCopy.DROP_FOLDER) else { told = null; editingDrop = true } },
                 onCloseEdit = { editingDrop = false; told = null },
                 onCheck = { value ->
                     val t = transfers
@@ -208,17 +214,18 @@ internal fun MachineRoute(
             onBack = onBack,
             onWatch = { switchMachine(proService, machineBook, appScope, row, onNotice) },
             onRemove = { machineBook.requestRemoval(machine.id, machine.name) },
-            onAlertRelay = onAlertRelay,
-            onGuardedAnswers = onGuardedAnswers,
-            onCopyWakeCommand = { cmd -> copyText(ctx, CopyKind.WakeCommand, cmd) },
-            onSaveWakeRelay = { relay -> scope.launch { machineBook.setWakeRelay(machine.id, relay) } },
-            onWake = { wakes.wake(machine.id) },
+            onAlertRelay = if (inDemo) ({ onNotice(DemoCopy.ALERTS) }) else onAlertRelay,
+            onGuardedAnswers = if (inDemo) ({ onNotice(DemoCopy.GUARDED_ANSWERS) }) else onGuardedAnswers,
+            onCopyWakeCommand = { cmd -> if (inDemo) onNotice(DemoCopy.WAKE) else copyText(ctx, CopyKind.WakeCommand, cmd) },
+            onSaveWakeRelay = { relay -> if (inDemo) onNotice(DemoCopy.WAKE) else scope.launch { machineBook.setWakeRelay(machine.id, relay) } },
+            onWake = { if (inDemo) onNotice(DemoCopy.WAKE) else wakes.wake(machine.id) },
             onRename = { name -> scope.launch { if (machineBook.rename(machine.id, name)) onNotice(MachineCopy.renamed(name)) } },
             onSetOs = { os -> scope.launch { machineBook.setOs(machine.id, os) } },
-            onSetSearchNetwork = { on -> scope.launch { machineBook.setSearchNetwork(machine.id, on); relocator.askAgain(machine.id) } },
+            onSetSearchNetwork = { on -> if (inDemo) onNotice(DemoCopy.FIND) else scope.launch { machineBook.setSearchNetwork(machine.id, on); relocator.askAgain(machine.id) } },
             // In the graph's scope, as a switch is: leaving the page must not stop a move halfway (the watch stopped, the new one not started).
             onChangeAddress = { host, port ->
-                if (MachineAddress.waits(row.watched, proService.gateContext(pendingAnswerOnScreen = false))) onNotice(MachineCopy.ADDRESS_BUSY)
+                if (inDemo) onNotice(DemoCopy.ADDRESS)
+                else if (MachineAddress.waits(row.watched, proService.gateContext(pendingAnswerOnScreen = false))) onNotice(MachineCopy.ADDRESS_BUSY)
                 else appScope.launch {
                     if (machineBook.setAddress(machine.id, host, port)) onNotice(MachineCopy.addressChanged(machine.name, MachineRoster.endpoint(machine.copy(host = host, port = port))))
                 }

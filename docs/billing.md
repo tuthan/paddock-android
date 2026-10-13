@@ -1,6 +1,6 @@
 # Billing and entitlements
 
-Phase 13 (store, billing, entitlements), as built on 2026-10-04. The plan and its decisions are in the vault (`herdr-android/phases/13-store-billing-and-entitlements.md`, `06-monetization-and-launch.md`). Nothing here sells anything yet: nothing has run against Google Play (no Play Console app, no licence tester, no phone with Play in this session), and the twelve-month window and compatibility policy (M7) are not written, so no `play` build should be uploaded before they are. Decisions taken 2026-10-04: **M4**, the `foss` build is the free version and anyone who wants every capability builds from source; **M1**, Apache-2.0; **M8**, bundle C plus several hosts (see "What Pro locks").
+Phase 13 (store, billing, entitlements), as built on 2026-10-04. The plan and its decisions are in the vault (`herdr-android/phases/13-store-billing-and-entitlements.md`, `06-monetization-and-launch.md`). Nothing here sells anything yet: nothing has run against Google Play (no Play Console app, no licence tester, no phone with Play in this session), and the twelve-month window and compatibility policy (M7) are not written, so no `play` build should reach closed testing or production before they are (the internal cut may, see "The two cuts"). Decisions taken 2026-10-04: **M4**, the `foss` build is the free version and anyone who wants every capability builds from source; **M1**, Apache-2.0; **M8**, bundle C plus several hosts (see "What Pro locks").
 
 ## What the two flavors are
 
@@ -88,6 +88,8 @@ The gate request is a capability id, or `ProCopy.OVERVIEW_ID` (`"pro.overview"`)
 
 **What counts as busy.** `ProGate.context(pendingAnswerOnScreen, manualInputOpen, records, nowMillis)`, asked in that order, so the sentence names what the user can see first. An operation is in flight when some journal row, on any terminal, session or saga, is `Requested` or `Sent` and was requested at most `ProGate.OPERATION_STUCK_AFTER_MILLIS` (2 minutes) ago. Every call a row stands for ends by itself inside a bound (a worktree create 60 s on the relay, starting an agent herdr's 30 s plus 20 s of slack, each after at most one short read) and a failure turns the row `Unknown` at once, so a row still `Requested` or `Sent` after two minutes is one whose call never came back (a leaked coroutine, a write that never returned). Only the next start settles it (`OperationJournal` recovery: `Sent` becomes `Unknown`), and until then it would make every locked control a dead tap with no way to buy Pro. So the gate stops counting it. The journal is **not** changed by this: the composer and the Spaces row still treat the row as running (see "What is not done"). A running operation is always younger than the bound, so the rule of AC-13.5 (no sheet over a pending answer, Manual input or an operation in flight) holds; a phone clock that jumps forward can make a running row look stuck for a moment, and one that moves back makes the gate wait.
 
+**The demo machine's gate is the real gate** (`docs/demo.md`). Spaces' Start an agent…, Stop… and Delete… ask it exactly as on a real machine, and a purchase made from it is a real purchase. A Pro holder who then taps one of them in the demo meets the demo's own refusal ("Not in the demo"), not a silent no-op.
+
 ## What the `play` APK adds over `foss`
 
 Written from the built `play` release APK on 2026-10-04 and checked by `tools/check-release-apk.py --flavor play`; extending the list is a person reading the diff.
@@ -104,15 +106,31 @@ Written from the built `play` release APK on 2026-10-04 and checked by `tools/ch
 
 ### Device measurement (open: needs a phone with Google Play)
 
-1. Install the `play` release APK from `tools/release-build.sh --flavor play --sign` on a phone signed in to Google Play.
-2. With `tools/run-release-smoke.py` sampling the app uid's sockets every 0.4 s, do: cold start and idle two minutes; Settings, Restore purchase; a licence-tester tip purchase and its thank-you; a second Restore.
-3. Record every remote address the uid opens beyond the SSH host. An empty list means billing adds no traffic of the app's own; any address goes into the privacy checklist, the Data safety form and the copy by name.
+1. Install the build from Google Play (the internal testing track, `0.1.0-rc1`) on a phone signed in to Google Play, as a licence tester. A sideloaded `play` APK has no Play installer, and `--sockets-only` then marks its list NOT A MEASUREMENT.
+2. With `tools/run-release-smoke.py <serial> --sockets-only --minutes 6 <out-dir>` sampling the app uid's sockets every 0.4 s (it installs and drives nothing, and refuses to call the list a measurement when the installer is not Google Play, nothing was readable, the app never ran or the run was cut short), do: cold start and idle two minutes; Settings, Restore purchase; a licence-tester tip purchase and its thank-you; a second Restore; idle two minutes. A connection that opens and closes between two samples is not in the list.
+3. Record every remote address the uid opens beyond the SSH host (`<out-dir>/play-sockets.txt`, with a reverse lookup, "no PTR" where there is none). An empty list means billing added no traffic of the app's own that the sampler saw; any address goes into the privacy checklist, the Data safety form and the copy by name.
+
+## The two cuts (Phase 16)
+
+Two cuts, never mixed (version table and signing in `docs/release.md`).
+
+- **`0.1.0-rc1`, code 2, the internal cut.** Uploaded to the internal testing track only, signed with the upload key. It exists to prove the signing, the app signing key and the purchase path (AC-16.1, AC-16.2, AC-16.11), so it may go up before the demo, the policy page, the M7 text and the socket measurement exist: only the user's own testers can install it. Products (`pro`, `tip_3`, `tip_5`, `tip_10`) are created only on an organisation account (P4); on a personal account the cut carries no products, and a purchase made in it with a licence tester is a test purchase.
+- **`0.1.0`, code 3, the production cut.** Closed testing, then production. It is cut only after the demo, the privacy policy page, the M7 window and compatibility text and the socket measurement exist, because it is the version the listing, the Data safety answers and the policy describe. The `foss` APK on GitHub carries the same code.
+- Every re-upload takes one more code. Nothing about the `play` build's network is claimed in any listing, policy or About text before the measurement.
+
+## Console declarations (Phase 16, slice 6)
+
+Answered in the Console by the user and recorded with their dates in `docs/privacy-checklist.md` (lines C1 to C14, D1 to D4). The three that rest on this code:
+
+- **Advertising ID: no.** No advertising SDK and no `AD_ID` permission; the `play` APK adds only `com.android.vending.BILLING`, and `tools/check-release-apk.py` holds the permission set exact. Re-check it on the APK Play delivers (AC-16.1).
+- **Account deletion: not applicable.** No account exists: no Paddock server, no sign-in. What Paddock keeps is on the phone and goes with Remove machine or uninstall.
+- **App access: restricted**, with the instructions: "Tap Try a demo on the first screen; the real app needs your own machine with herdr 0.9.1 reachable over SSH, which cannot be provided". The text needs the demo (Phase 16, slice 3), which is not built, so the answer cannot be entered yet.
 
 ## What is not done
 
 | Item | Why open |
 | --- | --- |
-| Play Console listing, closed track, App Signing with the existing key, Data safety form | needs the seller account (M5); outward-facing |
+| Play Console listing, closed track, App Signing (the release key exported with PEPK, a separate upload key; `docs/release.md`), Data safety form | needs the seller account (M5); outward-facing; Phase 16 |
 | Licence-tester purchase, acknowledgement shown in Play Console, restore on a second device (AC-13.3, AC-13.10 device half) | needs a Play listing and a phone |
 | Device socket measurement (AC-13.7) | needs a phone with Play. Until it is done the store listing says "no analytics or crash reporting of Paddock's own" and names Google's billing library, and the Data safety form cannot be answered; with an empty list the hedge can go |
 | Selling Pro: the twelve-month window and compatibility policy (M7), EU availability (M6) | the user's decisions; M8 is taken, so the gate sheet already offers "Buy Pro" in a `play` build, which must not reach a store before M7's text exists |

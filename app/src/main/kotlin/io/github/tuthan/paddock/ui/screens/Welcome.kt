@@ -9,9 +9,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import io.github.tuthan.paddock.demo.DemoCopy
 import io.github.tuthan.paddock.ui.components.Banner
 import io.github.tuthan.paddock.ui.components.ButtonKind
 import io.github.tuthan.paddock.ui.components.Fact
@@ -27,7 +29,7 @@ const val WELCOME_NEEDS_SSH = "An SSH server on the machine that this phone can 
 
 /**
  * The first screen of a phone with no machine. It says what is needed on the machine, each with the command that checks it, and then
- * the ways in: type the address, find it on this network, paste a pairing link, scan one. Every way ends on Add machine, where the
+ * the ways in: type the address, find it on this network, paste a pairing link, scan one, or look around with a demo machine. Every way but the demo ends on Add machine, where the
  * traditional steps (this phone's key and its authorize command, or an imported key) are always available.
  */
 @Composable
@@ -37,6 +39,8 @@ fun Welcome(
     onFind: (() -> Unit)? = null,
     onPasteLink: (() -> Unit)? = null,
     onScan: (() -> Unit)? = null,
+    /** "Try a demo": a machine that exists only in memory, for a person who has none to point Paddock at (docs/demo.md). */
+    onDemo: (() -> Unit)? = null,
     notice: String? = null,
 ) {
     Column(
@@ -54,5 +58,9 @@ fun Welcome(
         if (onFind != null) PaddockButton("Find on this network", onFind, kind = ButtonKind.Ghost, icon = PaddockIcons.Machine)
         if (onPasteLink != null) PaddockButton("Paste a pairing link", onPasteLink, kind = ButtonKind.Ghost, icon = PaddockIcons.Copy)
         if (onScan != null) PaddockButton("Scan the code on the desktop", onScan, kind = ButtonKind.Ghost, icon = PaddockIcons.Qr)
+        if (onDemo != null) PaddockButton(
+            "Try a demo", onDemo, kind = ButtonKind.Ghost, icon = PaddockIcons.Herd,
+            modifier = Modifier.semantics { contentDescription = "Try a demo. ${DemoCopy.ENTRY_DESCRIPTION}" },
+        )
     }
 }

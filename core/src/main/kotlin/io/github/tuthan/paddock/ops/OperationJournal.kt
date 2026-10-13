@@ -293,6 +293,15 @@ class OperationJournal(private val store: JournalStore, private val clock: Clock
     /** Rows for one terminal, oldest first. */
     fun forTerminal(key: TerminalKey): List<OperationRecord> = _records.value.filter { it.sameTerminal(key) }
 
+    /**
+     * Forgets every row about [host]. Only the demo machine's rows ever go (`AppGraph`): nothing the demo was asked reached a machine, so no outcome
+     * stays unknown that could stop a second prompt. A saved machine's rows are never forgotten, removal included.
+     */
+    fun forgetHost(host: io.github.tuthan.paddock.identity.HostProfileId) = synchronized(lock) {
+        if (data.records.none { it.host == host.value }) return@synchronized
+        commit(data.copy(records = data.records.filterNot { it.host == host.value }), mustPersist = false)
+    }
+
     /** The unknown rows of a terminal that still wait for a re-read. */
     fun unresolvedUnknown(key: TerminalKey): List<OperationRecord> = forTerminal(key).filter { it.awaitsReread }
 

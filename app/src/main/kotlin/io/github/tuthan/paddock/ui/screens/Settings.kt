@@ -36,11 +36,13 @@ import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import io.github.tuthan.paddock.demo.DemoCopy
 import io.github.tuthan.paddock.alerts.AccessRecovery
 import io.github.tuthan.paddock.alerts.AlertDelivery
 import io.github.tuthan.paddock.applock.AppLockCopy
 import io.github.tuthan.paddock.applock.DeviceLock
 import io.github.tuthan.paddock.applock.LockTimeout
+import io.github.tuthan.paddock.billing.Distribution
 import io.github.tuthan.paddock.billing.ProCopy
 import io.github.tuthan.paddock.hostprofile.MachineCopy
 import io.github.tuthan.paddock.ui.components.Banner
@@ -67,6 +69,8 @@ data class SettingsState(
     val watchedMachine: String? = null,
     /** The herdr version the watched host reported in its last read, when there is one. */
     val herdrVersion: String? = null,
+    /** The watched machine is the demo machine: the About line says so where it would give the host's herdr version. */
+    val demoMachine: Boolean = false,
     val protocol: Int = 22,
     /** Whether the record of what was sent keeps the prompt text (off: a fingerprint only). */
     val keepPromptText: Boolean = false,
@@ -135,6 +139,20 @@ const val RECONNECT_EXPANDED = "$RECONNECT_POLICY $RECONNECT_MONITORING"
 const val ABOUT_THEME = "Paddock palette follows the system light or dark setting"
 
 /**
+ * Where the privacy policy is read (Phase 16, slice 4): the GitHub page of `docs/privacy.md` until GitHub Pages serves it (decision P12), when this one line
+ * changes to the Pages address (`tools/check-release-apk.py` allows the host `github.com` now and would need the new host). The page is not to be linked from a
+ * published build before its billing paragraph is filled from the Play measurement (`docs/privacy-checklist.md`).
+ */
+const val PRIVACY_POLICY_URL = "https://github.com/tuthan/paddock-android/blob/main/docs/privacy.md"
+
+/**
+ * The version row's claim about telemetry. Paddock's own code has none in either flavor; what the `play` build's billing library does on the network is not
+ * measured until Phase 16 slice 7, so that flavor says only what is known. Differs by flavor only when [sellsPro] (`Distribution.SELLS_PRO`).
+ */
+fun aboutTelemetryClaim(sellsPro: Boolean): String =
+    if (sellsPro) "no analytics or crash uploads of Paddock's own" else "no analytics, no crash uploads"
+
+/**
  * Settings, as grouped cards, in this order (decision D5): the send record when it cannot be read, Machines, Alerts, Sending (snippets), Appearance, Privacy, Pro, Connection (with the local-network grant when it applies), About. Everything not yet built is shown disabled
  * and says so, never hidden; a fact that cannot be changed is said where it belongs (Reconnect, About), not as a row of its own.
  */
@@ -163,6 +181,8 @@ fun Settings(
     onAppLock: (Boolean) -> Unit = {},
     onAppLockAfter: (Int) -> Unit = {},
     onOpenSecuritySettings: () -> Unit = {},
+    /** About's "Privacy policy" row: opens [PRIVACY_POLICY_URL] in the browser (the caller launches it). */
+    onOpenPrivacyPolicy: () -> Unit = {},
 ) {
     val c = PaddockTokens.colors
     var reconnectOpen by rememberSaveable { mutableStateOf(false) }
@@ -349,7 +369,7 @@ fun Settings(
             Section("About")
             Fixed(
                 "Paddock ${state.versionName}", null,
-                listOfNotNull("herdr protocol ${state.protocol}", state.herdrVersion?.let { "host on $it" }, ABOUT_THEME, "no analytics, no crash uploads").joinToString(" · "),
+                listOfNotNull("herdr protocol ${state.protocol}", state.herdrVersion?.let { "host on $it" }, DemoCopy.ABOUT_HOST.takeIf { state.demoMachine }, ABOUT_THEME, aboutTelemetryClaim(Distribution.SELLS_PRO)).joinToString(" · "),
                 description = "Version, ${state.versionName}",
             )
             Row(
@@ -362,6 +382,19 @@ fun Settings(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text("Fonts", style = PaddockTokens.type.rowTitle, color = c.title)
                     Text("IBM Plex Sans and JetBrains Mono · SIL Open Font License 1.1", style = PaddockTokens.type.secondary, color = c.dim)
+                }
+                Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
+            }
+            Row(
+                Modifier.card(c, padded = false)
+                    .clickable(role = Role.Button, onClickLabel = "Open the privacy policy in your browser", onClick = onOpenPrivacyPolicy)
+                    .heightIn(min = PaddockTokens.spacing.touchTarget).padding(horizontal = 14.dp, vertical = 10.dp)
+                    .semantics(mergeDescendants = true) { contentDescription = "Privacy policy, opens in your browser" },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Privacy policy", style = PaddockTokens.type.rowTitle, color = c.title)
+                    Text("What Paddock sends and keeps · opens in your browser", style = PaddockTokens.type.secondary, color = c.dim)
                 }
                 Icon(PaddockIcons.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(20.dp))
             }

@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import io.github.tuthan.paddock.demo.DemoCopy
 import io.github.tuthan.paddock.hostprofile.HostOs
 import io.github.tuthan.paddock.hostprofile.HostProfile
 import io.github.tuthan.paddock.hostprofile.MachineAddress
@@ -160,6 +161,8 @@ data class MachinePageState(
     val otherProfiles: List<HostProfile> = emptyList(),
     /** Where files shared to Paddock with no agent go on this machine (Phase 15, X10); null draws no section (a page that has no way to ask the machine). */
     val drop: DropFolderUi? = null,
+    /** The demo machine: Wake and the drop folder say they are not in the demo, in place of their controls (`DemoCopy`). */
+    val inDemo: Boolean = false,
 )
 
 /** The hostname the machine said (`uname -n`), shown so the user knows the name Paddock looks for when its address stops answering; null before a bring-up read it. */
@@ -246,9 +249,16 @@ fun MachinePage(
             NameEditor(row, state.otherNames, state.busy, onRename)
             OsPicker(state.chosenOs, state.detectedOs, onSetOs)
 
-            if (state.drop != null && dropActions != null) DropFolderSection(state.drop, dropActions)
+            if (state.inDemo) {
+                Kicker(DropFolderCopy.KICKER, Modifier.padding(top = 12.dp))
+                Note(DemoCopy.DROP_FOLDER)
+                Kicker("Wake-on-LAN", Modifier.padding(top = 12.dp))
+                Note(DemoCopy.WAKE)
+            } else {
+                if (state.drop != null && dropActions != null) DropFolderSection(state.drop, dropActions)
 
-            WakeOnLanSection(state.wake, onCopyWakeCommand, onSaveWakeRelay, onWake)
+                WakeOnLanSection(state.wake, onCopyWakeCommand, onSaveWakeRelay, onWake)
+            }
 
             Kicker("Locked-phone alerts", Modifier.padding(top = 12.dp))
             Text(state.alerts, style = PaddockTokens.type.body, color = c.text)
