@@ -674,6 +674,7 @@ class RelayWithFakeHerdrTests(unittest.IsolatedAsyncioTestCase):
         self.herdr.agents = [("ta", "w1:p1", "blocked", 11)]
         await self.herdr.status("w1:p1", "blocked")
         await until(self, lambda: len(self.notes.items) == 2, timeout=4)  # the retry after 1 second
+        await until(self, lambda: relay.posted == 1)  # the relay counts a post after the notifier's answer, the notifier records it when the request arrives
         self.assertEqual(relay.posted, 1)
         self.assertEqual(self.notes.items[0].n, self.notes.items[1].n)  # the same message, not a second one
 
