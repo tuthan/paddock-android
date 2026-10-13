@@ -66,6 +66,10 @@ The relay, alert, answers and control scripts are never given to the demo's cont
 | `WelcomeAndConnectTest` (instrumented) | the entry is not drawn unless wired; its handler is called; it is spoken with what it is |
 | `DemoFlowTest` (instrumented, `e2e`) | Welcome to Home to the blocked agent to Output to a prompt to Remove, and nothing left; the machine page, the terminal and Spaces say what the demo does not do. It writes `screens/demo-*.png` into the app's external files |
 
+## The recording
+
+The product page of the host plugin (`herdr-plugin-paddock`, `site/assets/demo.mp4`, about a megabyte, 81 seconds, no sound) shows the demo as a recording. It is made by `tools/record-demo-video.py <serial> out.mp4` on an emulator: the walk-through is the table's clock (the herd, the codex agent blocking at 20 seconds, a prompt to the idle agent and its answer 8 seconds later), driven by taps on the text each button carries, so a screen that changed makes the script stop instead of recording the wrong thing. It sets the display to 1080×2160, the dark theme and SystemUI's demo mode (a 9:41 clock, full signal), and needs **Settings > Protect sensitive screens off** for the recording: with it on, Android records the Output, composer and terminal screens as black, and the script fails on a black stretch of a second or more. (A screen recording from a phone with the setting on shows exactly that; the first recording of the demo on a real phone had 34 black seconds of its 60 for this reason.) Re-record it when a screen the walk-through shows changes, and commit it in the plugin repository, whose Pages workflow publishes `site/`.
+
 ## The reviewer's path
 
 The Play Console's App access text is "Tap *Try a demo* on the first screen; the real app needs your own machine with herdr 0.9.1 reachable over SSH, which cannot be provided" (`docs/privacy-checklist.md`, C4). The demo reaches Home, Output, the composer, Spaces and the Pro gate; it does not reach alerts through a relay, files, a second machine or the terminal's control.
