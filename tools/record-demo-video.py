@@ -12,6 +12,7 @@ Prepare the emulator first. This script sets the display, the theme and the stat
   - Settings > Protect sensitive screens OFF (turn it on again after). While it is on, Android records the Output, composer and terminal screens as black;
     the script runs ffmpeg's blackdetect over the result and fails on a black stretch of a second or more.
 Needs adb (PATH or ANDROID_HOME/platform-tools) and ffmpeg. No other dependency; it opens no network connection of its own.
+The video it writes is silent; tools/make-demo-soundtrack.py puts the sound on it and its times file (tools/demo-soundtrack.json) must match the new take.
 """
 import os, re, shutil, subprocess, sys, time
 
@@ -118,7 +119,7 @@ def main(argv):
     black = subprocess.run(["ffmpeg", "-v", "info", "-i", raw, "-vf", "blackdetect=d=1:pix_th=0.05", "-an", "-f", "null", "-"], capture_output=True, text=True).stderr
     if "black_start" in black:
         sys.exit("the recording has a black stretch: is Settings > Protect sensitive screens still on? (kept: " + raw + ")")
-    # Half size, 30 fps, no sound, faststart: about a megabyte for 90 seconds, and it plays in every browser.
+    # Half size, 30 fps, no sound yet (tools/make-demo-soundtrack.py adds it), faststart: about a megabyte for 90 seconds, and it plays in every browser.
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "0.5", "-i", raw, "-an", "-vf", "scale=540:1080:flags=lanczos,fps=30", "-c:v", "libx264", "-preset", "slow",
                     "-crf", "27", "-profile:v", "main", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out], check=True)
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "27", "-i", raw, "-frames:v", "1", "-vf", "scale=540:1080:flags=lanczos", "-q:v", "3", poster], check=True)
